@@ -356,6 +356,11 @@ example `429 Rate limit exceeded (reset after 9s)`, or wrap the rate limit in a
 and the SDK waits exactly that long. Without a stated wait, the SDK uses its own
 short backoff.
 
+While a stated rate-limit wait is open, OCR also holds the other concurrent
+requests to the same provider until it ends, then releases them at slightly
+different times. Otherwise every review subtask reaches the closed limit, gets
+rate-limited too, and spends its own retries.
+
 ### Prompt limit
 
 `max_tokens` is the **prompt** (input) ceiling for a single subtask

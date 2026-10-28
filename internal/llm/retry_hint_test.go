@@ -57,7 +57,7 @@ func hintResponse(status int, body string, header http.Header) func(*http.Reques
 func runHintMiddleware(t *testing.T, next func(*http.Request) (*http.Response, error)) (*http.Response, error) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", nil)
-	return retryHintMiddleware(req, next)
+	return newRateLimitGate().middleware(req, next)
 }
 
 func TestRetryHintMiddleware_SetsRetryAfterMsAndKeepsBody(t *testing.T) {
@@ -239,4 +239,189 @@ func TestAnthropicClient_RetryWaitsForBodyHint(t *testing.T) {
 		t.Errorf("Content() = %q, want ok", got)
 	}
 	assertWaitedForHint(t, arrivals())
+}
+
+func TestHeaderRetryWait(t *testing.T) {
+	future := time.Now().Add(30 * time.Second).UTC().Format(http.TimeFormat)
+	cases := []struct {
+		name   string
+		header http.Header
+		min    time.Duration
+		max    time.Duration
+		ok     bool
+	}{
+		{"retry-after-ms", http.Header{"Retry-After-Ms": {"1500"}}, 1500 * time.Millisecond, 1500 * time.Millisecond, true},
+		{"retry-after seconds", http.Header{"Retry-After": {"2"}}, 2 * time.Second, 2 * time.Second, true},
+		{"retry-after date", http.Header{"Retry-After": {future}}, 28 * time.Second, 31 * time.Second, true},
+		{"ms preferred", http.Header{"Retry-After-Ms": {"100"}, "Retry-After": {"9"}}, 100 * time.Millisecond, 100 * time.Millisecond, true},
+		{"bad ms falls back", http.Header{"Retry-After-Ms": {"soon"}, "Retry-After": {"3"}}, 3 * time.Second, 3 * time.Second, true},
+		{"bad value", http.Header{"Retry-After": {"later"}}, 0, 0, false},
+		{"zero", http.Header{"Retry-After": {"0"}}, 0, 0, false},
+		{"none", http.Header{}, 0, 0, false},
+	}
+	for _, c := range cases {
+		got, ok := headerRetryWait(c.header)
+		if ok != c.ok || got < c.min || got > c.max {
+			t.Errorf("%s: headerRetryWait = (%v, %v), want [%v, %v] %v", c.name, got, ok, c.min, c.max, c.ok)
+		}
+	}
+}
+
+func TestRateLimitGate_HoldsUntilWindowEnds(t *testing.T) {
+	g := newRateLimitGate()
+	g.jitter = func(time.Duration) time.Duration { return 0 }
+	g.hold(200 * time.Millisecond)
+	g.hold(10 * time.Millisecond) // a shorter wait must not reopen the window
+	start := time.Now()
+	if err := g.wait(context.Background()); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 190*time.Millisecond {
+		t.Errorf("wait returned after %v, want >= 190ms", elapsed)
+	}
+	start = time.Now()
+	if err := g.wait(context.Background()); err != nil || time.Since(start) > 20*time.Millisecond {
+		t.Errorf("open gate: wait took %v, err %v", time.Since(start), err)
+	}
+}
+
+func TestRateLimitGate_SpreadsRelease(t *testing.T) {
+	g := newRateLimitGate()
+	var got time.Duration
+	g.jitter = func(n time.Duration) time.Duration { got = n; return n - 1 }
+	g.hold(time.Millisecond)
+	_ = g.wait(context.Background())
+	if got != minReleaseSpread {
+		t.Errorf("spread for a short wait = %v, want %v", got, minReleaseSpread)
+	}
+	g.until = time.Time{}
+	g.hold(time.Minute)
+	g.mu.Lock()
+	spread := g.spread
+	g.until = time.Now() // keep the test fast
+	g.mu.Unlock()
+	if spread != maxReleaseSpread {
+		t.Errorf("spread for a long wait = %v, want %v", spread, maxReleaseSpread)
+	}
+	if n := newRateLimitGate().jitter(time.Second); n < 0 || n >= time.Second {
+		t.Errorf("default jitter = %v, want [0, 1s)", n)
+	}
+}
+
+func TestRateLimitGate_WaitHonorsCancel(t *testing.T) {
+	g := newRateLimitGate()
+	g.hold(time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := g.wait(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait = %v, want context.Canceled", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://example.test/", nil).WithContext(ctx)
+	called := false
+	resp, err := g.middleware(req, func(*http.Request) (*http.Response, error) { called = true; return nil, nil })
+	if called || resp != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("middleware = (%v, %v, called=%v), want canceled without sending", resp, err, called)
+	}
+}
+
+func TestRateLimitGate_HeaderWaitClosesGate(t *testing.T) {
+	g := newRateLimitGate()
+	req := httptest.NewRequest(http.MethodPost, "http://example.test/", nil)
+	_, _ = g.middleware(req, hintResponse(http.StatusTooManyRequests, "", http.Header{"Retry-After": {"30"}}))
+	g.mu.Lock()
+	left := time.Until(g.until)
+	g.mu.Unlock()
+	if left < 29*time.Second {
+		t.Errorf("gate open for %v, want about 30s", left)
+	}
+}
+
+// While one request has a stated rate-limit wait open, a second request of the
+// same client must not reach the server before the window ends.
+func TestOpenAIClient_RateLimitHoldsConcurrentRequests(t *testing.T) {
+	const window = 600 * time.Millisecond
+	limited := make(chan struct{})
+	var mu sync.Mutex
+	var arrivals []time.Time
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		arrivals = append(arrivals, time.Now())
+		n := len(arrivals)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"message":"[429]: Rate limit exceeded (reset after 600ms)"}`))
+			close(limited)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"c","object":"chat.completion","model":"m",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(ClientConfig{URL: server.URL + "/v1", APIKey: "k", Model: "m"})
+	call := func() error {
+		_, err := client.CompletionsWithCtx(context.Background(), ChatRequest{
+			Messages:  []Message{{Role: "user", Content: "ping"}},
+			MaxTokens: 16,
+		})
+		return err
+	}
+	errs := make(chan error, 2)
+	go func() { errs <- call() }()
+	<-limited
+	time.Sleep(50 * time.Millisecond) // the rate-limit response has reached the client
+	go func() { errs <- call() }()
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("CompletionsWithCtx: %v", err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(arrivals) != 3 {
+		t.Fatalf("requests = %d, want 3", len(arrivals))
+	}
+	for i, at := range arrivals[1:] {
+		if gap := at.Sub(arrivals[0]); gap < window {
+			t.Errorf("request %d reached the server %v after the rate limit, want >= %v", i+2, gap, window)
+		}
+	}
+}
+
+func TestPositiveDuration_RejectsUnusableValues(t *testing.T) {
+	for _, h := range []http.Header{
+		{"Retry-After-Ms": {"1e30"}},
+		{"Retry-After-Ms": {"NaN"}},
+		{"Retry-After": {"+Inf"}},
+		{"Retry-After": {"-5"}},
+	} {
+		if d, ok := headerRetryWait(h); ok {
+			t.Errorf("headerRetryWait(%v) = %v, want no wait", h, d)
+		}
+	}
+	if d, ok := parseRetryHint("retry after 99999999999999999999 minutes"); ok {
+		t.Errorf("parseRetryHint overflow = %v, want no wait", d)
+	}
+}
+
+// A window extended while a request sleeps must hold that request too.
+func TestRateLimitGate_RechecksExtendedWindow(t *testing.T) {
+	g := newRateLimitGate()
+	g.jitter = func(time.Duration) time.Duration { return 0 }
+	g.hold(100 * time.Millisecond)
+	done := make(chan time.Duration, 1)
+	start := time.Now()
+	go func() {
+		_ = g.wait(context.Background())
+		done <- time.Since(start)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	g.hold(250 * time.Millisecond) // now ends about 300ms after start
+	if elapsed := <-done; elapsed < 290*time.Millisecond {
+		t.Errorf("wait returned after %v, want >= 290ms", elapsed)
+	}
 }

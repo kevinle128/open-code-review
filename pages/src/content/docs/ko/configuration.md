@@ -275,6 +275,8 @@ ocr config set custom_providers.my-gateway.retry_codes 403,400
 
 재시도 전에 SDK는 `Retry-After-Ms` 또는 `Retry-After` 응답 헤더가 요구하는 시간만큼 기다립니다. 일부 게이트웨이는 `429 Rate limit exceeded (reset after 9s)`처럼 대기 시간을 오류 본문에만 적거나, 속도 제한을 `503`으로 감쌉니다. 재시도할 응답에 이런 헤더가 없으면 OCR은 본문에서 `reset after 9s`, `try again in 1m30s`, `retry after 3 seconds` 같은 대기 시간을 읽고, SDK는 정확히 그만큼 기다립니다. 대기 시간이 없으면 SDK는 자체의 짧은 백오프를 사용합니다.
 
+서버가 지정한 속도 제한 대기 시간 동안 OCR은 같은 공급자로 가는 다른 동시 요청도 함께 기다리게 하고, 대기가 끝나면 조금씩 다른 시점에 내보냅니다. 그렇지 않으면 모든 리뷰 하위 작업이 아직 풀리지 않은 제한에 부딪혀 똑같이 제한을 받고 자신의 재시도 횟수를 모두 써 버립니다.
+
 ### 프롬프트 상한 {#prompt-limit}
 
 `max_tokens`는 서브태스크 하나(파일 하나 또는 관련된 파일 묶음)에 대한 **프롬프트**(입력) 상한입니다. 내장 템플릿의 기본값은 `ocr review` 200,000토큰, `ocr scan` 58,888토큰입니다. 컨텍스트 윈도가 다른 모델에서는 `max_tokens`를 저장해 바꿉니다:
