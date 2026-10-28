@@ -271,6 +271,10 @@ ocr config set custom_providers.my-gateway.retry_codes 403,400
 
 4xx HTTP 상태 코드만 허용됩니다. `408`, `409`, `429`는 SDK가 이미 재시도합니다. 설정 파일에서 읽을 때 이런 중복 코드는 무시되며, `ocr config set`으로 전달하면 OCR이 경고를 출력하고 저장 값에서 제외합니다. 5xx 응답은 모두 SDK가 이미 재시도하므로 `retry_codes`에 추가할 수 없습니다.
 
+### 서버가 지정한 재시도 시간 기다리기
+
+재시도 전에 SDK는 `Retry-After-Ms` 또는 `Retry-After` 응답 헤더가 요구하는 시간만큼 기다립니다. 일부 게이트웨이는 `429 Rate limit exceeded (reset after 9s)`처럼 대기 시간을 오류 본문에만 적거나, 속도 제한을 `503`으로 감쌉니다. 재시도할 응답에 이런 헤더가 없으면 OCR은 본문에서 `reset after 9s`, `try again in 1m30s`, `retry after 3 seconds` 같은 대기 시간을 읽고, SDK는 정확히 그만큼 기다립니다. 대기 시간이 없으면 SDK는 자체의 짧은 백오프를 사용합니다.
+
 ### 프롬프트 상한 {#prompt-limit}
 
 `max_tokens`는 서브태스크 하나(파일 하나 또는 관련된 파일 묶음)에 대한 **프롬프트**(입력) 상한입니다. 내장 템플릿의 기본값은 `ocr review` 200,000토큰, `ocr scan` 58,888토큰입니다. 컨텍스트 윈도가 다른 모델에서는 `max_tokens`를 저장해 바꿉니다:

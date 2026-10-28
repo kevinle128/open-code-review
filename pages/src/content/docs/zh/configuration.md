@@ -317,6 +317,14 @@ ocr config set custom_providers.my-gateway.retry_codes 403,400
 警告，并且不会把这些状态码保存到配置中。所有 5xx 响应也已由 SDK 默认重试，
 因此不能加入 `retry_codes`。
 
+### 等待服务端给出的重试时间
+
+重试前，SDK 会按 `Retry-After-Ms` 或 `Retry-After` 响应头要求的时间等待。有些网关只在
+错误正文中给出等待时间，例如 `429 Rate limit exceeded (reset after 9s)`，或者把限流包装成
+`503`。当需要重试的响应没有这类响应头时，OCR 会从正文中读取 `reset after 9s`、
+`try again in 1m30s` 或 `retry after 3 seconds` 这样的等待时间，SDK 会准确等待这么久。
+如果正文没有给出等待时间，SDK 使用自身较短的退避时间。
+
 ### 提示词上限
 
 `max_tokens` 是单个子任务的**提示词**（输入）上限（一个文件或一组相关文件）。
