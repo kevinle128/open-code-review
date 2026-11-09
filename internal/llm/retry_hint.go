@@ -5,15 +5,12 @@ package llm
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"math"
-	"math/rand/v2"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -85,80 +82,6 @@ func headerRetryWait(h http.Header) (time.Duration, bool) {
 		return d, d > 0
 	}
 	return 0, false
-}
-
-const (
-	minReleaseSpread = 100 * time.Millisecond
-	maxReleaseSpread = 2 * time.Second
-)
-
-// rateLimitGate holds every request of one client while the server's stated
-// rate-limit wait is open. The SDK retry loop only delays the request that
-// received the rate limit; the other concurrent review requests would still
-// reach the same account inside the closed window, receive a rate limit too
-// and spend their own retry attempts, so all of them exhaust their attempts
-// together. The gate is admission, not a retry loop: the SDK still decides
-// whether and how often to retry.
-type rateLimitGate struct {
-	mu     sync.Mutex
-	until  time.Time
-	spread time.Duration
-	// jitter returns a random duration in [0, n); replaced in tests.
-	jitter func(n time.Duration) time.Duration
-}
-
-func newRateLimitGate() *rateLimitGate {
-	return &rateLimitGate{jitter: func(n time.Duration) time.Duration { return time.Duration(rand.Int64N(int64(n))) }}
-}
-
-// middleware is structurally compatible with both option.Middleware
-// (Anthropic SDK) and openaiopt.Middleware (OpenAI SDK).
-func (g *rateLimitGate) middleware(req *http.Request, next func(*http.Request) (*http.Response, error)) (*http.Response, error) {
-	if err := g.wait(req.Context()); err != nil {
-		return nil, err
-	}
-	resp, err := next(req)
-	if wait, ok := applyRetryHint(resp, err); ok {
-		g.hold(wait)
-	}
-	return resp, err
-}
-
-// hold closes the gate for at least wait. A shorter wait never reopens a
-// window that an earlier response closed for longer.
-func (g *rateLimitGate) hold(wait time.Duration) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if until := time.Now().Add(wait); until.After(g.until) {
-		g.until = until
-		g.spread = min(max(wait/4, minReleaseSpread), maxReleaseSpread)
-	}
-}
-
-// wait blocks while the gate is closed. Requests that waited are released at
-// random points inside a short spread after the window, never before it, so
-// they do not reach the server on the same instant and close it again.
-func (g *rateLimitGate) wait(ctx context.Context) error {
-	// A response that arrives while this request sleeps can extend the window,
-	// so the gate is checked again after every sleep.
-	for {
-		g.mu.Lock()
-		delay := time.Until(g.until)
-		if delay > 0 {
-			delay += g.jitter(g.spread)
-		}
-		g.mu.Unlock()
-		if delay <= 0 {
-			return nil
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
 }
 
 // retryableStatus mirrors the status codes both SDKs retry by default, plus an
