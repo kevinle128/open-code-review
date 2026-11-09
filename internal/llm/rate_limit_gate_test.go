@@ -94,8 +94,8 @@ func TestRateLimitGate_HalvesLimitOncePerLoad(t *testing.T) {
 	sentBefore := time.Now()
 	g.rateLimited(0, sentBefore)
 	g.rateLimited(0, sentBefore) // sent under the same load: no second decrease
-	if g.limit != 4 || g.ceiling != 8 {
-		t.Fatalf("limit/ceiling = %d/%d, want 4/8", g.limit, g.ceiling)
+	if g.limit != 4 {
+		t.Fatalf("limit = %d, want 4", g.limit)
 	}
 	g.rateLimited(0, time.Now().Add(time.Millisecond)) // sent after the decrease
 	if g.limit != 2 {
@@ -122,7 +122,7 @@ func TestRateLimitGate_HalvesLimitOncePerLoad(t *testing.T) {
 
 func TestRateLimitGate_LimitBlocksUntilRelease(t *testing.T) {
 	g, _ := testGate()
-	g.limit, g.ceiling = 1, 4
+	g.limit = 1
 	first := mustAcquire(t, g)
 	acquired := make(chan struct{})
 	go func() {
@@ -146,10 +146,17 @@ func TestRateLimitGate_LimitBlocksUntilRelease(t *testing.T) {
 	}
 }
 
-func TestRateLimitGate_SuccessesRaiseLimitToCeiling(t *testing.T) {
+func TestRateLimitGate_SuccessesRaiseLimitOnlyWhileRequestsWait(t *testing.T) {
 	g, logs := testGate()
 	g.succeeded() // no limit yet: nothing to raise
-	g.limit, g.ceiling = 2, 3
+	g.limit = 2
+	for range 5 {
+		g.succeeded()
+	}
+	if g.limit != 2 {
+		t.Fatalf("limit = %d after successes with nobody waiting, want 2", g.limit)
+	}
+	g.waiting = 1
 	g.succeeded()
 	if g.limit != 2 {
 		t.Fatalf("limit = %d after one success, want 2", g.limit)
@@ -158,15 +165,55 @@ func TestRateLimitGate_SuccessesRaiseLimitToCeiling(t *testing.T) {
 	if g.limit != 3 {
 		t.Fatalf("limit = %d after two successes, want 3", g.limit)
 	}
-	for range 5 {
-		g.succeeded()
-	}
-	if g.limit != 3 {
-		t.Errorf("limit = %d, want it capped at the ceiling 3", g.limit)
-	}
 	if len(*logs) != 1 || !strings.Contains((*logs)[0], "allowing 3") {
 		t.Errorf("logs = %q", *logs)
 	}
+}
+
+// The first rate limit often hits the single grouping request, before the
+// groups start. The limit must still grow when the groups then queue up.
+func TestRateLimitGate_GrowsAfterRateLimitAtLowLoad(t *testing.T) {
+	g, _ := testGate()
+	only := mustAcquire(t, g)
+	g.rateLimited(0, time.Now())
+	only()
+	if g.limit != 1 {
+		t.Fatalf("limit = %d after a rate limit with one request in flight, want 1", g.limit)
+	}
+	hold := mustAcquire(t, g)
+	waiters := make(chan func(), 4)
+	for range 4 {
+		go func() { waiters <- mustAcquire(t, g) }()
+	}
+	deadline := time.Now().Add(time.Second)
+	for g.waitingNow() != 4 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := g.waitingNow(); n != 4 {
+		t.Fatalf("waiting = %d, want 4", n)
+	}
+	for range 3 {
+		g.succeeded()
+	}
+	g.mu.Lock()
+	limit := g.limit
+	g.mu.Unlock()
+	if limit < 3 {
+		t.Fatalf("limit = %d after successes with requests waiting, want it to grow to at least 3", limit)
+	}
+	hold()
+	for range 4 {
+		(<-waiters)()
+	}
+	if n := g.waitingNow(); n != 0 {
+		t.Errorf("waiting = %d after all were admitted, want 0", n)
+	}
+}
+
+func (g *rateLimitGate) waitingNow() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.waiting
 }
 
 func TestRateLimitGate_AcquireHonorsCancel(t *testing.T) {
@@ -180,7 +227,7 @@ func TestRateLimitGate_AcquireHonorsCancel(t *testing.T) {
 	}
 
 	g, _ = testGate()
-	g.limit, g.ceiling = 1, 2
+	g.limit = 1
 	defer mustAcquire(t, g)()
 	if _, err := g.acquire(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("acquire at a full limit = %v, want context.Canceled", err)
@@ -387,7 +434,7 @@ func TestSlotBody_ReadErrorKeepsSlotUntilClose(t *testing.T) {
 // must still be sent with time left, or it fails without reaching the server.
 func TestRateLimitGate_QueuedAttemptKeepsHalfItsTimeout(t *testing.T) {
 	g, logs := testGate()
-	g.limit, g.ceiling = 1, 1
+	g.limit = 1
 	defer mustAcquire(t, g)() // the only slot stays taken
 
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)

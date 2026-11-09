@@ -30,8 +30,8 @@ const (
 //   - While a stated rate-limit wait is open, it holds every request of the
 //     client, then releases them at slightly different times.
 //   - On each rate limit it halves the number of requests allowed in flight,
-//     and after enough successes it raises that number by one again, up to
-//     the load at which the first rate limit arrived.
+//     and after enough successes it raises that number by one again while
+//     requests are waiting for a slot.
 //
 // It is admission, not a retry loop: the SDK still decides whether and how
 // often to retry.
@@ -43,9 +43,12 @@ type rateLimitGate struct {
 	inFlight int
 	// limit is the number of requests allowed in flight; 0 means no limit.
 	limit int
-	// ceiling is the number of requests in flight when the first rate limit
-	// arrived. The limit never grows past it.
-	ceiling   int
+	// waiting is the number of requests blocked on a full limit. The limit
+	// grows only while some wait, because only then does it hold load back.
+	// A ceiling taken from the load at the first rate limit would freeze the
+	// whole run at that load, and the first rate limit often comes from the
+	// single grouping request.
+	waiting   int
 	successes int
 	// lastDecrease is when the limit was last lowered. Rate limits on requests
 	// sent before it were caused by the old load, so they do not lower it again.
@@ -140,15 +143,22 @@ func (g *rateLimitGate) acquire(ctx context.Context) (func(), error) {
 			return sync.OnceFunc(g.release), nil
 		}
 		changed := g.changed
+		g.waiting++
 		g.mu.Unlock()
+		budgetSpent := false
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
 		case <-changed:
 		case <-queueBudget:
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
+			budgetSpent = true
+		}
+		g.mu.Lock()
+		g.waiting--
+		g.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if budgetSpent {
 			g.mu.Lock()
 			g.inFlight++
 			if !g.overflowLogged {
@@ -186,7 +196,6 @@ func (g *rateLimitGate) rateLimited(wait time.Duration, sentAt time.Time) {
 	current := g.limit
 	if current == 0 {
 		current = g.inFlight
-		g.ceiling = max(g.inFlight, 1)
 	}
 	g.successes = 0
 	if next := max(current/2, 1); next != g.limit {
@@ -196,11 +205,11 @@ func (g *rateLimitGate) rateLimited(wait time.Duration, sentAt time.Time) {
 }
 
 // succeeded raises the limit by one after as many successes as the limit
-// allows at once, up to the ceiling.
+// allows at once, while requests are waiting for a slot.
 func (g *rateLimitGate) succeeded() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.limit == 0 || g.limit >= g.ceiling {
+	if g.limit == 0 || g.waiting == 0 {
 		return
 	}
 	g.successes++

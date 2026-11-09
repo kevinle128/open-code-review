@@ -364,8 +364,8 @@ rate-limited too, and spends its own retries.
 Each rate limit also halves the number of LLM requests OCR keeps in flight,
 because a limit that returns after the wait means the load is more than the
 account allows. After enough successful requests, OCR raises the number by
-one again, up to the load at which the first rate limit arrived. OCR prints a
-line each time the number changes. `--concurrency` stays the upper bound.
+one again while requests are waiting for a slot. OCR prints a line each time
+the number changes. `--concurrency` stays the upper bound.
 
 ### Prompt limit
 
