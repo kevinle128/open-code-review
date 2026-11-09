@@ -23,6 +23,8 @@ func TestParseRetryHint(t *testing.T) {
 	}{
 		{`{"message":"[codex/gpt] [429]: {\"detail\":\"Rate limit exceeded\"} (reset after 9s)"}`, 9 * time.Second, true},
 		{"Rate limit reached. Please try again in 1m30s.", 90 * time.Second, true},
+		{`{"message":"[429]: Rate limit exceeded (reset after 1m 4s)"}`, 64 * time.Second, true},
+		{"reset after 4s and more", 4 * time.Second, true},
 		{"Please try again in 6.5s.", 6500 * time.Millisecond, true},
 		{"Please try again in 120ms.", 120 * time.Millisecond, true},
 		{"Too many requests, retry after 3 seconds", 3 * time.Second, true},

@@ -19,10 +19,11 @@ import (
 const retryHintBodyLimit = 64 << 10
 
 // retryHintPattern finds a wait the server states in prose, such as
-// "reset after 9s", "Please try again in 1m30s" or "retry in 6.5 seconds".
+// "reset after 9s", "reset after 1m 4s", "Please try again in 1m30s" or
+// "retry in 6.5 seconds".
 var retryHintPattern = regexp.MustCompile(
 	`(?i)\b(?:retry|try again|reset|resets|wait)\s+(?:after|in)\s+` +
-		`((?:\d+(?:\.\d+)?(?:ms|h|m|s))+|\d+(?:\.\d+)?\s*(?:milliseconds?|seconds?|secs?|minutes?|mins?))\b`,
+		`((?:\d+(?:\.\d+)?(?:ms|h|m|s)\s*)+|\d+(?:\.\d+)?\s*(?:milliseconds?|seconds?|secs?|minutes?|mins?))\b`,
 )
 
 // Both SDKs honor Retry-After-Ms and Retry-After, but some gateways report a
