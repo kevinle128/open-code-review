@@ -34,8 +34,7 @@ const (
 //     the load at which the first rate limit arrived.
 //
 // It is admission, not a retry loop: the SDK still decides whether and how
-// often to retry. A request that waits here counts against the SDK's
-// per-attempt timeout, so it cannot wait forever.
+// often to retry.
 type rateLimitGate struct {
 	mu     sync.Mutex
 	until  time.Time
@@ -53,6 +52,8 @@ type rateLimitGate struct {
 	lastDecrease time.Time
 	// changed is closed and replaced whenever a slot frees or the limit grows.
 	changed chan struct{}
+	// overflowLogged keeps the queue-overflow notice to one line per run.
+	overflowLogged bool
 
 	// jitter returns a random duration in [0, n); replaced in tests.
 	jitter func(n time.Duration) time.Duration
@@ -101,7 +102,25 @@ func (g *rateLimitGate) middleware(req *http.Request, next func(*http.Request) (
 
 // acquire waits until the gate is open and a slot is free, then takes the
 // slot. The returned function frees it and is safe to call more than once.
+//
+// The SDK starts its per-attempt timeout before its middleware run, and it
+// does not retry an attempt whose own timeout expired. A request that queued
+// for a slot until its deadline would therefore fail without being sent. So
+// a request waits for a slot for at most half of the time left when it
+// arrives, and then goes out above the limit: it is always sent with at least
+// half of its timeout, and the limit is only exceeded when the queue is so
+// long that waiting would fail the request anyway.
+//
+// The budget bounds only the wait for a slot, not a stated rate-limit wait:
+// a request sent before the server's stated time is rejected again, so it
+// always waits that time in full.
 func (g *rateLimitGate) acquire(ctx context.Context) (func(), error) {
+	var queueBudget <-chan time.Time
+	if deadline, ok := ctx.Deadline(); ok {
+		timer := time.NewTimer(time.Until(deadline) / 2)
+		defer timer.Stop()
+		queueBudget = timer.C
+	}
 	for {
 		g.mu.Lock()
 		if delay := time.Until(g.until); delay > 0 {
@@ -126,6 +145,18 @@ func (g *rateLimitGate) acquire(ctx context.Context) (func(), error) {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-changed:
+		case <-queueBudget:
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			g.mu.Lock()
+			g.inFlight++
+			if !g.overflowLogged {
+				g.overflowLogged = true
+				g.logf("LLM request queue is long: sending requests above the limit of %d so they keep enough of their timeout", g.limit)
+			}
+			g.mu.Unlock()
+			return sync.OnceFunc(g.release), nil
 		}
 	}
 }

@@ -381,3 +381,76 @@ func TestSlotBody_ReadErrorKeepsSlotUntilClose(t *testing.T) {
 		t.Errorf("released %d times after Close, want 1", released)
 	}
 }
+
+// The SDK starts its per-attempt timeout before its middleware run and does
+// not retry an attempt whose own timeout expired. A request queued for a slot
+// must still be sent with time left, or it fails without reaching the server.
+func TestRateLimitGate_QueuedAttemptKeepsHalfItsTimeout(t *testing.T) {
+	g, logs := testGate()
+	g.limit, g.ceiling = 1, 1
+	defer mustAcquire(t, g)() // the only slot stays taken
+
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	release, err := g.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire = %v, want a slot above the limit before the deadline", err)
+	}
+	waited := time.Since(start)
+	release()
+	if waited < 150*time.Millisecond || waited > 300*time.Millisecond {
+		t.Errorf("waited %v for a slot, want about half of the 400ms timeout", waited)
+	}
+	if len(*logs) != 1 || !strings.Contains((*logs)[0], "above the limit of 1") {
+		t.Errorf("logs = %q, want one overflow notice", *logs)
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel2()
+	release, err = g.acquire(ctx2)
+	if err != nil {
+		t.Fatalf("second overflow acquire: %v", err)
+	}
+	release()
+	if len(*logs) != 1 {
+		t.Errorf("logs = %q, want the overflow notice only once", *logs)
+	}
+}
+
+// With the limit at one, three requests whose service times add up to more
+// than one timeout must all reach the server and succeed: without a bound on
+// the queue wait, the last one spends its whole timeout queued.
+func TestOpenAIClient_QueuedRequestKeepsItsTimeout(t *testing.T) {
+	var sent atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if sent.Add(1) == 1 {
+			// Lower the limit to one; not retried, so it leaves no load behind.
+			w.Header().Set("x-should-retry", "false")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"slow down"}}`))
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+		_, _ = w.Write([]byte(chatOKBody))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(ClientConfig{URL: server.URL + "/v1", APIKey: "k", Model: "m", Timeout: 700 * time.Millisecond})
+	if err := pingClient(client); err == nil {
+		t.Fatal("first request: want the rate limit error")
+	}
+	errs := make(chan error, 3)
+	for range 3 {
+		go func() { errs <- pingClient(client) }()
+	}
+	for range 3 {
+		if err := <-errs; err != nil {
+			t.Errorf("CompletionsWithCtx: %v", err)
+		}
+	}
+	if got := sent.Load(); got != 4 {
+		t.Errorf("requests that reached the server = %d, want 4 (one rate limit, three served)", got)
+	}
+}
