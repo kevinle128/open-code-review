@@ -114,7 +114,10 @@ func Decide(in Input) Action {
 		return Action{Kind: None, Reason: "summary marker unreadable"}
 	}
 
-	if m == nil || m.Auto == 0 {
+	// A manual /review before any automatic round sets Reviewed. Round 1 then
+	// goes through the same gate as later rounds and reviews only what came
+	// after it, so the commits the manual review covered are not reviewed again.
+	if m == nil || (m.Auto == 0 && m.Reviewed == "") {
 		switch in.Trigger {
 		case TriggerOpened, TriggerReady, TriggerReopened, TriggerPush:
 			return Action{Kind: RunAuto, Round: 1, Mode: ModeFull, Reason: "first round"}
