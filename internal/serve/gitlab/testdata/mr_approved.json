@@ -1,0 +1,44 @@
+{
+  "object_kind": "merge_request",
+  "event_type": "merge_request",
+  "user": {
+    "id": 7,
+    "name": "Dev One",
+    "username": "dev1"
+  },
+  "project": {
+    "id": 42,
+    "name": "svc",
+    "path_with_namespace": "team/svc",
+    "web_url": "https://git.example.test/team/svc"
+  },
+  "object_attributes": {
+    "id": 900,
+    "iid": 5,
+    "title": "Add feature",
+    "author_id": 7,
+    "state": "opened",
+    "action": "approved",
+    "source_branch": "feat/x",
+    "target_branch": "main",
+    "draft": false,
+    "work_in_progress": false,
+    "last_commit": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "labels": [
+      {
+        "id": 1,
+        "title": "backend"
+      }
+    ],
+    "url": "https://git.example.test/team/svc/-/merge_requests/5"
+  },
+  "labels": [
+    {
+      "id": 1,
+      "title": "backend"
+    }
+  ],
+  "changes": {}
+}
