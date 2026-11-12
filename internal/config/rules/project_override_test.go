@@ -40,8 +40,8 @@ func TestParseProjectRuleReadsReferencedFiles(t *testing.T) {
 	if len(pr.Exclude) != 1 || pr.Exclude[0] != "gen/**" {
 		t.Errorf("exclude = %v", pr.Exclude)
 	}
-	if strings.Join(asked, ",") != "docs/review.md,docs/review.md,docs/missing.md" {
-		t.Errorf("read paths = %v; paths outside the repository must not be read", asked)
+	if strings.Join(asked, ",") != "docs/review.md,docs/missing.md" {
+		t.Errorf("read paths = %v; each file is read once, and never outside the repository", asked)
 	}
 }
 

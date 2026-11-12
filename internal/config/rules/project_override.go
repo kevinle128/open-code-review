@@ -18,7 +18,7 @@ const ProjectRulePath = ".opencodereview/rule.json"
 // working tree, such as one read at a commit through a forge API. An entry
 // that names a rule file is read with readFile, which gets the cleaned path
 // relative to the repository root and reports false when the file does not
-// exist. As with the working-tree loader, an entry
+// exist; each path is read once. As with the working-tree loader, an entry
 // whose file is missing, outside the repository, too large or unreadable gets
 // an empty rule, and the other entries and the include and exclude lists stay
 // in force. readFile reports its own errors.
@@ -27,6 +27,7 @@ func ParseProjectRule(data []byte, readFile func(path string) ([]byte, bool, err
 	if err := json.Unmarshal(data, &pr); err != nil {
 		return nil, fmt.Errorf("unmarshal project rule: %w", err)
 	}
+	rulesByPath := map[string]string{}
 	for i := range pr.Rules {
 		e := &pr.Rules[i]
 		if strings.TrimSpace(e.Rule) == "" || !looksLikeFilePath(e.Rule) {
@@ -37,11 +38,15 @@ func ParseProjectRule(data []byte, readFile func(path string) ([]byte, bool, err
 			e.Rule = ""
 			continue
 		}
-		e.Rule = ""
-		content, found, err := readFile(rel)
-		if err == nil && found && len(content) <= MaxRuleFileBytes {
-			e.Rule = strings.TrimRight(string(content), "\n")
+		rule, seen := rulesByPath[rel]
+		if !seen {
+			content, found, err := readFile(rel)
+			if err == nil && found && len(content) <= MaxRuleFileBytes {
+				rule = strings.TrimRight(string(content), "\n")
+			}
+			rulesByPath[rel] = rule
 		}
+		e.Rule = rule
 	}
 	return &pr, nil
 }
