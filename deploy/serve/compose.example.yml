@@ -1,0 +1,42 @@
+# Example Compose file for `ocr serve`. Copy it to compose.yml in this
+# directory and keep .env, config.json and github-app.pem next to it; none of
+# those files belong in git. See README.md in this directory.
+name: ocr-review
+
+services:
+  ocr-review:
+    build:
+      context: ../..
+      dockerfile: deploy/serve/Dockerfile
+      args:
+        VERSION: ${OCR_VERSION:-dev}
+        GIT_COMMIT: ${OCR_GIT_COMMIT:-}
+        BUILD_DATE: ${OCR_BUILD_DATE:-}
+    image: ocr-serve:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OCR_SERVE_ADDR: 0.0.0.0:3012
+      OCR_SERVE_GITHUB_PRIVATE_KEY_FILE: /run/secrets/github-app.pem
+      # GIT_SSL_CAINFO: /etc/ocr/ca.pem
+      # SSL_CERT_FILE: /etc/ocr/ca.pem
+    ports:
+      - "127.0.0.1:3012:3012"
+    volumes:
+      - ./config.json:/home/ocr/.opencodereview/config.json:ro
+      - ./github-app.pem:/run/secrets/github-app.pem:ro
+      # - ./ca.pem:/etc/ocr/ca.pem:ro
+      - ocr-data:/data
+      - ocr-work:/work
+    # The service drains for up to 60 seconds on SIGTERM; Docker's default of
+    # 10 seconds would cut running reviews short on every restart.
+    stop_grace_period: 75s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  ocr-data:
+  ocr-work:
