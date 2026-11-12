@@ -1,0 +1,19 @@
+{
+  "action": "closed",
+  "number": 7,
+  "pull_request": {
+    "number": 7,
+    "title": "Add retry to the importer",
+    "state": "closed",
+    "draft": false,
+    "merged": true,
+    "merged_at": "2026-11-12T10:00:00Z",
+    "user": {"login": "alice", "type": "User"},
+    "labels": [],
+    "head": {"ref": "feat/retry", "sha": "1111111111111111111111111111111111111111"},
+    "base": {"ref": "main", "sha": "2222222222222222222222222222222222222222"}
+  },
+  "repository": {"full_name": "acme/widgets"},
+  "installation": {"id": 4242},
+  "sender": {"login": "bob", "type": "User"}
+}
