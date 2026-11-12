@@ -54,7 +54,7 @@ const (
 	DefaultMaxRounds     = 3
 	DefaultPollInterval  = 2 * time.Minute
 	DefaultWorkers       = 2
-	DefaultReviewTimeout = time.Hour
+	DefaultReviewTimeout = 2 * time.Hour
 	DefaultMaxBodyBytes  = 10 << 20
 	DefaultDataDir       = "/data"
 	DefaultWorkDir       = "/work"

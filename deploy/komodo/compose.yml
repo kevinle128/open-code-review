@@ -36,7 +36,7 @@
 #   Optional; empty means the service default:
 #   OCR_SERVE_IGNORE_AUTHORS         Comma-separated RE2 patterns.
 #   OCR_SERVE_MAX_ROUNDS             Default 3, 1..10.
-#   OCR_SERVE_REVIEW_TIMEOUT         Default 1h.
+#   OCR_SERVE_REVIEW_TIMEOUT         Default 2h.
 #   OCR_SERVE_POLL_INTERVAL          Default 2m.
 #   OCR_SERVE_WORKERS                Default 2, 1..16.
 #   OCR_VERSION, OCR_GIT_COMMIT, OCR_BUILD_DATE

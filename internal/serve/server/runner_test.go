@@ -235,7 +235,7 @@ func TestReviewErrorKeepsMarkerAndAnswersCommand(t *testing.T) {
 }
 
 func TestRunPostsPendingLineBeforeReviewWithRunDeadline(t *testing.T) {
-	h := newHarness(t, func(c *serveconfig.Config) { c.ReviewTimeout = time.Hour })
+	h := newHarness(t, func(c *serveconfig.Config) { c.ReviewTimeout = serveconfig.DefaultReviewTimeout })
 	ref := ghRef(5)
 	h.gh.setPR(openPR(ref, sha1))
 	var sawPending bool
@@ -252,8 +252,8 @@ func TestRunPostsPendingLineBeforeReviewWithRunDeadline(t *testing.T) {
 	if !sawPending {
 		t.Fatal("the in-progress line must be in the summary before the review starts")
 	}
-	if left <= 59*time.Minute || left > time.Hour {
-		t.Fatalf("review deadline in %v, want about the configured hour", left)
+	if want := serveconfig.DefaultReviewTimeout; left <= want-time.Minute || left > want {
+		t.Fatalf("review deadline in %v, want about %v", left, want)
 	}
 }
 

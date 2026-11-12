@@ -117,7 +117,7 @@ setting both forms is an error.
 | `OCR_SERVE_MAX_ROUNDS` | `3` | Automatic rounds per PR, 1..10. |
 | `OCR_SERVE_POLL_INTERVAL` | `2m` | How often waiting GitLab MRs are checked for resolved threads. |
 | `OCR_SERVE_WORKERS` | `2` | Concurrent reviews, 1..16; also the number of checkout slots. |
-| `OCR_SERVE_REVIEW_TIMEOUT` | `1h` | Limit for one review run, timed from when a worker takes it. Each file group in the review has a limit of 60 minutes per review round. |
+| `OCR_SERVE_REVIEW_TIMEOUT` | `2h` | Limit for one review run, timed from when a worker takes it. Each file group in the review has a limit of 120 minutes per review round. |
 | `OCR_SERVE_MAX_BODY_BYTES` | `10485760` | Webhook body limit. |
 | `OCR_SERVE_DATA_DIR` | `/data` | Holds `waiting.json` (GitLab MRs waiting for resolution). |
 | `OCR_SERVE_WORK_DIR` | `/work` | Checkout slots `slot-N`, emptied after each run. |

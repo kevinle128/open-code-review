@@ -20,10 +20,10 @@ import (
 // Settings that the `ocr review` flags would give. A zero reviewOptions would
 // mean zero for these, not the flag default. The file-group limit is longer
 // than the review flag default so that it does not end a serve review before
-// the run limit (OCR_SERVE_REVIEW_TIMEOUT, default 1h) does.
+// the run limit (OCR_SERVE_REVIEW_TIMEOUT, default 2h) does.
 const (
 	serveReviewConcurrency    = 8
-	serveReviewTimeoutMinutes = 60
+	serveReviewTimeoutMinutes = 120
 	serveReviewMaxGitProcs    = 16
 )
 
