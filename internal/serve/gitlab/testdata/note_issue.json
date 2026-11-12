@@ -1,0 +1,22 @@
+{
+  "object_kind": "note",
+  "event_type": "note",
+  "user": {
+    "id": 8,
+    "name": "Dev Two",
+    "username": "dev2"
+  },
+  "project": {
+    "id": 42,
+    "name": "svc",
+    "path_with_namespace": "team/svc",
+    "web_url": "https://git.example.test/team/svc"
+  },
+  "object_attributes": {
+    "id": 3001,
+    "note": "/review",
+    "noteable_type": "Issue",
+    "system": false,
+    "discussion_id": "d1"
+  }
+}
