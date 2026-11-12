@@ -1,0 +1,11 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 7,
+    "pull_request": {"url": "https://api.github.com/repos/acme/widgets/pulls/7"}
+  },
+  "comment": {"id": 9004, "body": "/review"},
+  "repository": {"full_name": "acme/widgets"},
+  "installation": {"id": 4242},
+  "sender": {"login": "ocr-test[bot]", "type": "Bot"}
+}

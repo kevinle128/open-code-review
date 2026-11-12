@@ -1,0 +1,8 @@
+{
+  "action": "created",
+  "issue": {"number": 8, "pull_request": null},
+  "comment": {"id": 9003, "body": "/review"},
+  "repository": {"full_name": "acme/widgets"},
+  "installation": {"id": 4242},
+  "sender": {"login": "alice", "type": "User"}
+}
