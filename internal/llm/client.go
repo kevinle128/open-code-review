@@ -613,6 +613,10 @@ func NewOpenAIClient(cfg ClientConfig) *OpenAIClient {
 		openaiopt.WithRequestTimeout(cfg.Timeout),
 		openaiopt.WithHTTPClient(httpClientWithHeaderTimeout(cfg.Timeout)),
 	}
+	// Outermost of the retry middlewares: it holds every request while a stated
+	// rate-limit wait is open, and it sees the x-should-retry header that
+	// retryCodesMiddleware sets for retry_codes.
+	opts = append(opts, openaiopt.WithMiddleware(newRateLimitGate().middleware))
 	if mw := retryCodesMiddleware(cfg.RetryCodes); mw != nil {
 		opts = append(opts, openaiopt.WithMiddleware(mw))
 	}
@@ -1207,6 +1211,10 @@ func NewAnthropicClient(cfg ClientConfig) *AnthropicClient {
 		)
 	}
 
+	// Outermost of the retry middlewares: it holds every request while a stated
+	// rate-limit wait is open, and it sees the x-should-retry header that
+	// retryCodesMiddleware sets for retry_codes.
+	opts = append(opts, option.WithMiddleware(newRateLimitGate().middleware))
 	if mw := retryCodesMiddleware(cfg.RetryCodes); mw != nil {
 		opts = append(opts, option.WithMiddleware(mw))
 	}
@@ -1266,6 +1274,11 @@ func NewAnthropicBedrockClient(cfg ClientConfig) *AnthropicClient {
 	}
 	// ExtraHeaders are applied per request in CompletionsWithCtx, where the
 	// session key template can expand — same as the plain Anthropic client.
+
+	// Outermost of the retry middlewares: it holds every request while a stated
+	// rate-limit wait is open, and it sees the x-should-retry header that
+	// retryCodesMiddleware sets for retry_codes.
+	opts = append(opts, option.WithMiddleware(newRateLimitGate().middleware))
 	if mw := retryCodesMiddleware(cfg.RetryCodes); mw != nil {
 		opts = append(opts, option.WithMiddleware(mw))
 	}

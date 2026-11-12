@@ -360,6 +360,27 @@ ignored. When supplied through `ocr config set`, OCR also prints a warning and
 omits them from the saved value. All 5xx responses are already retried by the
 SDK and cannot be added to `retry_codes`.
 
+### Waiting for the server's retry time
+
+Before a retry, the SDK waits as long as the `Retry-After-Ms` or `Retry-After`
+response header asks. Some gateways state the wait only in the error body, for
+example `429 Rate limit exceeded (reset after 9s)`, or wrap the rate limit in a
+`503`. When a retried response carries no such header, OCR reads a wait such as
+`reset after 9s`, `try again in 1m30s` or `retry after 3 seconds` from the body
+and the SDK waits exactly that long. Without a stated wait, the SDK uses its own
+short backoff.
+
+While a stated rate-limit wait is open, OCR also holds the other concurrent
+requests to the same provider until it ends, then releases them at slightly
+different times. Otherwise every review subtask reaches the closed limit, gets
+rate-limited too, and spends its own retries.
+
+Each rate limit also halves the number of LLM requests OCR keeps in flight,
+because a limit that returns after the wait means the load is more than the
+account allows. After enough successful requests, OCR raises the number by
+one again while requests are waiting for a slot. OCR prints a line each time
+the number changes. `--concurrency` stays the upper bound.
+
 ### Prompt limit
 
 `max_tokens` is the **prompt** (input) ceiling for a single subtask

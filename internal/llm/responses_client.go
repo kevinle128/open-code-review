@@ -63,6 +63,10 @@ func NewOpenAIResponsesClient(cfg ClientConfig) *OpenAIResponsesClient {
 		openaiopt.WithRequestTimeout(cfg.Timeout),
 		openaiopt.WithHTTPClient(httpClient),
 	}
+	// Outermost of the retry middlewares: it holds every request while a stated
+	// rate-limit wait is open, and it sees the x-should-retry header that
+	// retryCodesMiddleware sets for retry_codes.
+	opts = append(opts, openaiopt.WithMiddleware(newRateLimitGate().middleware))
 	if mw := retryCodesMiddleware(cfg.RetryCodes); mw != nil {
 		opts = append(opts, openaiopt.WithMiddleware(mw))
 	}
