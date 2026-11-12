@@ -28,6 +28,7 @@ type prState struct {
 	marker  *state.Marker
 	present bool
 	open    int
+	openIDs map[string]bool
 	repo    serveconfig.RepoConfig
 }
 
@@ -137,7 +138,7 @@ func (s *Server) read(ctx context.Context, f forge.Forge, ref forge.PRRef, log *
 	if err != nil {
 		return st, fmt.Errorf("list threads: %w", err)
 	}
-	st.open = countOpen(threads)
+	st.open, st.openIDs = countOpen(threads), openFindingIDs(threads)
 	if st.repo, err = s.repoConfig(ctx, f, ref, st.pr, log); err != nil {
 		return st, err
 	}
@@ -257,11 +258,13 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 	if err != nil {
 		return s.runFailed(f, ref, st, a, j, "post findings", err, true, log)
 	}
-	open := st.open + len(findings)
+	// Without a fresh list, the ids open before the run are what the marker
+	// keeps; the new ids sit on the newest run, which keeps all of them.
+	open, openIDs := st.open+len(findings), st.openIDs
 	if threads, err := f.ListOCRThreads(ctx, ref); err != nil {
 		log.Warn("count open threads after posting; using an estimate", "error", err.Error())
 	} else {
-		open = countOpen(threads)
+		open, openIDs = countOpen(threads), openFindingIDs(threads)
 	}
 
 	ids := make([]string, len(findings))
@@ -276,6 +279,7 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 			next = state.ApplySkipped(st.marker, to, st.pr.BaseSHA, limit)
 		}
 	}
+	next = state.PruneIDs(next, openIDs)
 	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, open, s.loc, line)); err != nil {
 		return s.runFailed(f, ref, st, a, j, "commit summary", err, true, log)
 	}
@@ -455,6 +459,16 @@ func (s *Server) unwait(ref forge.PRRef, log *slog.Logger) {
 	if err := s.store.Delete(ref.Key()); err != nil {
 		log.Error("update waiting store", "error", err.Error())
 	}
+}
+
+func openFindingIDs(threads []forge.Thread) map[string]bool {
+	ids := map[string]bool{}
+	for _, t := range threads {
+		if !t.Resolved {
+			ids[t.FindingID] = true
+		}
+	}
+	return ids
 }
 
 func countOpen(threads []forge.Thread) int {

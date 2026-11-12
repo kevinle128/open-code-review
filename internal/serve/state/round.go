@@ -223,6 +223,19 @@ func Apply(m *Marker, a Action, from, to, base string, ids []string, limit int) 
 	return out
 }
 
+// PruneIDs bounds the marker, which must fit in one comment. Thread tags,
+// not the marker, keep posting idempotent, so an id is kept only while the
+// summary shows it: on the newest runs, whose counts the summary lists, and
+// on older runs while its thread is still open.
+func PruneIDs(m Marker, open map[string]bool) Marker {
+	m.Runs = slices.Clone(m.Runs)
+	for i := range len(m.Runs) - summaryRunsShown {
+		r := &m.Runs[i]
+		r.IDs = slices.DeleteFunc(slices.Clone(r.IDs), func(id string) bool { return !open[id] })
+	}
+	return m
+}
+
 // ApplySkipped returns the marker after an automatic round that found nothing
 // to review, for example because every changed file is excluded. Such a round
 // does not count toward the limit and adds no run entry, but it moves Reviewed

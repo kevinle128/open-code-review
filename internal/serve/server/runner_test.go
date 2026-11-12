@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/model"
@@ -383,6 +384,62 @@ func TestProjectRuleReadAtBase(t *testing.T) {
 				t.Fatal("fallback not logged")
 			}
 		})
+	}
+}
+
+func TestMarkerKeepsOnlyNeededFindingIDs(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(31)
+	h.gh.setPR(openPR(ref, sha1))
+	cs := make([]model.LlmComment, 100)
+	for i := range cs {
+		cs[i] = comment("a.go", i+1)
+	}
+	h.rev.set(findingsResult(cs...))
+	var firstRun []string
+	for i := range 40 {
+		h.clock = h.clock.Add(time.Minute)
+		h.command(ref, "/review", "c")
+		if i == 0 {
+			firstRun = h.gh.marker(t, ref).Runs[0].IDs
+			// One thread of the first run stays open; the rest are resolved.
+			h.gh.mu.Lock()
+			for j := range h.gh.threads[ref.Key()] {
+				h.gh.threads[ref.Key()][j].Resolved = j != 0
+			}
+			h.gh.mu.Unlock()
+			continue
+		}
+		h.gh.mu.Lock()
+		for j := range h.gh.threads[ref.Key()] {
+			h.gh.threads[ref.Key()][j].Resolved = h.gh.threads[ref.Key()][j].FindingID != firstRun[0]
+		}
+		h.gh.mu.Unlock()
+	}
+	if n := len(h.gh.summary(ref)); n > 65536/2 {
+		t.Fatalf("summary is %d characters; GitHub refuses comments over 65536", n)
+	}
+	m := h.gh.marker(t, ref)
+	kept := 0
+	for i, r := range m.Runs {
+		if i >= len(m.Runs)-5 {
+			if len(r.IDs) != 100 {
+				t.Fatalf("run %d shown in the summary lost ids: %d", i, len(r.IDs))
+			}
+			continue
+		}
+		kept += len(r.IDs)
+	}
+	if kept != 0 {
+		t.Fatalf("older runs kept %d ids of resolved threads", kept)
+	}
+
+	h.gh.summaries[ref.Key()] = state.RenderSummary(state.Marker{V: 1, Max: 3, Runs: []state.Run{
+		{Kind: state.KindManualFull, From: shaBase, To: sha1, IDs: []string{firstRun[0], "gone"}},
+	}}, 1, h.loc, "")
+	h.command(ref, "/review", "c")
+	if ids := h.gh.marker(t, ref).Runs[0].IDs; len(ids) != 2 {
+		t.Fatalf("runs within the newest five keep every id: %v", ids)
 	}
 }
 

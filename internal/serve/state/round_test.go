@@ -5,7 +5,9 @@ package state
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -285,5 +287,29 @@ func TestFindingID(t *testing.T) {
 	}
 	if short := FindingID(auto, "abc", f, now); !strings.HasPrefix(short, "r2-abc-") {
 		t.Fatalf("short sha %q", short)
+	}
+}
+
+func TestPruneIDs(t *testing.T) {
+	var m Marker
+	for i := range 8 {
+		m.Runs = append(m.Runs, Run{Kind: KindManualFull, To: strings.Repeat("a", 40), IDs: []string{fmt.Sprintf("old-%d", i), "open"}})
+	}
+	before := slices.Clone(m.Runs[0].IDs)
+	got := PruneIDs(m, map[string]bool{"open": true})
+	for i, r := range got.Runs {
+		want := []string{"open"}
+		if i >= 3 {
+			want = []string{fmt.Sprintf("old-%d", i), "open"}
+		}
+		if !slices.Equal(r.IDs, want) {
+			t.Errorf("run %d ids = %v, want %v", i, r.IDs, want)
+		}
+	}
+	if !slices.Equal(m.Runs[0].IDs, before) {
+		t.Error("PruneIDs changed its input")
+	}
+	if short := PruneIDs(Marker{Runs: m.Runs[:2]}, nil); len(short.Runs[0].IDs) != 2 {
+		t.Error("a marker with few runs must keep every id")
 	}
 }
