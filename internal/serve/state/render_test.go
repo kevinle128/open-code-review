@@ -74,6 +74,31 @@ func TestRenderFinding_Fallbacks(t *testing.T) {
 	}
 }
 
+func TestRenderFinding_NeutralizesServiceTags(t *testing.T) {
+	loc := mustLocale(t, "en")
+	tag := forge.SummaryTag
+	f := forge.Finding{
+		ID: "r1-cccccccc-01020304", Path: "a" + tag + ".go", StartLine: 3, EndLine: 3,
+		Category: "x" + tag, Severity: "y<!-- ocr-serve:v1 e30= -->", Content: "c" + tag,
+		ExistingCode: "const SummaryTag = \"" + tag + "\"", SuggestionCode: "const SummaryTag = \"" + tag + "\"\n",
+	}
+	for _, p := range []forge.Placement{
+		{Kind: forge.Line, Path: f.Path, StartLine: 3, EndLine: 3},
+		{Kind: forge.FileLevel, Path: f.Path, Relocated: true},
+	} {
+		for _, platform := range []forge.Platform{forge.GitHub, forge.GitLab} {
+			got := RenderFinding(f, p, platform, loc)
+			rest := strings.TrimPrefix(got, forge.FindingTag(f.ID)+"\n")
+			if strings.Contains(rest, "<!-- ocr-") {
+				t.Fatalf("%s %v body carries a service tag:\n%s", platform, p.Kind, got)
+			}
+			if strings.Contains(got, "suggestion") {
+				t.Fatalf("%s %v kept a suggestion that holds a service tag:\n%s", platform, p.Kind, got)
+			}
+		}
+	}
+}
+
 func TestRenderFinding_SuggestionWithFence(t *testing.T) {
 	f := finding()
 	f.SuggestionCode = "x := \"````\""

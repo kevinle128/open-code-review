@@ -35,11 +35,33 @@ func TestGetSummaryOwnership(t *testing.T) {
 		t.Fatalf("forged markers trusted: %+v, %v", c, err)
 	}
 
-	markerOnly := "lost first line\n" + state.Encode(state.Initial(3))
-	own := fa.addComment(&fa.issueComments, markerOnly, "OCR-Test[bot]", "Bot")
+	// A bot comment that only quotes the tag or a marker, such as a finding
+	// on the line that defines them, is not the summary.
+	fa.addComment(&fa.issueComments, "lost first line\n"+state.Encode(state.Initial(3)), "OCR-Test[bot]", "Bot")
+	fa.addComment(&fa.issueComments, forge.FindingTag("r1-aaaaaaaa-01020304")+"\nquote "+forge.SummaryTag, testBot, "Bot")
 	c, err = f.GetSummary(ctx, testRef)
-	if err != nil || c == nil || c.Body != markerOnly || c.ID != strconv.FormatInt(own["id"].(int64), 10) {
+	if err != nil || c != nil {
+		t.Fatalf("a comment that does not start with the summary tag was trusted: %+v, %v", c, err)
+	}
+
+	summary := forge.SummaryTag + "\n" + state.Encode(state.Initial(3))
+	own := fa.addComment(&fa.issueComments, summary, "OCR-Test[bot]", "Bot")
+	c, err = f.GetSummary(ctx, testRef)
+	if err != nil || c == nil || c.Body != summary || c.ID != strconv.FormatInt(own["id"].(int64), 10) {
 		t.Fatalf("GetSummary = %+v, %v", c, err)
+	}
+}
+
+func TestUpsertSummaryLeavesFindingCommentAlone(t *testing.T) {
+	fa := newFakeAPI(t)
+	f, _ := fa.forge(t)
+	fa.addComment(&fa.issueComments, forge.FindingTag("r1-aaaaaaaa-01020304")+"\nquote "+forge.SummaryTag, testBot, "Bot")
+	if err := f.UpsertSummary(context.Background(), testRef, "progress "+forge.SummaryTag); err != nil {
+		t.Fatal(err)
+	}
+	if len(fa.patches) != 0 || len(fa.issueComments) != 2 ||
+		!strings.HasPrefix(fa.issueComments[1]["body"].(string), forge.SummaryTag+"\n") {
+		t.Fatalf("patches %v comments %v", fa.patches, fa.issueComments)
 	}
 }
 

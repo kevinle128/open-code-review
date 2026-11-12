@@ -176,8 +176,10 @@ type apiDiscussion struct {
 	Notes []apiNote `json:"notes"`
 }
 
-// summaryNote returns the newest bot-authored note carrying the summary tag.
-// Only the bot's notes count, so a human cannot plant a marker.
+// summaryNote returns the newest bot-authored note that starts with the
+// summary tag. Only the bot's notes count, so a human cannot plant a marker,
+// and only the first line, because the notes API also lists finding notes,
+// which carry the tag further down when they quote code that holds it.
 func (f *Forge) summaryNote(ctx context.Context, ref forge.PRRef) (*apiNote, error) {
 	path, err := mrPath(ref)
 	if err != nil {
@@ -195,7 +197,7 @@ func (f *Forge) summaryNote(ctx context.Context, ref forge.PRRef) (*apiNote, err
 	var found *apiNote
 	for i := range notes {
 		n := &notes[i]
-		if !n.System && n.Author.ID == botID && strings.Contains(n.Body, forge.SummaryTag) {
+		if !n.System && n.Author.ID == botID && strings.HasPrefix(n.Body, forge.SummaryTag) {
 			found = n
 		}
 	}

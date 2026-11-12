@@ -181,7 +181,7 @@ type Forge interface {
 	Verify(h http.Header, body []byte) error
 	ParseEvent(h http.Header, body []byte) (Event, error)
 	GetPR(ctx context.Context, ref PRRef) (PR, error)
-	// GetSummary returns the bot-authored comment that carries SummaryTag, or nil.
+	// GetSummary returns the bot-authored comment that starts with SummaryTag, or nil.
 	GetSummary(ctx context.Context, ref PRRef) (*Comment, error)
 	UpsertSummary(ctx context.Context, ref PRRef, body string) error
 	// ListOCRThreads returns threads whose bot-authored root carries a finding tag.

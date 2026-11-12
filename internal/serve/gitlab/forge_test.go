@@ -301,6 +301,24 @@ func TestSummaryLifecycle(t *testing.T) {
 	}
 }
 
+func TestSummaryIgnoresFindingNoteQuotingTag(t *testing.T) {
+	m := newMRFake(t)
+	m.notes = []apiNote{
+		{ID: 1, Body: forge.FindingTag("r1-aaaaaaaa-01020304") + "\nconst SummaryTag = \"" + forge.SummaryTag + "\"", Author: botUser},
+	}
+	f := newTestForge(t, m.fakeGitLab, nil)
+	ctx := context.Background()
+	if got, err := f.GetSummary(ctx, testRef); err != nil || got != nil {
+		t.Fatalf("finding note taken as the summary: %+v %v", got, err)
+	}
+	if err := f.UpsertSummary(ctx, testRef, forge.SummaryTag+"\nreviewing"); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.requests(http.MethodPut)) != 0 || len(m.requests(http.MethodPost)) != 1 {
+		t.Fatalf("writes %+v", m.writes())
+	}
+}
+
 func TestUpsertSummaryDoesNotPostWhenListFails(t *testing.T) {
 	f := newFake(t)
 	f.json("GET /user", 200, botUser)

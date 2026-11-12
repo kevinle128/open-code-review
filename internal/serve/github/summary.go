@@ -15,10 +15,6 @@ import (
 	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
-// markerPrefix finds a summary whose first line was lost but whose state
-// marker survived, so it is still updated instead of duplicated.
-const markerPrefix = "<!-- ocr-serve:v1 "
-
 type ghComment struct {
 	ID   int64  `json:"id"`
 	Body string `json:"body"`
@@ -56,7 +52,9 @@ func (f *Forge) findSummary(ctx context.Context, ref forge.PRRef) (*ghComment, e
 		if err := json.Unmarshal(raw, &c); err != nil {
 			return fmt.Errorf("decode issue comment: %w", err)
 		}
-		if ownedBy(c.User, bot) && (strings.Contains(c.Body, forge.SummaryTag) || strings.Contains(c.Body, markerPrefix)) {
+		// Only a body that starts with the tag is the summary: a finding on
+		// code that quotes the tag also carries it, further down.
+		if ownedBy(c.User, bot) && strings.HasPrefix(c.Body, forge.SummaryTag) {
 			found = append(found, c)
 		}
 		return nil
@@ -88,7 +86,7 @@ func (f *Forge) UpsertSummary(ctx context.Context, ref forge.PRRef, body string)
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(body, forge.SummaryTag) {
+	if !strings.HasPrefix(body, forge.SummaryTag) {
 		body = forge.SummaryTag + "\n" + body
 	}
 	if existing == nil {

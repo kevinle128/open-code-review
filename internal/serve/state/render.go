@@ -33,7 +33,9 @@ func RenderFinding(f forge.Finding, p forge.Placement, platform forge.Platform, 
 		b.WriteString("\n\n")
 		b.WriteString(content)
 	}
-	if p.Kind == forge.Line && f.SuggestionCode != "" && f.ExistingCode != "" {
+	// Escaping a tag inside a suggestion would change the code an author
+	// applies, so a suggestion that carries one is left out instead.
+	if p.Kind == forge.Line && f.SuggestionCode != "" && f.ExistingCode != "" && !hasServiceTag(f.SuggestionCode) {
 		b.WriteString("\n\n**")
 		b.WriteString(loc.Text("finding.suggestion"))
 		b.WriteString("**\n")
@@ -51,7 +53,7 @@ func findingHeader(f forge.Finding, loc Locale) string {
 	if severity := strings.ToLower(strings.TrimSpace(f.Severity)); severity != "" {
 		label += " · " + labelFor(loc, "severity.", severity)
 	}
-	return "**[" + label + "]**"
+	return "**[" + neutralizeTags(label) + "]**"
 }
 
 // labelFor falls back to the raw value for a category or severity the locale
@@ -64,7 +66,7 @@ func labelFor(loc Locale, prefix, value string) string {
 }
 
 func location(f forge.Finding) string {
-	s := "`" + strings.ReplaceAll(f.Path, "`", "'") + "`"
+	s := "`" + neutralizeTags(strings.ReplaceAll(f.Path, "`", "'")) + "`"
 	switch {
 	case f.StartLine > 0 && f.EndLine > f.StartLine:
 		s += fmt.Sprintf(" L%d-%d", f.StartLine, f.EndLine)
@@ -80,7 +82,13 @@ func location(f forge.Finding) string {
 // trust tags in bot-authored comments, and the service is the bot, so a
 // tag echoed from reviewed code must not survive into a posted body.
 func neutralizeTags(s string) string {
-	return strings.ReplaceAll(s, "<!-- ocr-", "&lt;!-- ocr-")
+	return strings.ReplaceAll(s, serviceTagPrefix, "&lt;!-- ocr-")
+}
+
+const serviceTagPrefix = "<!-- ocr-"
+
+func hasServiceTag(s string) bool {
+	return strings.Contains(s, serviceTagPrefix)
 }
 
 // suggestionBlock uses GitHub's plain suggestion fence, which replaces the
