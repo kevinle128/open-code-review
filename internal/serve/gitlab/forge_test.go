@@ -416,10 +416,14 @@ func TestReact(t *testing.T) {
 
 func TestClone(t *testing.T) {
 	f := newFake(t)
-	f.json("GET /projects/42", 200, apiProject{ID: 42, HTTPURLToRepo: "https://git.example.test/team/svc.git"})
-	f.json("GET /projects/team%2Fbad", 200, apiProject{ID: 43, HTTPURLToRepo: "https://user:pw@git.example.test/x.git"})
+	host := strings.TrimPrefix(f.srv.URL, "http://")
+	f.json("GET /projects/42", 200, apiProject{ID: 42, HTTPURLToRepo: f.srv.URL + "/team/svc.git"})
+	f.json("GET /projects/team%2Fbad", 200, apiProject{ID: 43, HTTPURLToRepo: "http://user:pw@" + host + "/x.git"})
 	f.json("GET /projects/team%2Fgone", 404, map[string]string{})
 	f.json("GET /projects/team%2Fhostless", 200, apiProject{ID: 44, HTTPURLToRepo: "https:///x.git"})
+	// The token goes only to the configured GitLab, whatever the API reports.
+	f.json("GET /projects/team%2Fother", 200, apiProject{ID: 45, HTTPURLToRepo: "http://git.other.test/team/svc.git"})
+	f.json("GET /projects/team%2Fscheme", 200, apiProject{ID: 46, HTTPURLToRepo: "https://" + host + "/team/svc.git"})
 	fg := newTestForge(t, f, nil)
 	ctx := context.Background()
 	spec, err := fg.Clone(ctx, forge.PR{Ref: testRef, TargetBranch: "release/1.0"})
@@ -427,7 +431,7 @@ func TestClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	cred := base64.StdEncoding.EncodeToString([]byte("oauth2:" + testToken))
-	want := forge.CloneSpec{URL: "https://git.example.test/team/svc.git", AuthHeader: "Authorization: Basic " + cred,
+	want := forge.CloneSpec{URL: f.srv.URL + "/team/svc.git", AuthHeader: "Authorization: Basic " + cred,
 		HeadRef: "refs/merge-requests/5/head", BaseRef: "refs/heads/release/1.0"}
 	if spec != want {
 		t.Fatalf("spec %+v", spec)
@@ -442,6 +446,8 @@ func TestClone(t *testing.T) {
 		{Ref: forge.PRRef{Repo: "team/bad", Number: 5}, TargetBranch: "main"},
 		{Ref: forge.PRRef{Repo: "team/gone", Number: 5}, TargetBranch: "main"},
 		{Ref: forge.PRRef{Repo: "team/hostless", Number: 5}, TargetBranch: "main"},
+		{Ref: forge.PRRef{Repo: "team/other", Number: 5}, TargetBranch: "main"},
+		{Ref: forge.PRRef{Repo: "team/scheme", Number: 5}, TargetBranch: "main"},
 	} {
 		if _, err := fg.Clone(ctx, pr); err == nil {
 			t.Errorf("Clone(%+v): want error", pr)

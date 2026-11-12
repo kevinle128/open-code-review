@@ -341,6 +341,10 @@ func (f *Forge) Clone(ctx context.Context, pr forge.PR) (forge.CloneSpec, error)
 	}
 	if u, err := url.Parse(p.HTTPURLToRepo); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil {
 		return forge.CloneSpec{}, fmt.Errorf("gitlab: project has no usable http_url_to_repo")
+	} else if !f.sameOrigin(u) {
+		// The URL comes from the instance's external_url setting; a wrong one
+		// must not send the bot token to another host.
+		return forge.CloneSpec{}, fmt.Errorf("gitlab: http_url_to_repo %s://%s is not the configured GitLab", u.Scheme, u.Host)
 	}
 	cred := base64.StdEncoding.EncodeToString([]byte("oauth2:" + f.cfg.Token))
 	return forge.CloneSpec{
@@ -349,6 +353,11 @@ func (f *Forge) Clone(ctx context.Context, pr forge.PR) (forge.CloneSpec, error)
 		HeadRef:    "refs/merge-requests/" + strconv.Itoa(pr.Ref.Number) + "/head",
 		BaseRef:    "refs/heads/" + pr.TargetBranch,
 	}, nil
+}
+
+func (f *Forge) sameOrigin(u *url.URL) bool {
+	base, err := url.Parse(f.cfg.URL)
+	return err == nil && strings.EqualFold(u.Scheme, base.Scheme) && strings.EqualFold(u.Host, base.Host)
 }
 
 // validBranch rejects names git would refuse or read as an option, since the

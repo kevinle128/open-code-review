@@ -75,7 +75,7 @@ setting both forms is an error.
 | `OCR_SERVE_GITHUB_PRIVATE_KEY` / `_FILE` | | Required with GitHub. Compose sets `_FILE`. |
 | `OCR_SERVE_GITHUB_WEBHOOK_SECRET` / `_FILE` | | Required with GitHub. |
 | `OCR_SERVE_GITHUB_API_URL` | `https://api.github.com` | |
-| `OCR_SERVE_GITLAB_URL` | empty | Enables GitLab, for example `https://git.example.com`. |
+| `OCR_SERVE_GITLAB_URL` | empty | Enables GitLab, for example `https://git.example.com`. Its scheme and host must match the instance's `external_url`: a project clone URL on another scheme or host is refused, so the token is not sent there. |
 | `OCR_SERVE_GITLAB_TOKEN` / `_FILE` | | Required with GitLab. Token of the bot user that posts reviews. The service reads `GET /user` at startup and fails when the token is rejected. |
 | `OCR_SERVE_GITLAB_WEBHOOK_SECRET` / `_FILE` | | Required with GitLab. |
 
