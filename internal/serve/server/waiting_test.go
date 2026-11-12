@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
+	"github.com/alibaba/open-code-review/internal/model"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/review"
 	"github.com/alibaba/open-code-review/internal/serve/state"
@@ -144,5 +145,76 @@ func TestWaitingKeptWhileThreadsOpen(t *testing.T) {
 	h.auto(ref, state.TriggerPoll)
 	if len(h.srv.store.List()) != 1 {
 		t.Fatal("a transient read error or a reviewed head with open threads must keep waiting")
+	}
+}
+
+// glRoundTwo leaves a GitLab merge request whose round-one threads are
+// resolved and whose head moved, so the next poll starts round two.
+func glRoundTwo(t *testing.T, h *harness, n int) forge.PRRef {
+	t.Helper()
+	ref := glRef(n)
+	h.gl.setPR(openPR(ref, sha1))
+	h.rev.set(findingsResult(comment("a.go", 1)))
+	h.auto(ref, state.TriggerOpened)
+	h.gl.push(ref, sha2)
+	h.gl.resolveAll(ref)
+	return ref
+}
+
+func TestFailedCommitWithPostedThreadsKeepsWaiting(t *testing.T) {
+	h := newHarness(t)
+	ref := glRoundTwo(t, h, 44)
+	h.rev.set(func(context.Context, review.Request) (review.Result, error) {
+		// The pending line is written; the commit write after posting fails.
+		h.gl.setErr("UpsertSummary", errors.New("502"))
+		return review.Result{Findings: []model.LlmComment{comment("b.go", 2)}, Terminal: review.TerminalComplete}, nil
+	})
+	h.auto(ref, state.TriggerPoll)
+	if m := h.gl.marker(t, ref); m.Auto != 1 {
+		t.Fatalf("failed commit must not count: %+v", m)
+	}
+	if len(h.srv.store.List()) != 1 {
+		t.Fatal("posted threads are open, so the merge request must stay waiting")
+	}
+
+	h.gl.setErr("UpsertSummary", nil)
+	h.gl.resolveAll(ref)
+	h.rev.set(findingsResult())
+	h.srv.pollOnce()
+	h.drain()
+	if m := h.gl.marker(t, ref); len(h.rev.requests()) != 3 || m.Auto != 2 {
+		t.Fatalf("resolving the threads must rerun the round through polling: %+v", m)
+	}
+}
+
+func TestFailedPostWithNothingPostedLeavesWaiting(t *testing.T) {
+	for _, listFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("list fails %v", listFails), func(t *testing.T) {
+			h := newHarness(t)
+			ref := glRoundTwo(t, h, 45)
+			if err := h.srv.store.Put(Waiting{Ref: ref}); err != nil {
+				t.Fatal(err)
+			}
+			h.rev.set(func(context.Context, review.Request) (review.Result, error) {
+				h.gl.setErr("PostFindings", errors.New("400 body rejected"))
+				if listFails {
+					// One thread stays open, but the recount cannot see it.
+					h.gl.mu.Lock()
+					h.gl.threads[ref.Key()][0].Resolved = false
+					h.gl.mu.Unlock()
+					h.gl.setErr("ListOCRThreads", errors.New("503"))
+				}
+				return review.Result{Findings: []model.LlmComment{comment("b.go", 2)}, Terminal: review.TerminalComplete}, nil
+			})
+			h.auto(ref, state.TriggerPoll)
+			if got := h.srv.store.List(); len(got) != 0 {
+				t.Fatalf("no open thread is known, so the merge request must leave the store: %+v", got)
+			}
+			h.srv.pollOnce()
+			h.drain()
+			if n := len(h.rev.requests()); n != 2 {
+				t.Fatalf("the poller must not rerun the failing review, got %d reviews", n)
+			}
+		})
 	}
 }

@@ -256,7 +256,7 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 	}
 	posted, err := f.PostFindings(ctx, st.pr, findings, render)
 	if err != nil {
-		return s.runFailed(f, ref, st, a, j, "post findings", err, true, log)
+		return s.runFailed(f, ref, st, a, j, stagePost, err, true, log)
 	}
 	// Without a fresh list, the ids open before the run are what the marker
 	// keeps; the new ids sit on the newest run, which keeps all of them.
@@ -281,7 +281,7 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 	}
 	next = state.PruneIDs(next, openIDs)
 	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, open, s.loc, line)); err != nil {
-		return s.runFailed(f, ref, st, a, j, "commit summary", err, true, log)
+		return s.runFailed(f, ref, st, a, j, stageCommit, err, true, log)
 	}
 	if open > 0 {
 		s.wait(ref, log)
@@ -359,20 +359,22 @@ func (s *Server) findings(a state.Action, head string, cs []model.LlmComment) []
 	return out
 }
 
+// Stages of a run that fail after findings may already be on the PR.
+const (
+	stagePost   = "post findings"
+	stageCommit = "commit summary"
+)
+
 // runFailed logs a failed run, replaces the pending line when one was
 // written, and answers a command. The marker is not touched, so the run
 // consumed no round. The forge calls use a fresh deadline because ctx may
 // be the one that expired.
-//
-// A failed automatic run also leaves the waiting store: a failure that
-// repeats (a timeout on a large diff, an LLM 4xx) would otherwise be retried
-// on every poll tick and hold a worker each time. The next push or note adds
-// the merge request again. A run stopped by shutdown keeps its entry, so the
-// next start polls it again.
+// A run stopped by shutdown keeps its waiting entry, so the next start polls
+// it again; see settleFailedAuto for other automatic runs.
 func (s *Server) runFailed(f forge.Forge, ref forge.PRRef, st prState, a state.Action, j job, stage string, err error, pendingWritten bool, log *slog.Logger) error {
 	log.Error("review run failed", "stage", stage, "action", a.Kind.String(), "round", a.Round, "error", err.Error())
 	if a.Kind == state.RunAuto && s.runCtx.Err() == nil {
-		s.unwait(ref, log)
+		s.settleFailedAuto(f, ref, stage, log)
 	}
 	if pendingWritten {
 		before := state.Initial(st.repo.MaxRounds)
@@ -391,6 +393,28 @@ func (s *Server) runFailed(f forge.Forge, ref forge.PRRef, st prState, a state.A
 	}
 	s.commandFailed(f, ref, j.cmd, s.failureReason(stage, j.requestID), log)
 	return err
+}
+
+// settleFailedAuto decides whether the poller keeps a merge request after a
+// failed automatic run. With no open OCR thread it leaves the store: polling
+// would rerun a failure that repeats (a timeout on a large diff, an LLM 4xx)
+// on every tick, and the next push or note adds it again. A run that failed
+// after posting can leave open threads, and GitLab reports their resolution
+// only to the poller; while one is open, Decide waits without a review.
+func (s *Server) settleFailedAuto(f forge.Forge, ref forge.PRRef, stage string, log *slog.Logger) {
+	if ref.Platform == forge.GitLab && (stage == stagePost || stage == stageCommit) {
+		ctx, cancel := s.sideContext()
+		defer cancel()
+		threads, err := f.ListOCRThreads(ctx, ref)
+		if err == nil && countOpen(threads) > 0 {
+			s.wait(ref, log)
+			return
+		}
+		if err != nil {
+			log.Warn("count open threads after a failed run", "error", err.Error())
+		}
+	}
+	s.unwait(ref, log)
 }
 
 func (s *Server) clearPending(f forge.Forge, ref forge.PRRef, m state.Marker, open int, log *slog.Logger) {
