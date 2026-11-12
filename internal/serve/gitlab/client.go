@@ -67,6 +67,11 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("gitlab: %s %s: HTTP %d: %s", e.Method, e.Path, e.Status, e.Body)
 }
 
+// Is lets callers outside this package recognize a 404 as forge.ErrNotFound.
+func (e *APIError) Is(target error) bool {
+	return target == forge.ErrNotFound && e.Status == http.StatusNotFound
+}
+
 func newAPIError(method, path string, status int, body []byte) *APIError {
 	text := strings.Join(strings.Fields(string(body)), " ")
 	if len(text) > errBodyCap {

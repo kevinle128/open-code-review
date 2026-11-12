@@ -78,6 +78,15 @@ const (
 	ModeCommit      = "commit"
 )
 
+// Reasons Decide gives for None when the PR, its repository or its summary
+// stops automatic review until something about it changes.
+const (
+	ReasonDraft            = "draft"
+	ReasonDisabled         = "disabled for repository"
+	ReasonIgnored          = "ignore rule"
+	ReasonMarkerUnreadable = "summary marker unreadable"
+)
+
 // Action is the outcome of Decide. Round is the automatic round number the
 // run will become (0 for other actions). From is the reviewed SHA an
 // incremental round starts at. Reason is a short text for logs.
@@ -105,13 +114,13 @@ func Decide(in Input) Action {
 	case in.Trigger == TriggerCmdReviewCommit:
 		return Action{Kind: RunManualCommit, Mode: ModeCommit, Reason: "manual commit review"}
 	case in.PR.Draft:
-		return Action{Kind: None, Reason: "draft"}
+		return Action{Kind: None, Reason: ReasonDraft}
 	case !in.Repo.Enabled:
-		return Action{Kind: None, Reason: "disabled for repository"}
+		return Action{Kind: None, Reason: ReasonDisabled}
 	case in.Ignored:
-		return Action{Kind: None, Reason: "ignore rule"}
+		return Action{Kind: None, Reason: ReasonIgnored}
 	case in.SummaryPresent && (in.MarkerErr != nil || m == nil):
-		return Action{Kind: None, Reason: "summary marker unreadable"}
+		return Action{Kind: None, Reason: ReasonMarkerUnreadable}
 	}
 
 	// A manual /review before any automatic round sets Reviewed. Round 1 then

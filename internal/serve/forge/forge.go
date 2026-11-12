@@ -7,10 +7,15 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 )
+
+// ErrNotFound matches, through errors.Is, a forge answer that the PR or file
+// does not exist, so callers can stop tracking a deleted PR.
+var ErrNotFound = errors.New("not found")
 
 // Platform names a code hosting service.
 type Platform string

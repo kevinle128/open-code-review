@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -202,7 +203,7 @@ func TestGetPRGivesUp(t *testing.T) {
 	notFound := newFake(t)
 	notFound.json("GET "+mrBase, 404, map[string]string{"message": "404 Not found"})
 	sl := &sleeps{}
-	if _, err := newTestForge(t, notFound, sl).GetPR(context.Background(), testRef); !isStatus(err, 404) || len(sl.all()) != 3 {
+	if _, err := newTestForge(t, notFound, sl).GetPR(context.Background(), testRef); !isStatus(err, 404) || !errors.Is(err, forge.ErrNotFound) || len(sl.all()) != 3 {
 		t.Fatalf("404: %v after %v", err, sl.all())
 	}
 

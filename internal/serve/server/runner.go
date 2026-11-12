@@ -53,6 +53,9 @@ func (s *Server) evaluate(ctx context.Context, f forge.Forge, ref forge.PRRef, j
 	st, err := s.read(ctx, f, ref, log)
 	if err != nil {
 		log.Error("read pull request state", "error", err.Error())
+		if errors.Is(err, forge.ErrNotFound) {
+			s.unwait(ref, log)
+		}
 		s.commandFailed(f, ref, j.cmd, s.failureReason("read", j.requestID), log)
 		return err
 	}
@@ -63,7 +66,8 @@ func (s *Server) evaluate(ctx context.Context, f forge.Forge, ref forge.PRRef, j
 	// A command the platform raised (a reviewer assignment) follows the
 	// draft rule of automatic reviews; only a typed command runs on a draft.
 	if j.cmd != nil && j.cmd.commentID == "" && st.pr.Draft {
-		log.Info("decided", "trigger", string(trigger), "action", state.None.String(), "reason", "draft")
+		log.Info("decided", "trigger", string(trigger), "action", state.None.String(), "reason", state.ReasonDraft)
+		s.unwait(ref, log)
 		return nil
 	}
 	ignored, rule := s.cfg.Ignore.Match(ignoreSubject(ref, st.pr))
@@ -79,7 +83,7 @@ func (s *Server) evaluate(ctx context.Context, f forge.Forge, ref forge.PRRef, j
 		if j.cmd != nil {
 			s.commandFailed(f, ref, j.cmd, a.Reason, log)
 		}
-		if st.open == 0 || st.pr.State != forge.StateOpen {
+		if st.open == 0 || st.pr.State != forge.StateOpen || stopsPolling(a.Reason) {
 			s.unwait(ref, log)
 		}
 		return nil
@@ -91,6 +95,17 @@ func (s *Server) evaluate(ctx context.Context, f forge.Forge, ref forge.PRRef, j
 	default:
 		return s.run(f, ref, st, a, j, log)
 	}
+}
+
+// stopsPolling reports whether a None reason holds until a webhook says the
+// merge request changed (marked ready, new push, new note, manual review), so
+// polling it before then only spends API calls.
+func stopsPolling(reason string) bool {
+	switch reason {
+	case state.ReasonDraft, state.ReasonDisabled, state.ReasonIgnored, state.ReasonMarkerUnreadable:
+		return true
+	}
+	return false
 }
 
 func (s *Server) read(ctx context.Context, f forge.Forge, ref forge.PRRef, log *slog.Logger) (prState, error) {
@@ -316,8 +331,17 @@ func (s *Server) findings(a state.Action, head string, cs []model.LlmComment) []
 // written, and answers a command. The marker is not touched, so the run
 // consumed no round. The forge calls use a fresh deadline because ctx may
 // be the one that expired.
+//
+// A failed automatic run also leaves the waiting store: a failure that
+// repeats (a timeout on a large diff, an LLM 4xx) would otherwise be retried
+// on every poll tick and hold a worker each time. The next push or note adds
+// the merge request again. A run stopped by shutdown keeps its entry, so the
+// next start polls it again.
 func (s *Server) runFailed(f forge.Forge, ref forge.PRRef, st prState, a state.Action, j job, stage string, err error, pendingWritten bool, log *slog.Logger) error {
 	log.Error("review run failed", "stage", stage, "action", a.Kind.String(), "round", a.Round, "error", err.Error())
+	if a.Kind == state.RunAuto && s.runCtx.Err() == nil {
+		s.unwait(ref, log)
+	}
 	if pendingWritten {
 		before := state.Initial(st.repo.MaxRounds)
 		if st.marker != nil {
