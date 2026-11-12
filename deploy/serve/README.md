@@ -125,9 +125,11 @@ PR is not reviewed until the next event.
 
 `.opencodereview/rule.json` and the rule files it names are also read from the
 base commit, not from the checkout, so a PR cannot change its own review rules
-or exclusions. Each file is read through the forge API and must be at most
-64 KiB. If a read fails, the review runs with the built-in rules only and the
-service logs `read project rules failed`.
+or exclusions. Each file is read through the forge API and may be up to
+512 KiB, as in the CLI. If `rule.json` cannot be read, the PR is not reviewed
+until the next event (`read project rules` in the log). A rule file that cannot
+be read, or is larger, leaves only its own rule empty (`read rule file failed`).
+An invalid `rule.json` gives a review with the built-in rules only.
 
 ## Review rounds
 

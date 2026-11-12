@@ -49,14 +49,27 @@ func TestParseProjectRuleErrors(t *testing.T) {
 	if _, err := ParseProjectRule([]byte(`{`), nil); err == nil {
 		t.Error("invalid JSON accepted")
 	}
-	failing := func(string) ([]byte, bool, error) { return nil, false, errors.New("503") }
-	if _, err := ParseProjectRule([]byte(`{"rules":[{"path":"**","rule":"r.md"}]}`), failing); err == nil {
-		t.Error("a failed rule file read must fail the whole layer")
+}
+
+func TestParseProjectRuleBlanksOnlyUnreadableEntries(t *testing.T) {
+	// Forges answer a file over the size limit with an error, like any other
+	// failed read; the CLI also blanks such an entry and keeps the rest.
+	read := func(path string) ([]byte, bool, error) {
+		switch path {
+		case "big.md":
+			return nil, false, errors.New("file exceeds 524288 bytes")
+		case "down.md":
+			return nil, false, errors.New("503")
+		}
+		return []byte("ok rule"), true, nil
 	}
-	big := func(string) ([]byte, bool, error) { return make([]byte, maxRuleFileBytes+1), true, nil }
-	pr, err := ParseProjectRule([]byte(`{"rules":[{"path":"**","rule":"r.md"}]}`), big)
-	if err != nil || pr.Rules[0].Rule != "" {
-		t.Errorf("an oversized rule file must give an empty rule: %+v %v", pr, err)
+	raw := `{"rules":[{"path":"a/**","rule":"big.md"},{"path":"b/**","rule":"down.md"},{"path":"c/**","rule":"ok.md"}],"exclude":["gen/**"]}`
+	pr, err := ParseProjectRule([]byte(raw), read)
+	if err != nil {
+		t.Fatalf("ParseProjectRule: %v", err)
+	}
+	if pr.Rules[0].Rule != "" || pr.Rules[1].Rule != "" || pr.Rules[2].Rule != "ok rule" || len(pr.Exclude) != 1 {
+		t.Fatalf("project rule %+v", pr)
 	}
 }
 

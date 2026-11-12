@@ -190,6 +190,7 @@ type Forge interface {
 	PostNote(ctx context.Context, ref PRRef, body string) error
 	React(ctx context.Context, ref PRRef, commentID string, r Reaction) error
 	Clone(ctx context.Context, pr PR) (CloneSpec, error)
-	// ReadFile reads path at sha. The bool is false when the file does not exist.
-	ReadFile(ctx context.Context, ref PRRef, sha, path string) ([]byte, bool, error)
+	// ReadFile reads path at sha. The bool is false when the file does not
+	// exist; a file over maxBytes is an error.
+	ReadFile(ctx context.Context, ref PRRef, sha, path string, maxBytes int) ([]byte, bool, error)
 }

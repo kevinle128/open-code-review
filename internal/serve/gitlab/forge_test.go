@@ -487,30 +487,33 @@ func TestReadFile(t *testing.T) {
 	})
 	fg := newTestForge(t, f, nil)
 	ctx := context.Background()
-	b, ok, err := fg.ReadFile(ctx, testRef, baseSHA, ".opencodereview/serve.json")
+	b, ok, err := fg.ReadFile(ctx, testRef, baseSHA, ".opencodereview/serve.json", serveconfig.MaxRepoConfigBytes)
 	if err != nil || !ok || string(b) != `{"max_rounds":1}` {
 		t.Fatalf("read: %q %v %v", b, ok, err)
 	}
 	if got := f.requests(http.MethodGet)[0].Path; got != "/projects/42/repository/files/.opencodereview%2Fserve.json/raw" {
 		t.Fatalf("path not escaped: %s", got)
 	}
-	if _, ok, err := fg.ReadFile(ctx, testRef, baseSHA, "missing.json"); ok || err != nil {
+	if _, ok, err := fg.ReadFile(ctx, testRef, baseSHA, "missing.json", serveconfig.MaxRepoConfigBytes); ok || err != nil {
 		t.Fatalf("missing: %v %v", ok, err)
 	}
-	if _, _, err := fg.ReadFile(ctx, testRef, baseSHA, "big.json"); err == nil {
+	if _, _, err := fg.ReadFile(ctx, testRef, baseSHA, "big.json", serveconfig.MaxRepoConfigBytes); err == nil {
 		t.Fatal("big: want error")
 	}
-	if _, _, err := fg.ReadFile(ctx, testRef, baseSHA, "denied.json"); !isStatus(err, 403) {
+	if b, ok, err := fg.ReadFile(ctx, testRef, baseSHA, "big.json", serveconfig.MaxRepoConfigBytes+1); err != nil || !ok || len(b) != serveconfig.MaxRepoConfigBytes+1 {
+		t.Fatalf("a file within the caller's limit must be read: %v %v", ok, err)
+	}
+	if _, _, err := fg.ReadFile(ctx, testRef, baseSHA, "denied.json", serveconfig.MaxRepoConfigBytes); !isStatus(err, 403) {
 		t.Fatalf("denied: %v", err)
 	}
-	if _, _, err := fg.ReadFile(ctx, testRef, "", "x"); err == nil {
+	if _, _, err := fg.ReadFile(ctx, testRef, "", "x", serveconfig.MaxRepoConfigBytes); err == nil {
 		t.Fatal("no sha: want error")
 	}
-	if _, _, err := fg.ReadFile(ctx, forge.PRRef{}, baseSHA, "x"); err == nil {
+	if _, _, err := fg.ReadFile(ctx, forge.PRRef{}, baseSHA, "x", serveconfig.MaxRepoConfigBytes); err == nil {
 		t.Fatal("empty ref: want error")
 	}
 	f.srv.Close()
-	if _, _, err := fg.ReadFile(ctx, testRef, baseSHA, "x"); err == nil {
+	if _, _, err := fg.ReadFile(ctx, testRef, baseSHA, "x", serveconfig.MaxRepoConfigBytes); err == nil {
 		t.Fatal("closed server: want error")
 	}
 	if fg.Platform() != forge.GitLab {

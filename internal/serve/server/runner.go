@@ -30,6 +30,7 @@ type prState struct {
 	open    int
 	openIDs map[string]bool
 	repo    serveconfig.RepoConfig
+	rule    *rules.ProjectRule
 }
 
 // process runs one job and reports whether the queue should run it again.
@@ -95,6 +96,13 @@ func (s *Server) evaluate(ctx context.Context, f forge.Forge, ref forge.PRRef, j
 	case state.NoteLimit:
 		return s.noteLimit(ctx, f, ref, st, a, log)
 	default:
+		rule, err := s.projectRule(ctx, f, ref, st.pr, log)
+		if err != nil {
+			log.Error("read project rules", "error", err.Error())
+			s.commandFailed(f, ref, j.cmd, s.failureReason("read", j.requestID), log)
+			return err
+		}
+		st.rule = rule
 		return s.run(f, ref, st, a, j, log)
 	}
 }
@@ -151,7 +159,7 @@ func (s *Server) read(ctx context.Context, f forge.Forge, ref forge.PRRef, log *
 // turn review on for a repository that set "enabled": false.
 func (s *Server) repoConfig(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, log *slog.Logger) (serveconfig.RepoConfig, error) {
 	base := s.cfg.RepoDefaults()
-	raw, found, err := f.ReadFile(ctx, ref, pr.BaseSHA, serveconfig.RepoConfigPath)
+	raw, found, err := f.ReadFile(ctx, ref, pr.BaseSHA, serveconfig.RepoConfigPath, serveconfig.MaxRepoConfigBytes)
 	if err != nil {
 		return base, fmt.Errorf("read repository config: %w", err)
 	}
@@ -232,7 +240,7 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 	from, to, kind := state.ResolveRange(a, st.pr.BaseSHA, st.pr.HeadSHA, ancestry)
 	req := review.Request{RepoDir: ws.Dir(), From: from, To: to,
 		Background: st.repo.Background, Effort: st.repo.Effort, Excludes: st.repo.Exclude,
-		ProjectRule: s.projectRule(ctx, f, ref, st.pr, log)}
+		ProjectRule: st.rule}
 	if a.Kind == state.RunManualCommit {
 		req.From, req.To, req.Commit = "", "", st.pr.HeadSHA
 	}
@@ -298,24 +306,28 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 // projectRule reads rule.json, and the rule files it names, at the base SHA
 // for the same reason as serve.json: the checkout is the PR head, so a PR
 // could otherwise exclude its own changes or rewrite its own review rules.
-// A read that fails reviews with the built-in rules rather than not at all.
-func (s *Server) projectRule(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, log *slog.Logger) *rules.ProjectRule {
-	read := func(path string) ([]byte, bool, error) {
-		return f.ReadFile(ctx, ref, pr.BaseSHA, path)
+// It runs before anything is posted. When rule.json cannot be read, the run
+// does not start: a review without the repository's excludes would post
+// findings on files it excludes. A rule file that cannot be read leaves only
+// its own rule empty, as in the CLI. An invalid rule.json is the
+// repository's choice, so it reviews with the built-in rules.
+func (s *Server) projectRule(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, log *slog.Logger) (*rules.ProjectRule, error) {
+	raw, found, err := f.ReadFile(ctx, ref, pr.BaseSHA, rules.ProjectRulePath, rules.MaxRuleFileBytes)
+	if err != nil || !found {
+		return nil, err
 	}
-	raw, found, err := read(rules.ProjectRulePath)
-	if err == nil && !found {
-		return nil
-	}
-	var out *rules.ProjectRule
-	if err == nil {
-		out, err = rules.ParseProjectRule(raw, read)
-	}
+	out, err := rules.ParseProjectRule(raw, func(path string) ([]byte, bool, error) {
+		b, ok, err := f.ReadFile(ctx, ref, pr.BaseSHA, path, rules.MaxRuleFileBytes)
+		if err != nil {
+			log.Warn("read rule file failed; its rule is left empty", "path", path, "error", err.Error())
+		}
+		return b, ok, err
+	})
 	if err != nil {
-		log.Error("read project rules failed; using built-in rules only", "error", err.Error())
-		return nil
+		log.Error("project rules invalid; using built-in rules only", "error", err.Error())
+		return nil, nil
 	}
-	return out
+	return out, nil
 }
 
 // fetch checks out HEAD. When the fetch fails because HEAD moved, the PR is

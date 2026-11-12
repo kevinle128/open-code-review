@@ -376,9 +376,9 @@ func validBranch(name string) bool {
 	return true
 }
 
-// ReadFile implements forge.Forge. Files above the per-repo config limit are
-// an error rather than a silent truncation.
-func (f *Forge) ReadFile(ctx context.Context, ref forge.PRRef, sha, path string) ([]byte, bool, error) {
+// ReadFile implements forge.Forge. Files above maxBytes are an error rather
+// than a silent truncation.
+func (f *Forge) ReadFile(ctx context.Context, ref forge.PRRef, sha, path string, maxBytes int) ([]byte, bool, error) {
 	if strings.TrimSpace(sha) == "" || strings.TrimSpace(path) == "" {
 		return nil, false, errors.New("gitlab: ReadFile needs a ref and a path")
 	}
@@ -396,8 +396,8 @@ func (f *Forge) ReadFile(ctx context.Context, ref forge.PRRef, sha, path string)
 		return nil, false, nil
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
 		return nil, false, newAPIError(http.MethodGet, filePath, resp.StatusCode, body)
-	case len(body) > serveconfig.MaxRepoConfigBytes:
-		return nil, false, fmt.Errorf("gitlab: %s is larger than %d bytes", path, serveconfig.MaxRepoConfigBytes)
+	case len(body) > maxBytes:
+		return nil, false, fmt.Errorf("gitlab: %s is larger than %d bytes", path, maxBytes)
 	}
 	return body, true, nil
 }

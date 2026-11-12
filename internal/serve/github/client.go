@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 )
 
@@ -317,7 +316,7 @@ func (f *Forge) GetPR(ctx context.Context, ref forge.PRRef) (forge.PR, error) {
 }
 
 // ReadFile reads a small file at sha through the contents API.
-func (f *Forge) ReadFile(ctx context.Context, ref forge.PRRef, sha, path string) ([]byte, bool, error) {
+func (f *Forge) ReadFile(ctx context.Context, ref forge.PRRef, sha, path string, maxBytes int) ([]byte, bool, error) {
 	base, err := repoPath(ref)
 	if err != nil {
 		return nil, false, err
@@ -349,8 +348,8 @@ func (f *Forge) ReadFile(ctx context.Context, ref forge.PRRef, sha, path string)
 	if file.Type != "file" {
 		return nil, false, fmt.Errorf("github: read file %s: not a file", path)
 	}
-	if file.Size > serveconfig.MaxRepoConfigBytes {
-		return nil, false, fmt.Errorf("github: read file %s: %d bytes exceeds %d", path, file.Size, serveconfig.MaxRepoConfigBytes)
+	if file.Size > maxBytes {
+		return nil, false, fmt.Errorf("github: read file %s: %d bytes exceeds %d", path, file.Size, maxBytes)
 	}
 	if file.Encoding != "base64" {
 		return nil, false, fmt.Errorf("github: read file %s: unexpected encoding %q", path, file.Encoding)
@@ -360,8 +359,8 @@ func (f *Forge) ReadFile(ctx context.Context, ref forge.PRRef, sha, path string)
 	if err != nil {
 		return nil, false, fmt.Errorf("github: read file %s: decode: %w", path, err)
 	}
-	if len(content) > serveconfig.MaxRepoConfigBytes {
-		return nil, false, fmt.Errorf("github: read file %s: exceeds %d bytes", path, serveconfig.MaxRepoConfigBytes)
+	if len(content) > maxBytes {
+		return nil, false, fmt.Errorf("github: read file %s: exceeds %d bytes", path, maxBytes)
 	}
 	return content, true, nil
 }

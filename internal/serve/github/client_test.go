@@ -632,12 +632,12 @@ func TestReadFile(t *testing.T) {
 	fa.contents[".opencodereview/serve.json@"+baseSHA] = map[string]any{
 		"type": "file", "encoding": "base64", "size": len(content), "content": wrapped,
 	}
-	got, ok, err := f.ReadFile(ctx, testRef, baseSHA, serveconfig.RepoConfigPath)
+	got, ok, err := f.ReadFile(ctx, testRef, baseSHA, serveconfig.RepoConfigPath, serveconfig.MaxRepoConfigBytes)
 	if err != nil || !ok || string(got) != content {
 		t.Fatalf("ReadFile = %q, %v, %v", got, ok, err)
 	}
 
-	got, ok, err = f.ReadFile(ctx, testRef, headSHA, serveconfig.RepoConfigPath)
+	got, ok, err = f.ReadFile(ctx, testRef, headSHA, serveconfig.RepoConfigPath, serveconfig.MaxRepoConfigBytes)
 	if err != nil || ok || got != nil {
 		t.Fatalf("missing file: %q, %v, %v", got, ok, err)
 	}
@@ -657,29 +657,36 @@ func TestReadFile(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fa.contents["x.json@"+baseSHA] = tc.file
-			if _, _, err := f.ReadFile(ctx, testRef, baseSHA, "x.json"); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, _, err := f.ReadFile(ctx, testRef, baseSHA, "x.json", serveconfig.MaxRepoConfigBytes); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
 		})
 	}
 
+	big := strings.Repeat("r", serveconfig.MaxRepoConfigBytes+1)
+	fa.contents["rules.md@"+baseSHA] = map[string]any{"type": "file", "encoding": "base64", "size": len(big),
+		"content": base64.StdEncoding.EncodeToString([]byte(big))}
+	if got, ok, err := f.ReadFile(ctx, testRef, baseSHA, "rules.md", len(big)); err != nil || !ok || string(got) != big {
+		t.Fatalf("a file within the caller's limit must be read: %v %v", ok, err)
+	}
+
 	fa.override["GET /repos/acme/widgets/contents/arr.json"] = func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, []any{}) }
-	if _, _, err := f.ReadFile(ctx, testRef, baseSHA, "arr.json"); err == nil || !strings.Contains(err.Error(), "decode") {
+	if _, _, err := f.ReadFile(ctx, testRef, baseSHA, "arr.json", serveconfig.MaxRepoConfigBytes); err == nil || !strings.Contains(err.Error(), "decode") {
 		t.Fatalf("err = %v", err)
 	}
 	fa.fail["GET /repos/acme/widgets/contents/y.json"] = []failure{{status: 403, body: "forbidden"}}
-	if _, _, err := f.ReadFile(ctx, testRef, baseSHA, "y.json"); statusOf(err) != 403 {
+	if _, _, err := f.ReadFile(ctx, testRef, baseSHA, "y.json", serveconfig.MaxRepoConfigBytes); statusOf(err) != 403 {
 		t.Fatalf("err = %v", err)
 	}
 	for _, p := range []string{"", "a//b", "../x", "a/./b"} {
-		if _, _, err := f.ReadFile(ctx, testRef, baseSHA, p); err == nil {
+		if _, _, err := f.ReadFile(ctx, testRef, baseSHA, p, serveconfig.MaxRepoConfigBytes); err == nil {
 			t.Errorf("ReadFile(%q) accepted", p)
 		}
 	}
-	if _, _, err := f.ReadFile(ctx, testRef, "", "x.json"); err == nil {
+	if _, _, err := f.ReadFile(ctx, testRef, "", "x.json", serveconfig.MaxRepoConfigBytes); err == nil {
 		t.Error("empty sha accepted")
 	}
-	if _, _, err := f.ReadFile(ctx, forge.PRRef{Repo: "bad"}, baseSHA, "x.json"); err == nil {
+	if _, _, err := f.ReadFile(ctx, forge.PRRef{Repo: "bad"}, baseSHA, "x.json", serveconfig.MaxRepoConfigBytes); err == nil {
 		t.Error("bad ref accepted")
 	}
 }

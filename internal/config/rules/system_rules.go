@@ -565,7 +565,8 @@ func matchProjectRuleEntry(pr *ProjectRule, path string) *ProjectRuleEntry {
 // allowedRuleExts is the set of file extensions permitted for rule file references.
 var allowedRuleExts = map[string]bool{".md": true, ".txt": true, ".markdown": true}
 
-const maxRuleFileBytes = 512 * 1024
+// MaxRuleFileBytes is the largest rule file a rule entry may name.
+const MaxRuleFileBytes = 512 * 1024
 
 // looksLikeFilePath returns true when s is likely a file path (not inline content).
 // Heuristic: multi-line text is always inline; single-line text without spaces
@@ -662,8 +663,8 @@ func readRuleFileSafe(path string, confineRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if info.Size() > maxRuleFileBytes {
-		return "", fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), maxRuleFileBytes)
+	if info.Size() > MaxRuleFileBytes {
+		return "", fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), MaxRuleFileBytes)
 	}
 
 	content, err := os.ReadFile(resolved)

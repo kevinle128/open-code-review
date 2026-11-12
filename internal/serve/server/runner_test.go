@@ -372,19 +372,56 @@ func TestProjectRuleReadAtBase(t *testing.T) {
 			t.Fatalf("no base rule file must mean no project rules: %+v", r)
 		}
 	})
-	for _, path := range []string{".opencodereview/rule.json", "docs/r.md"} {
-		t.Run("read error "+path, func(t *testing.T) {
-			h, ref := setup(t)
-			h.gl.setErr("ReadFile:"+path, errors.New("503"))
-			h.auto(ref, state.TriggerOpened)
-			if r := h.rev.requests(); len(r) != 1 || r[0].ProjectRule != nil {
-				t.Fatalf("a failed read must review with built-in rules only: %+v", r)
-			}
-			if !h.logs.has("read project rules failed; using built-in rules only") {
-				t.Fatal("fallback not logged")
-			}
-		})
-	}
+	t.Run("rule file read error", func(t *testing.T) {
+		h, ref := setup(t)
+		h.gl.setErr("ReadFile:docs/r.md", errors.New("503"))
+		h.auto(ref, state.TriggerOpened)
+		r := h.rev.requests()
+		if len(r) != 1 || r[0].ProjectRule == nil || r[0].ProjectRule.Rules[0].Rule != "" || len(r[0].ProjectRule.Exclude) != 1 {
+			t.Fatalf("an unreadable rule file must blank only its entry: %+v", r)
+		}
+		if !h.logs.has("read rule file failed; its rule is left empty") {
+			t.Fatal("blank entry not logged")
+		}
+	})
+	t.Run("rule file sizes", func(t *testing.T) {
+		h, ref := setup(t)
+		h.gl.files[shaBase+":.opencodereview/rule.json"] = []byte(`{"rules":[{"path":"a/**","rule":"docs/r.md"},{"path":"b/**","rule":"docs/huge.md"}],"exclude":["gen/**"]}`)
+		h.gl.files[shaBase+":docs/r.md"] = []byte(strings.Repeat("r", serveconfig.MaxRepoConfigBytes+1))
+		h.gl.files[shaBase+":docs/huge.md"] = []byte(strings.Repeat("h", 512<<10+1))
+		h.auto(ref, state.TriggerOpened)
+		pr := h.rev.requests()[0].ProjectRule
+		if pr == nil || len(pr.Rules[0].Rule) != serveconfig.MaxRepoConfigBytes+1 || pr.Rules[1].Rule != "" || len(pr.Exclude) != 1 {
+			t.Fatalf("rule files up to the CLI limit must load, larger ones blank only their entry: %+v", pr != nil)
+		}
+	})
+	t.Run("invalid rule.json", func(t *testing.T) {
+		h, ref := setup(t)
+		h.gl.files[shaBase+":.opencodereview/rule.json"] = []byte(`{`)
+		h.auto(ref, state.TriggerOpened)
+		if r := h.rev.requests(); len(r) != 1 || r[0].ProjectRule != nil || !h.logs.has("project rules invalid; using built-in rules only") {
+			t.Fatalf("an invalid rule.json must review with built-in rules: %+v", r)
+		}
+	})
+	t.Run("rule.json read error", func(t *testing.T) {
+		h, ref := setup(t)
+		if err := h.srv.store.Put(Waiting{Ref: ref}); err != nil {
+			t.Fatal(err)
+		}
+		h.gl.setErr("ReadFile:.opencodereview/rule.json", errors.New("503"))
+		h.auto(ref, state.TriggerOpened)
+		if len(h.rev.requests()) != 0 || h.gl.summary(ref) != "" || len(h.gl.noteList()) != 0 {
+			t.Fatal("rules that cannot be read must stop the run without posting")
+		}
+		if !h.logs.has("read project rules") || len(h.srv.store.List()) != 1 {
+			t.Fatal("the error must be logged and the next trigger must retry")
+		}
+		h.gl.setErr("ReadFile:.opencodereview/rule.json", nil)
+		h.auto(ref, state.TriggerOpened)
+		if len(h.rev.requests()) != 1 {
+			t.Fatal("the next trigger must review")
+		}
+	})
 }
 
 func TestMarkerKeepsOnlyNeededFindingIDs(t *testing.T) {

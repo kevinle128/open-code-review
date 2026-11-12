@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -190,7 +191,7 @@ func (f *fakeForge) Clone(_ context.Context, pr forge.PR) (forge.CloneSpec, erro
 	return forge.CloneSpec{URL: "file:///" + pr.Ref.Repo, HeadRef: "refs/head", BaseRef: "refs/base"}, nil
 }
 
-func (f *fakeForge) ReadFile(_ context.Context, _ forge.PRRef, sha, path string) ([]byte, bool, error) {
+func (f *fakeForge) ReadFile(_ context.Context, _ forge.PRRef, sha, path string, maxBytes int) ([]byte, bool, error) {
 	if err := f.api("ReadFile"); err != nil {
 		return nil, false, err
 	}
@@ -200,6 +201,9 @@ func (f *fakeForge) ReadFile(_ context.Context, _ forge.PRRef, sha, path string)
 		return nil, false, err
 	}
 	raw, ok := f.files[sha+":"+path]
+	if len(raw) > maxBytes {
+		return nil, false, fmt.Errorf("%s exceeds %d bytes", path, maxBytes)
+	}
 	return raw, ok, nil
 }
 
