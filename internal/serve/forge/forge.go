@@ -77,16 +77,20 @@ const (
 
 // Event is a verified webhook delivery in platform-neutral form. PR is set
 // when the payload carries enough PR data; CommentID and CommentBody are set
-// for note and command events.
+// for note and command events. PrevCommentBody holds the body before an edit,
+// so an edited comment runs only the command lines the edit added. An empty
+// CommentID on a command event means the platform raised the command itself
+// (a GitLab reviewer assignment), so there is no comment to react or reply to.
 type Event struct {
-	Kind        EventKind
-	Ref         PRRef
-	DeliveryID  string
-	Sender      string
-	SenderIsBot bool
-	PR          *PR
-	CommentID   string
-	CommentBody string
+	Kind            EventKind
+	Ref             PRRef
+	DeliveryID      string
+	Sender          string
+	SenderIsBot     bool
+	PR              *PR
+	CommentID       string
+	CommentBody     string
+	PrevCommentBody string
 }
 
 // Finding is one review finding ready to post.
