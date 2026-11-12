@@ -8,6 +8,7 @@ package review
 import (
 	"context"
 
+	"github.com/alibaba/open-code-review/internal/config/rules"
 	"github.com/alibaba/open-code-review/internal/model"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 )
@@ -15,14 +16,19 @@ import (
 // Request is one review run on a checkout. From and To give a range review
 // (the reviewer takes their merge base); Commit alone reviews that commit
 // against its first parent. Excludes are globs added to the OCR excludes.
+//
+// ProjectRule is the repository's rule.json as read at the PR base, or nil
+// for none. It replaces the file in the checkout, which the PR controls, so
+// a PR cannot change its own review rules or exclusions.
 type Request struct {
-	RepoDir    string
-	From       string
-	To         string
-	Commit     string
-	Background string
-	Effort     string
-	Excludes   []string
+	RepoDir     string
+	From        string
+	To          string
+	Commit      string
+	Background  string
+	Effort      string
+	Excludes    []string
+	ProjectRule *rules.ProjectRule
 }
 
 // Terminal states of a review run.

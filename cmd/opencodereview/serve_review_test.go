@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/alibaba/open-code-review/internal/agent"
+	"github.com/alibaba/open-code-review/internal/config/rules"
 	"github.com/alibaba/open-code-review/internal/serve/checkout"
 	"github.com/alibaba/open-code-review/internal/serve/review"
 	"github.com/alibaba/open-code-review/internal/session"
@@ -216,6 +217,47 @@ func TestServeReviewExcludedChangeIsSkipped(t *testing.T) {
 	}
 	if res.Terminal != review.TerminalSkipped || len(res.Findings) != 0 {
 		t.Fatalf("result = %+v, want skipped with no findings", res)
+	}
+}
+
+// A PR that adds its own rule.json must not exclude its own changes: serve
+// reviews take the project rules from the request, read at the PR base.
+func TestServeReviewIgnoresRuleFileFromCheckout(t *testing.T) {
+	llm := &serveFakeLLM{}
+	startServeFakeLLM(t, llm, "")
+	repo := newServeRepo(t)
+	if err := os.MkdirAll(filepath.Join(repo.dir, ".opencodereview"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo.dir, ".opencodereview", "rule.json"), []byte(`{"exclude":["**"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	retryTestGit(t, repo.dir, "add", ".")
+	retryTestGit(t, repo.dir, "commit", "-q", "-m", "exclude everything")
+	head := serveGitOut(t, repo.dir, "rev-parse", "HEAD")
+
+	res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: head})
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if res.Terminal != review.TerminalComplete || len(res.Findings) == 0 {
+		t.Fatalf("result = %+v, want the change reviewed", res)
+	}
+}
+
+func TestServeReviewUsesBaseProjectRule(t *testing.T) {
+	llm := &serveFakeLLM{}
+	startServeFakeLLM(t, llm, "")
+	repo := newServeRepo(t)
+	res, err := serveReviewer{}.Review(context.Background(), review.Request{
+		RepoDir: repo.dir, From: repo.base, To: repo.head,
+		ProjectRule: &rules.ProjectRule{Exclude: []string{"*.go"}},
+	})
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if res.Terminal != review.TerminalSkipped {
+		t.Fatalf("result = %+v, want the base exclusion applied", res)
 	}
 }
 

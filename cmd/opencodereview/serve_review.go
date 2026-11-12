@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/alibaba/open-code-review/internal/agent"
+	"github.com/alibaba/open-code-review/internal/config/rules"
 	"github.com/alibaba/open-code-review/internal/serve/checkout"
 	"github.com/alibaba/open-code-review/internal/serve/review"
 	"github.com/alibaba/open-code-review/internal/session"
@@ -63,7 +64,8 @@ func (serveReviewer) Review(ctx context.Context, req review.Request) (review.Res
 	}
 
 	contentRef, _ := tool.ParseReviewMode(opts.from, opts.to, opts.commit).RefValue(opts.to, opts.commit)
-	cc, err := loadCommonContext(opts.repoDir, "", contentRef, 0, opts.maxGitProcs, true)
+	cc, err := loadCommonContextWith(opts.repoDir, "", contentRef, 0, opts.maxGitProcs, true,
+		rules.ResolverOptions{OverrideProject: true, Project: req.ProjectRule})
 	if err != nil {
 		return failed, err
 	}

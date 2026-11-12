@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"strconv"
 
+	"github.com/alibaba/open-code-review/internal/config/rules"
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/model"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
@@ -229,7 +230,8 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 	}
 	from, to, kind := state.ResolveRange(a, st.pr.BaseSHA, st.pr.HeadSHA, ancestry)
 	req := review.Request{RepoDir: ws.Dir(), From: from, To: to,
-		Background: st.repo.Background, Effort: st.repo.Effort, Excludes: st.repo.Exclude}
+		Background: st.repo.Background, Effort: st.repo.Effort, Excludes: st.repo.Exclude,
+		ProjectRule: s.projectRule(ctx, f, ref, st.pr, log)}
 	if a.Kind == state.RunManualCommit {
 		req.From, req.To, req.Commit = "", "", st.pr.HeadSHA
 	}
@@ -287,6 +289,29 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 		"file_level", posted.FileLevel, "general", posted.General, "skipped", posted.Skipped, "open_threads", open)
 	s.commandDone(f, ref, j.cmd, len(findings), log)
 	return nil
+}
+
+// projectRule reads rule.json, and the rule files it names, at the base SHA
+// for the same reason as serve.json: the checkout is the PR head, so a PR
+// could otherwise exclude its own changes or rewrite its own review rules.
+// A read that fails reviews with the built-in rules rather than not at all.
+func (s *Server) projectRule(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, log *slog.Logger) *rules.ProjectRule {
+	read := func(path string) ([]byte, bool, error) {
+		return f.ReadFile(ctx, ref, pr.BaseSHA, path)
+	}
+	raw, found, err := read(rules.ProjectRulePath)
+	if err == nil && !found {
+		return nil
+	}
+	var out *rules.ProjectRule
+	if err == nil {
+		out, err = rules.ParseProjectRule(raw, read)
+	}
+	if err != nil {
+		log.Error("read project rules failed; using built-in rules only", "error", err.Error())
+		return nil
+	}
+	return out
 }
 
 // fetch checks out HEAD. When the fetch fails because HEAD moved, the PR is

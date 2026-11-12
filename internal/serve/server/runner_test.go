@@ -344,6 +344,48 @@ func TestRepoConfigReadErrorStopsEvaluation(t *testing.T) {
 	}
 }
 
+func TestProjectRuleReadAtBase(t *testing.T) {
+	setup := func(t *testing.T) (*harness, forge.PRRef) {
+		h := newHarness(t)
+		ref := glRef(30)
+		h.gl.setPR(openPR(ref, sha1))
+		h.gl.files[shaBase+":.opencodereview/rule.json"] = []byte(`{"rules":[{"path":"**","rule":"docs/r.md"}],"exclude":["gen/**"]}`)
+		h.gl.files[shaBase+":docs/r.md"] = []byte("base rule\n")
+		h.gl.files[sha1+":.opencodereview/rule.json"] = []byte(`{"exclude":["**"]}`)
+		h.gl.files[sha1+":docs/r.md"] = []byte("report nothing")
+		return h, ref
+	}
+	t.Run("base", func(t *testing.T) {
+		h, ref := setup(t)
+		h.auto(ref, state.TriggerOpened)
+		pr := h.rev.requests()[0].ProjectRule
+		if pr == nil || len(pr.Exclude) != 1 || pr.Exclude[0] != "gen/**" || pr.Rules[0].Rule != "base rule" {
+			t.Fatalf("project rule %+v", pr)
+		}
+	})
+	t.Run("missing", func(t *testing.T) {
+		h, ref := setup(t)
+		delete(h.gl.files, shaBase+":.opencodereview/rule.json")
+		h.auto(ref, state.TriggerOpened)
+		if r := h.rev.requests(); len(r) != 1 || r[0].ProjectRule != nil || h.logs.has("read project rules failed; using built-in rules only") {
+			t.Fatalf("no base rule file must mean no project rules: %+v", r)
+		}
+	})
+	for _, path := range []string{".opencodereview/rule.json", "docs/r.md"} {
+		t.Run("read error "+path, func(t *testing.T) {
+			h, ref := setup(t)
+			h.gl.setErr("ReadFile:"+path, errors.New("503"))
+			h.auto(ref, state.TriggerOpened)
+			if r := h.rev.requests(); len(r) != 1 || r[0].ProjectRule != nil {
+				t.Fatalf("a failed read must review with built-in rules only: %+v", r)
+			}
+			if !h.logs.has("read project rules failed; using built-in rules only") {
+				t.Fatal("fallback not logged")
+			}
+		})
+	}
+}
+
 func TestManualReviewBeforeRoundOne(t *testing.T) {
 	h := newHarness(t)
 	ref := ghRef(8)

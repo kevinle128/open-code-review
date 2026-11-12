@@ -120,8 +120,14 @@ At least one platform must be enabled; otherwise the service stops with
 cannot change its own limits. Keys: `enabled` (bool), `max_rounds` (1..10),
 `exclude` (globs added to OCR excludes), `background` (string, at most 4000
 characters), `effort` (`low`, `medium` or `high`). Unknown keys are logged and
-ignored. `.opencodereview/rule.json` is read by OCR from the checkout, as in
-the CLI.
+ignored. If the file cannot be read (an API error, not a missing file), the
+PR is not reviewed until the next event.
+
+`.opencodereview/rule.json` and the rule files it names are also read from the
+base commit, not from the checkout, so a PR cannot change its own review rules
+or exclusions. Each file is read through the forge API and must be at most
+64 KiB. If a read fails, the review runs with the built-in rules only and the
+service logs `read project rules failed`.
 
 ## Review rounds
 

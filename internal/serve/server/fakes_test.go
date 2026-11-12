@@ -196,6 +196,9 @@ func (f *fakeForge) ReadFile(_ context.Context, _ forge.PRRef, sha, path string)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.errs["ReadFile:"+path]; err != nil {
+		return nil, false, err
+	}
 	raw, ok := f.files[sha+":"+path]
 	return raw, ok, nil
 }
