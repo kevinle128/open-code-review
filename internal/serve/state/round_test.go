@@ -65,8 +65,16 @@ func TestDecide(t *testing.T) {
 		{"no marker and push starts round one", Input{Trigger: TriggerPush, PR: openPR(shaC), Repo: repo(3)}, Action{Kind: RunAuto, Round: 1, Mode: ModeFull}},
 		{"initial marker after failed round one and push", Input{Trigger: TriggerPush, PR: openPR(shaC), SummaryPresent: true, Marker: &initial, Repo: repo(3)},
 			Action{Kind: RunAuto, Round: 1, Mode: ModeFull}},
-		{"initial marker with manual reviewed sha and push", Input{Trigger: TriggerPush, PR: openPR(shaC), SummaryPresent: true, Marker: markerAt(0, shaC, false), Repo: repo(3)},
-			Action{Kind: RunAuto, Round: 1, Mode: ModeFull}},
+		{"manual review before round one and head not moved", Input{Trigger: TriggerPush, PR: openPR(shaC), SummaryPresent: true, Marker: markerAt(0, shaC, false), Repo: repo(3)},
+			Action{Kind: None}},
+		{"manual review before round one and push", Input{Trigger: TriggerPush, PR: openPR(shaC), SummaryPresent: true, Marker: markerAt(0, shaB, false), Repo: repo(3)},
+			Action{Kind: RunAuto, Round: 1, Mode: ModeIncremental, From: shaB}},
+		{"manual review before round one and thread resolved", Input{Trigger: TriggerThreadResolved, PR: openPR(shaC), SummaryPresent: true, Marker: markerAt(0, shaB, false), Repo: repo(3)},
+			Action{Kind: RunAuto, Round: 1, Mode: ModeIncremental, From: shaB}},
+		{"manual review before round one and poll", Input{Trigger: TriggerPoll, PR: openPR(shaC), SummaryPresent: true, Marker: markerAt(0, shaB, false), Repo: repo(3)},
+			Action{Kind: RunAuto, Round: 1, Mode: ModeIncremental, From: shaB}},
+		{"manual review before round one with open threads waits", Input{Trigger: TriggerPush, PR: openPR(shaC), SummaryPresent: true, Marker: markerAt(0, shaB, false), OpenThreads: 1, Repo: repo(3)},
+			Action{Kind: Wait}},
 		{"no marker and note", Input{Trigger: TriggerNote, PR: openPR(shaC), Repo: repo(3)}, Action{Kind: None}},
 		{"no marker and thread resolved", Input{Trigger: TriggerThreadResolved, PR: openPR(shaC), Repo: repo(3)}, Action{Kind: None}},
 		{"no marker and poll", Input{Trigger: TriggerPoll, PR: openPR(shaC), SummaryPresent: true, Marker: &initial, Repo: repo(3)}, Action{Kind: None}},
@@ -156,6 +164,18 @@ func TestApply(t *testing.T) {
 		}
 		if m.Auto != 1 || m.Runs != nil {
 			t.Fatalf("input mutated: %+v", m)
+		}
+	})
+
+	t.Run("round one after manual review", func(t *testing.T) {
+		first := Action{Kind: RunAuto, Round: 1, Mode: ModeIncremental, From: shaB}
+		got := Apply(markerAt(0, shaB, false), first, shaB, shaC, shaA, nil, 3)
+		if got.Auto != 1 || got.Reviewed != shaC || got.Runs[0].Kind != KindIncremental {
+			t.Fatalf("got %+v", got)
+		}
+		from, _, kind := ResolveRange(first, shaA, shaC, AncestryNo)
+		if got := Apply(markerAt(0, shaB, false), first, from, shaC, shaA, nil, 3); kind != KindFull || got.Runs[0].Kind != KindFull || got.Auto != 1 {
+			t.Fatalf("rewritten history: kind %q marker %+v", kind, got)
 		}
 	})
 

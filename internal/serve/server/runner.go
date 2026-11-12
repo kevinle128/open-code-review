@@ -1,0 +1,409 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 alibaba/open-code-review Contributors
+
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+
+	"github.com/alibaba/open-code-review/internal/config/serveconfig"
+	"github.com/alibaba/open-code-review/internal/model"
+	"github.com/alibaba/open-code-review/internal/serve/forge"
+	"github.com/alibaba/open-code-review/internal/serve/review"
+	"github.com/alibaba/open-code-review/internal/serve/state"
+)
+
+// errHeadMoved asks the queue to evaluate the PR again: HEAD changed while
+// the checkout was fetched, so the review would cover the wrong commit.
+var errHeadMoved = errors.New("head moved during checkout")
+
+// prState is what one evaluation read from the forge.
+type prState struct {
+	pr      forge.PR
+	marker  *state.Marker
+	present bool
+	open    int
+	repo    serveconfig.RepoConfig
+}
+
+// process runs one job and reports whether the queue should run it again.
+func (s *Server) process(ref forge.PRRef, j job) bool {
+	log := withPR(withRequest(s.log, j.requestID), ref)
+	f := s.forges[ref.Platform]
+	ctx, cancel := context.WithTimeout(s.runCtx, s.cfg.ReviewTimeout)
+	defer cancel()
+	if j.cmd != nil && j.cmd.reject != "" {
+		log.Info("command rejected", "reason", j.cmd.reject)
+		s.commandFailed(f, ref, j.cmd, j.cmd.reject, log)
+		return false
+	}
+	err := s.evaluate(ctx, f, ref, j, log)
+	if errors.Is(err, errHeadMoved) {
+		log.Info("head moved, evaluating again")
+		return true
+	}
+	return false
+}
+
+func (s *Server) evaluate(ctx context.Context, f forge.Forge, ref forge.PRRef, j job, log *slog.Logger) error {
+	st, err := s.read(ctx, f, ref, log)
+	if err != nil {
+		log.Error("read pull request state", "error", err.Error())
+		s.commandFailed(f, ref, j.cmd, s.failureReason("read", j.requestID), log)
+		return err
+	}
+	trigger := j.trigger
+	if j.cmd != nil {
+		trigger = j.cmd.trigger()
+	}
+	// A command the platform raised (a reviewer assignment) follows the
+	// draft rule of automatic reviews; only a typed command runs on a draft.
+	if j.cmd != nil && j.cmd.commentID == "" && st.pr.Draft {
+		log.Info("decided", "trigger", string(trigger), "action", state.None.String(), "reason", "draft")
+		return nil
+	}
+	ignored, rule := s.cfg.Ignore.Match(ignoreSubject(ref, st.pr))
+	a := state.Decide(state.Input{
+		Trigger: trigger, PR: st.pr, SummaryPresent: st.present, Marker: st.marker,
+		OpenThreads: st.open, Repo: st.repo, Ignored: ignored,
+	})
+	log.Info("decided", "trigger", string(trigger), "action", a.Kind.String(), "round", a.Round,
+		"reason", a.Reason, "open_threads", st.open, "head", st.pr.HeadSHA, "ignore_rule", rule)
+
+	switch a.Kind {
+	case state.None:
+		if j.cmd != nil {
+			s.commandFailed(f, ref, j.cmd, a.Reason, log)
+		}
+		if st.open == 0 || st.pr.State != forge.StateOpen {
+			s.unwait(ref, log)
+		}
+		return nil
+	case state.Wait:
+		s.wait(ref, log)
+		return nil
+	case state.NoteLimit:
+		return s.noteLimit(ctx, f, ref, st, a, log)
+	default:
+		return s.run(f, ref, st, a, j, log)
+	}
+}
+
+func (s *Server) read(ctx context.Context, f forge.Forge, ref forge.PRRef, log *slog.Logger) (prState, error) {
+	var st prState
+	var err error
+	if st.pr, err = f.GetPR(ctx, ref); err != nil {
+		return st, fmt.Errorf("get pull request: %w", err)
+	}
+	// The event ref carries ids that only the webhook knows, such as the
+	// GitHub installation id that Clone and PostFindings need for a token.
+	st.pr.Ref = ref
+	summary, err := f.GetSummary(ctx, ref)
+	if err != nil {
+		return st, fmt.Errorf("get summary: %w", err)
+	}
+	if summary != nil {
+		st.present = true
+		m, derr := state.Decode(summary.Body)
+		switch {
+		case derr != nil:
+			log.Error("summary marker unreadable; automatic rounds stop until a manual review rewrites it", "error", derr.Error())
+		case m == nil:
+			log.Error("summary has no marker; automatic rounds stop until a manual review rewrites it")
+		}
+		st.marker = m
+	}
+	threads, err := f.ListOCRThreads(ctx, ref)
+	if err != nil {
+		return st, fmt.Errorf("list threads: %w", err)
+	}
+	st.open = countOpen(threads)
+	st.repo = s.repoConfig(ctx, f, ref, st.pr, log)
+	return st, nil
+}
+
+// repoConfig reads serve.json at the base SHA, never the PR head, so a PR
+// cannot change its own limits. Any problem falls back to the defaults.
+func (s *Server) repoConfig(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, log *slog.Logger) serveconfig.RepoConfig {
+	base := s.cfg.RepoDefaults()
+	raw, found, err := f.ReadFile(ctx, ref, pr.BaseSHA, serveconfig.RepoConfigPath)
+	if err != nil {
+		log.Error("read repository config", "error", err.Error())
+		return base
+	}
+	if !found {
+		return base
+	}
+	out, ignoredKeys, err := serveconfig.MergeRepo(base, raw)
+	if len(ignoredKeys) > 0 {
+		log.Warn("repository config keys ignored", "keys", ignoredKeys)
+	}
+	if err != nil {
+		log.Error("repository config invalid; using defaults", "error", err.Error())
+	}
+	return out
+}
+
+func (s *Server) noteLimit(ctx context.Context, f forge.Forge, ref forge.PRRef, st prState, a state.Action, log *slog.Logger) error {
+	limit := st.repo.MaxRounds
+	if err := f.PostNote(ctx, ref, state.RenderLimitNote(limit, s.loc)); err != nil {
+		log.Error("post limit note", "error", err.Error())
+		return err
+	}
+	next := state.Apply(st.marker, a, "", "", "", nil, limit)
+	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, st.open, s.loc, "")); err != nil {
+		log.Error("record limit note", "error", err.Error())
+		return err
+	}
+	s.unwait(ref, log)
+	return nil
+}
+
+// run performs a review. The summary is written first with a pending line
+// and the old marker, and last with the new marker; that last write is the
+// commit point, so a run that fails anywhere before it consumes no round.
+//
+// Time spent waiting for a free worker does not count toward the review
+// timeout, so a PR queued behind long reviews still gets its full budget.
+func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action, j job, log *slog.Logger) error {
+	select {
+	case s.workers <- struct{}{}:
+		defer func() { <-s.workers }()
+	case <-s.runCtx.Done():
+		return s.runFailed(f, ref, st, a, j, "wait for worker", s.runCtx.Err(), false, log)
+	}
+	ctx, cancel := context.WithTimeout(s.runCtx, s.cfg.ReviewTimeout)
+	defer cancel()
+
+	limit := st.repo.MaxRounds
+	before := state.Initial(limit)
+	if st.marker != nil {
+		before = *st.marker
+	}
+	pending := s.loc.Text("pending.manual")
+	if a.Kind == state.RunAuto {
+		pending = s.loc.Text("pending.round", "round", strconv.Itoa(a.Round), "max", strconv.Itoa(limit))
+	}
+	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(before, st.open, s.loc, pending)); err != nil {
+		return s.runFailed(f, ref, st, a, j, "summary", err, false, log)
+	}
+
+	ws, release, err := s.workspaces.Acquire(ctx)
+	if err != nil {
+		return s.runFailed(f, ref, st, a, j, "workspace", err, true, log)
+	}
+	defer release()
+	if err := s.fetch(ctx, f, ref, st.pr, ws); err != nil {
+		if errors.Is(err, errHeadMoved) {
+			s.clearPending(f, ref, before, st.open, log)
+			return err
+		}
+		return s.runFailed(f, ref, st, a, j, "checkout", err, true, log)
+	}
+
+	ancestry := state.AncestryYes
+	if a.Kind == state.RunAuto && a.Mode == state.ModeIncremental {
+		ancestry = ws.IsAncestor(ctx, a.From, st.pr.HeadSHA)
+	}
+	from, to, kind := state.ResolveRange(a, st.pr.BaseSHA, st.pr.HeadSHA, ancestry)
+	req := review.Request{RepoDir: ws.Dir(), From: from, To: to,
+		Background: st.repo.Background, Effort: st.repo.Effort, Excludes: st.repo.Exclude}
+	if a.Kind == state.RunManualCommit {
+		req.From, req.To, req.Commit = "", "", st.pr.HeadSHA
+	}
+	if j.cmd != nil && j.cmd.Effort != "" {
+		req.Effort = j.cmd.Effort
+	}
+	res, err := s.reviewer.Review(ctx, req)
+	if err == nil && res.Terminal == review.TerminalFailed {
+		err = errors.New("review ended in the failed state")
+	}
+	if err != nil {
+		return s.runFailed(f, ref, st, a, j, "review", err, true, log)
+	}
+	if len(res.Warnings) > 0 {
+		log.Warn("review warnings", "terminal", res.Terminal, "warnings", res.Warnings)
+	}
+
+	findings := s.findings(a, st.pr.HeadSHA, res.Findings)
+	render := func(fd forge.Finding, p forge.Placement) string {
+		return state.RenderFinding(fd, p, ref.Platform, s.loc)
+	}
+	posted, err := f.PostFindings(ctx, st.pr, findings, render)
+	if err != nil {
+		return s.runFailed(f, ref, st, a, j, "post findings", err, true, log)
+	}
+	open := st.open + len(findings)
+	if threads, err := f.ListOCRThreads(ctx, ref); err != nil {
+		log.Warn("count open threads after posting; using an estimate", "error", err.Error())
+	} else {
+		open = countOpen(threads)
+	}
+
+	ids := make([]string, len(findings))
+	for i, fd := range findings {
+		ids[i] = fd.ID
+	}
+	next := state.Apply(st.marker, a, from, to, st.pr.BaseSHA, ids, limit)
+	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, open, s.loc, "")); err != nil {
+		return s.runFailed(f, ref, st, a, j, "commit summary", err, true, log)
+	}
+	if open > 0 {
+		s.wait(ref, log)
+	} else {
+		s.unwait(ref, log)
+	}
+	log.Info("review done", "kind", kind, "from", from, "to", to, "terminal", res.Terminal,
+		"findings", len(findings), "posted", posted.Posted, "relocated", posted.Relocated,
+		"file_level", posted.FileLevel, "general", posted.General, "skipped", posted.Skipped, "open_threads", open)
+	s.commandDone(f, ref, j.cmd, len(findings), log)
+	return nil
+}
+
+// fetch checks out HEAD. When the fetch fails because HEAD moved, the PR is
+// read again so the caller can tell a new push from a real failure.
+func (s *Server) fetch(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, ws review.Workspace) error {
+	spec, err := f.Clone(ctx, pr)
+	if err != nil {
+		return fmt.Errorf("clone spec: %w", err)
+	}
+	ferr := ws.Fetch(ctx, spec, pr.HeadSHA, pr.BaseSHA)
+	if ferr == nil {
+		return nil
+	}
+	if cur, err := f.GetPR(ctx, ref); err == nil && cur.HeadSHA != pr.HeadSHA {
+		return fmt.Errorf("%w: %s -> %s", errHeadMoved, pr.HeadSHA, cur.HeadSHA)
+	}
+	return ferr
+}
+
+// findings converts review comments and gives each a finding id. Two
+// findings with the same span and category would share an id, so later ones
+// get an occurrence suffix; the order of the review output keeps it stable.
+func (s *Server) findings(a state.Action, head string, cs []model.LlmComment) []forge.Finding {
+	now := s.now()
+	seen := map[string]int{}
+	out := make([]forge.Finding, 0, len(cs))
+	for _, c := range cs {
+		fd := forge.Finding{
+			Path: c.Path, StartLine: c.StartLine, EndLine: c.EndLine,
+			Category: c.Category, Severity: c.Severity, Content: c.Content,
+			ExistingCode: c.ExistingCode, SuggestionCode: c.SuggestionCode,
+		}
+		id := state.FindingID(a, head, fd, now)
+		seen[id]++
+		if n := seen[id]; n > 1 {
+			id = fmt.Sprintf("%s-%d", id, n)
+		}
+		fd.ID = id
+		out = append(out, fd)
+	}
+	return out
+}
+
+// runFailed logs a failed run, replaces the pending line when one was
+// written, and answers a command. The marker is not touched, so the run
+// consumed no round. The forge calls use a fresh deadline because ctx may
+// be the one that expired.
+func (s *Server) runFailed(f forge.Forge, ref forge.PRRef, st prState, a state.Action, j job, stage string, err error, pendingWritten bool, log *slog.Logger) error {
+	log.Error("review run failed", "stage", stage, "action", a.Kind.String(), "round", a.Round, "error", err.Error())
+	if pendingWritten {
+		before := state.Initial(st.repo.MaxRounds)
+		if st.marker != nil {
+			before = *st.marker
+		}
+		line := ""
+		if a.Kind == state.RunAuto {
+			line = s.loc.Text("pending.failed")
+		}
+		ctx, cancel := s.sideContext()
+		defer cancel()
+		if uerr := f.UpsertSummary(ctx, ref, state.RenderSummary(before, st.open, s.loc, line)); uerr != nil {
+			log.Error("replace pending summary line", "error", uerr.Error())
+		}
+	}
+	s.commandFailed(f, ref, j.cmd, s.failureReason(stage, j.requestID), log)
+	return err
+}
+
+func (s *Server) clearPending(f forge.Forge, ref forge.PRRef, m state.Marker, open int, log *slog.Logger) {
+	ctx, cancel := s.sideContext()
+	defer cancel()
+	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(m, open, s.loc, "")); err != nil {
+		log.Error("clear pending summary line", "error", err.Error())
+	}
+}
+
+// failureReason keeps internal error text out of PR comments; the request id
+// leads an operator to the full error in the log.
+func (s *Server) failureReason(stage, requestID string) string {
+	return fmt.Sprintf("review failed at %s (request %s)", stage, requestID)
+}
+
+func (s *Server) commandDone(f forge.Forge, ref forge.PRRef, cmd *cmdJob, count int, log *slog.Logger) {
+	if cmd == nil || cmd.commentID == "" {
+		return
+	}
+	ctx, cancel := s.sideContext()
+	defer cancel()
+	if err := f.React(ctx, ref, cmd.commentID, forge.ReactionSuccess); err != nil {
+		log.Warn("reaction failed", "reaction", string(forge.ReactionSuccess), "error", err.Error())
+	}
+	if err := f.PostNote(ctx, ref, "✅ "+s.loc.Text("command.done", "count", strconv.Itoa(count))); err != nil {
+		log.Error("post command reply", "error", err.Error())
+	}
+}
+
+func (s *Server) commandFailed(f forge.Forge, ref forge.PRRef, cmd *cmdJob, reason string, log *slog.Logger) {
+	if cmd == nil || cmd.commentID == "" {
+		return
+	}
+	ctx, cancel := s.sideContext()
+	defer cancel()
+	if err := f.React(ctx, ref, cmd.commentID, forge.ReactionFailure); err != nil {
+		log.Warn("reaction failed", "reaction", string(forge.ReactionFailure), "error", err.Error())
+	}
+	if err := f.PostNote(ctx, ref, state.RenderCommandError(reason, s.loc)); err != nil {
+		log.Error("post command reply", "error", err.Error())
+	}
+}
+
+// sideContext outlives a cancelled review so the result can still be
+// reported, but stays bounded so shutdown is not held up for long.
+func (s *Server) sideContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(s.runCtx), sideCallTimeout)
+}
+
+// wait records a GitLab merge request for the poller; GitHub reports thread
+// resolution by webhook and needs no entry.
+func (s *Server) wait(ref forge.PRRef, log *slog.Logger) {
+	if ref.Platform != forge.GitLab {
+		return
+	}
+	if err := s.store.Put(Waiting{Ref: ref, Since: s.now()}); err != nil {
+		log.Error("update waiting store", "error", err.Error())
+	}
+}
+
+func (s *Server) unwait(ref forge.PRRef, log *slog.Logger) {
+	if ref.Platform != forge.GitLab {
+		return
+	}
+	if err := s.store.Delete(ref.Key()); err != nil {
+		log.Error("update waiting store", "error", err.Error())
+	}
+}
+
+func countOpen(threads []forge.Thread) int {
+	n := 0
+	for _, t := range threads {
+		if !t.Resolved {
+			n++
+		}
+	}
+	return n
+}
