@@ -53,6 +53,8 @@ services:
         GIT_COMMIT: ${OCR_GIT_COMMIT:-}
         BUILD_DATE: ${OCR_BUILD_DATE:-}
     image: ocr-serve:komodo
+    # The image is built here and exists on no registry, so `compose pull` must skip it.
+    pull_policy: never
     container_name: ocr-review
     restart: unless-stopped
     environment:
@@ -75,7 +77,6 @@ services:
     configs:
       - source: ocr-config
         target: /home/ocr/.opencodereview/config.json
-        mode: 0444
     ports:
       - "127.0.0.1:3012:3012"
     volumes:
