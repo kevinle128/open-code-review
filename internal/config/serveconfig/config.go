@@ -323,7 +323,7 @@ func (l *loader) github() *GitHubConfig {
 	}
 	g := &GitHubConfig{
 		AppID:         id,
-		PrivateKeyPEM: []byte(l.secret(EnvGitHubPrivateKey)),
+		PrivateKeyPEM: []byte(unescapePEM(l.secret(EnvGitHubPrivateKey))),
 		WebhookSecret: l.secret(EnvGitHubWebhookSecret),
 		APIURL:        l.baseURL(EnvGitHubAPIURL, DefaultGitHubAPIURL),
 	}
@@ -365,6 +365,17 @@ func (l *loader) baseURL(key, def string) string {
 		return raw
 	}
 	return strings.TrimRight(raw, "/")
+}
+
+// unescapePEM turns a key given on one line with literal "\n" escapes back
+// into PEM. Stack environments and .env lines cannot hold real newlines, so
+// that is the only way to pass the key without a file. A value that already
+// has a real newline is left as is.
+func unescapePEM(v string) string {
+	if strings.Contains(v, "\n") || !strings.Contains(v, `\n`) {
+		return v
+	}
+	return strings.ReplaceAll(v, `\n`, "\n")
 }
 
 // checkRSAKey fails early on a key the App JWT signer could not use.

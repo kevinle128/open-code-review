@@ -139,6 +139,34 @@ func TestLoad_GitHubPKCS8Key(t *testing.T) {
 	}
 }
 
+// A key passed through a stack environment or a .env line arrives on one line
+// with literal "\n" escapes; a key with real newlines must pass unchanged.
+func TestLoad_GitHubKeyNewlineForms(t *testing.T) {
+	testKeys(t)
+	oneLine := strings.ReplaceAll(strings.TrimSpace(pkcs1PEM), "\n", `\n`)
+	if strings.Contains(oneLine, "\n") {
+		t.Fatal("escaped key still has a real newline")
+	}
+	for name, raw := range map[string]string{"escaped one line": oneLine, "real newlines": pkcs1PEM} {
+		t.Run(name, func(t *testing.T) {
+			c, err := Load(env(map[string]string{EnvGitHubAppID: "1", EnvGitHubPrivateKey: raw, EnvGitHubWebhookSecret: "s"}), files(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(c.GitHub.PrivateKeyPEM); got != strings.TrimSpace(pkcs1PEM) {
+				t.Fatalf("key changed:\n%s", got)
+			}
+		})
+	}
+}
+
+func TestUnescapePEM_KeepsBackslashWhenRealNewlinePresent(t *testing.T) {
+	in := "line one\nliteral \\n stays"
+	if got := unescapePEM(in); got != in {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestLoad_InvalidValues(t *testing.T) {
 	testKeys(t)
 	cases := []struct {

@@ -15,6 +15,7 @@ block the merge.
 | `Dockerfile` | Multi-stage image: static binary on Alpine with `git` and `ca-certificates`, user `ocr` (uid 10001), listens on `0.0.0.0:3012`. |
 | `Dockerfile.dockerignore` | Keeps the build context to `go.mod`, `go.sum`, `cmd/` and `internal/`. |
 | `compose.example.yml` | Example service. Copy it to `compose.yml`; keep `.env`, `config.json` and `github-app.pem` next to it and out of git. |
+| `../komodo/compose.yml` | Komodo stack: every setting from the stack environment, no host files. See [Komodo](#komodo). |
 
 ## Quick start
 
@@ -32,6 +33,62 @@ curl -s http://127.0.0.1:3012/healthz
 
 Without GitHub, remove the `github-app.pem` volume and the
 `OCR_SERVE_GITHUB_PRIVATE_KEY_FILE` line from `compose.yml`.
+
+## Komodo
+
+`deploy/komodo/compose.yml` runs the same image as a Komodo stack. Komodo
+writes the stack environment to `.env` next to the compose file, so nothing
+is kept on the host: the GitHub App key is an environment value, and the OCR
+`config.json` is generated inline from `OCR_LANGUAGE`. The inline config needs
+Docker Compose 2.23.1 or later on the server.
+
+Stack settings:
+
+| Setting | Value |
+|---|---|
+| Repo | `kevinle128/open-code-review` on `github.com` |
+| Branch | the branch to deploy, for example `feat/ocr-serve` |
+| File paths | `deploy/komodo/compose.yml` |
+| Run build | on (`docker compose build` before `up -d`) |
+
+Environment (`[[NAME]]` is a secret Komodo Variable):
+
+```bash
+OCR_LLM_URL=https://router.example/v1
+OCR_LLM_TOKEN=[[OCR_LLM_TOKEN]]
+OCR_LLM_MODEL=<model>
+OCR_LLM_PROTOCOL=openai
+OCR_LANGUAGE=Vietnamese
+OCR_SERVE_GITHUB_APP_ID=<app id>
+OCR_SERVE_GITHUB_PRIVATE_KEY=[[OCR_SERVE_GITHUB_PRIVATE_KEY]]
+OCR_SERVE_GITHUB_WEBHOOK_SECRET=[[OCR_SERVE_GITHUB_WEBHOOK_SECRET]]
+OCR_SERVE_GITLAB_URL=https://git.example.com
+OCR_SERVE_GITLAB_TOKEN=[[OCR_SERVE_GITLAB_TOKEN]]
+OCR_SERVE_GITLAB_WEBHOOK_SECRET=[[OCR_SERVE_GITLAB_WEBHOOK_SECRET]]
+# Optional; empty uses the default.
+OCR_SERVE_IGNORE_AUTHORS=
+OCR_SERVE_MAX_ROUNDS=
+OCR_SERVE_REVIEW_TIMEOUT=
+OCR_SERVE_POLL_INTERVAL=
+OCR_SERVE_WORKERS=
+```
+
+- `OCR_LLM_URL`, `OCR_LLM_TOKEN` and `OCR_LLM_MODEL` are required by the
+  compose file. The platform values are optional there, so a GitHub-only or
+  GitLab-only stack works: leave out the other platform's lines. The service
+  still checks that one platform is complete.
+- A `.env` line cannot hold a real newline, so give the PEM key on one line
+  with literal `\n` escapes (`-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END
+  RSA PRIVATE KEY-----`). The service turns `\n` back into newlines when the
+  value has no real newline. Compose also does this itself for a
+  double-quoted value; both forms work.
+- The volumes have the fixed names `ocr-review_ocr-data` and
+  `ocr-review_ocr-work`, so a stack that replaces a hand-run `ocr-review`
+  project keeps its state whatever project name Komodo uses.
+- The container is `ocr-review` on `127.0.0.1:3012`. To register GitLab
+  hooks, pass the admin token to that run only (see
+  [GitLab hooks](#gitlab-hooks)):
+  `docker exec -e OCR_SERVE_GITLAB_ADMIN_TOKEN -e OCR_SERVE_GITLAB_HOOK_URL -e OCR_SERVE_GITLAB_BOT_USERNAME ocr-review opencodereview serve hooks gitlab --dry-run`.
 
 ## Routes
 
@@ -72,7 +129,7 @@ setting both forms is an error.
 | `OCR_SERVE_IGNORE_LABELS` | empty | Comma-separated, exact match. |
 | `OCR_SERVE_BOT_INDICATORS` | `bot` | Substrings that mark a GitLab sender as a bot. |
 | `OCR_SERVE_GITHUB_APP_ID` | empty | Enables GitHub. |
-| `OCR_SERVE_GITHUB_PRIVATE_KEY` / `_FILE` | | Required with GitHub. Compose sets `_FILE`. |
+| `OCR_SERVE_GITHUB_PRIVATE_KEY` / `_FILE` | | Required with GitHub. The example compose sets `_FILE`. A one-line value with literal `\n` escapes is accepted. |
 | `OCR_SERVE_GITHUB_WEBHOOK_SECRET` / `_FILE` | | Required with GitHub. |
 | `OCR_SERVE_GITHUB_API_URL` | `https://api.github.com` | |
 | `OCR_SERVE_GITLAB_URL` | empty | Enables GitLab, for example `https://git.example.com`. Its scheme and host must match the instance's `external_url`: a project clone URL on another scheme or host is refused, so the token is not sent there. |
