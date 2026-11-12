@@ -137,21 +137,24 @@ func (s *Server) read(ctx context.Context, f forge.Forge, ref forge.PRRef, log *
 		return st, fmt.Errorf("list threads: %w", err)
 	}
 	st.open = countOpen(threads)
-	st.repo = s.repoConfig(ctx, f, ref, st.pr, log)
+	if st.repo, err = s.repoConfig(ctx, f, ref, st.pr, log); err != nil {
+		return st, err
+	}
 	return st, nil
 }
 
 // repoConfig reads serve.json at the base SHA, never the PR head, so a PR
-// cannot change its own limits. Any problem falls back to the defaults.
-func (s *Server) repoConfig(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, log *slog.Logger) serveconfig.RepoConfig {
+// cannot change its own limits. A missing or invalid file falls back to the
+// defaults. A read that fails returns an error instead: the defaults would
+// turn review on for a repository that set "enabled": false.
+func (s *Server) repoConfig(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, log *slog.Logger) (serveconfig.RepoConfig, error) {
 	base := s.cfg.RepoDefaults()
 	raw, found, err := f.ReadFile(ctx, ref, pr.BaseSHA, serveconfig.RepoConfigPath)
 	if err != nil {
-		log.Error("read repository config", "error", err.Error())
-		return base
+		return base, fmt.Errorf("read repository config: %w", err)
 	}
 	if !found {
-		return base
+		return base, nil
 	}
 	out, ignoredKeys, err := serveconfig.MergeRepo(base, raw)
 	if len(ignoredKeys) > 0 {
@@ -160,7 +163,7 @@ func (s *Server) repoConfig(ctx context.Context, f forge.Forge, ref forge.PRRef,
 	if err != nil {
 		log.Error("repository config invalid; using defaults", "error", err.Error())
 	}
-	return out
+	return out, nil
 }
 
 func (s *Server) noteLimit(ctx context.Context, f forge.Forge, ref forge.PRRef, st prState, a state.Action, log *slog.Logger) error {

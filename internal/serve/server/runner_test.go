@@ -312,16 +312,6 @@ func TestRepoConfigProblemsFallBack(t *testing.T) {
 			t.Fatal("invalid config must fall back to defaults")
 		}
 	})
-	t.Run("read error", func(t *testing.T) {
-		h := newHarness(t)
-		ref := ghRef(7)
-		h.gh.setPR(openPR(ref, sha1))
-		h.gh.setErr("ReadFile", errors.New("503"))
-		h.auto(ref, state.TriggerOpened)
-		if len(h.rev.requests()) != 1 || !h.logs.has("read repository config") {
-			t.Fatal("read error must fall back to defaults")
-		}
-	})
 	t.Run("disabled", func(t *testing.T) {
 		h := newHarness(t)
 		ref := ghRef(7)
@@ -332,6 +322,26 @@ func TestRepoConfigProblemsFallBack(t *testing.T) {
 			t.Fatal("disabled repo must not review")
 		}
 	})
+}
+
+func TestRepoConfigReadErrorStopsEvaluation(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(7)
+	h.gh.setPR(openPR(ref, sha1))
+	h.gh.files[shaBase+":"+serveconfig.RepoConfigPath] = []byte(`{"enabled":false}`)
+	h.gh.failOnce("ReadFile", errors.New("503"))
+	h.auto(ref, state.TriggerOpened)
+	if len(h.rev.requests()) != 0 || h.gh.summary(ref) != "" || len(h.gh.noteList()) != 0 {
+		t.Fatal("a repository config that cannot be read must stop the evaluation without posting")
+	}
+	if !h.logs.has("read pull request state") || !strings.Contains(h.logs.String(), "read repository config") {
+		t.Fatalf("read error not logged:\n%s", h.logs.String())
+	}
+
+	h.auto(ref, state.TriggerOpened)
+	if len(h.rev.requests()) != 0 {
+		t.Fatal("the next trigger must read the config and keep the repository disabled")
+	}
 }
 
 func TestManualReviewBeforeRoundOne(t *testing.T) {
