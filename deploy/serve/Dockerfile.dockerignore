@@ -1,0 +1,6 @@
+# Only the Go module is needed to compile the binary.
+*
+!go.mod
+!go.sum
+!cmd
+!internal

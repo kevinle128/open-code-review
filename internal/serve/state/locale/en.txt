@@ -1,0 +1,47 @@
+# Text posted by `ocr serve`. One `key = value` per line; `\n` is a line break.
+# Placeholders in braces are filled by the service. Every key here must also
+# exist in each other locale file.
+
+category.bug = Bug
+category.security = Security
+category.performance = Performance
+category.maintainability = Maintainability
+category.test = Test
+category.style = Style
+category.documentation = Documentation
+category.other = Other
+
+severity.critical = Critical
+severity.high = High
+severity.medium = Medium
+severity.low = Low
+
+finding.original_location = Originally at {location}; the comment was moved because those lines are not in the diff.
+finding.suggestion = Suggestion:
+
+summary.title = OCR code review
+summary.round = Automatic round: {round}/{max}
+summary.reviewed = Reviewed commit: {sha}
+summary.reviewed_none = Reviewed commit: none yet
+summary.open = Open findings: {count}
+summary.runs_title = Recent runs
+summary.runs_header = | Run | Type | Range | Findings |
+summary.hint = Resolve every finding thread before merging. Commands: `/review` (full review), `/review-commit` (latest commit only).
+summary.skipped = The last review found no reviewable change (for example, every changed file is excluded) and did not count as a round.
+
+run.auto = Round {n}
+run.manual = Manual
+run.kind.full = full
+run.kind.incremental = new commits
+run.kind.manual-full = full
+run.kind.manual-commit = latest commit
+
+pending.round = Reviewing round {round}/{max}...
+pending.manual = Running the requested review...
+pending.failed = The last review failed and did not count as a round. It runs again on the next push or `/review`.
+
+limit.note = Automatic review stopped after {max} rounds. Comment `/review` for a full review or `/review-commit` for the latest commit.
+
+command.done = Review finished: {count} new finding(s).
+command.error = Command failed: {reason}
+command.help = Supported commands: `/review [--effort=low|medium|high]` (full review) and `/review-commit` (latest commit only).

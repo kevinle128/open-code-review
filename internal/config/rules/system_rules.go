@@ -283,6 +283,13 @@ type ResolverOptions struct {
 	// Runner bounds concurrent git subprocesses. Optional; when nil the
 	// resolver shells out to git directly.
 	Runner *gitcmd.Runner
+
+	// OverrideProject makes Project the project layer instead of the
+	// working-tree rule file; a nil Project then means no project layer.
+	// `ocr serve` passes the rules read at the PR base, because the working
+	// tree is the PR head and would let a PR change its own rules.
+	OverrideProject bool
+	Project         *ProjectRule
 }
 
 // NewResolver builds a Resolver with the following priority:
@@ -317,7 +324,10 @@ func NewResolver(repoDir, customRulePath string, opts ResolverOptions) (Resolver
 	}
 
 	var projectRule *ProjectRule
-	if repoDir != "" {
+	switch {
+	case opts.OverrideProject:
+		projectRule = opts.Project
+	case repoDir != "":
 		pr, err := loadProjectRule(repoDir)
 		if err != nil {
 			return nil, nil, err
@@ -555,6 +565,9 @@ func matchProjectRuleEntry(pr *ProjectRule, path string) *ProjectRuleEntry {
 // allowedRuleExts is the set of file extensions permitted for rule file references.
 var allowedRuleExts = map[string]bool{".md": true, ".txt": true, ".markdown": true}
 
+// MaxRuleFileBytes is the largest rule file a rule entry may name.
+const MaxRuleFileBytes = 512 * 1024
+
 // looksLikeFilePath returns true when s is likely a file path (not inline content).
 // Heuristic: multi-line text is always inline; single-line text without spaces
 // ending in .md/.txt/.markdown is treated as a file path. Values containing spaces
@@ -646,13 +659,12 @@ func readRuleFileSafe(path string, confineRoot string) (string, error) {
 		return "", fmt.Errorf("unsupported extension %q, only .md/.txt/.markdown allowed", filepath.Ext(resolved))
 	}
 
-	const maxSize = 512 * 1024
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return "", err
 	}
-	if info.Size() > maxSize {
-		return "", fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), maxSize)
+	if info.Size() > MaxRuleFileBytes {
+		return "", fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), MaxRuleFileBytes)
 	}
 
 	content, err := os.ReadFile(resolved)

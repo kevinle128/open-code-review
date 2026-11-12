@@ -1,0 +1,12 @@
+{
+  "action": "edited",
+  "changes": {"body": {"from": "please review"}},
+  "issue": {
+    "number": 7,
+    "pull_request": {"url": "https://api.github.com/repos/acme/widgets/pulls/7"}
+  },
+  "comment": {"id": 9002, "body": "/review-commit\nplease review"},
+  "repository": {"full_name": "acme/widgets"},
+  "installation": {"id": 4242},
+  "sender": {"login": "alice", "type": "User"}
+}

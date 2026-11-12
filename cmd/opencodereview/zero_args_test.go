@@ -21,6 +21,9 @@ func TestZeroArgumentCommands_RejectUnexpectedArgs(t *testing.T) {
 		{name: "llm providers", command: llmProvidersCmd, path: "ocr llm providers"},
 		{name: "session list", command: sessionListCmd, path: "ocr session list"},
 		{name: "delegate preview", command: delegatePreviewCmd, path: "ocr delegate preview"},
+		{name: "serve", command: serveCmd, path: "ocr serve"},
+		{name: "serve hooks", command: serveHooksCmd, path: "ocr serve hooks"},
+		{name: "serve hooks gitlab", command: serveHooksGitLabCmd, path: "ocr serve hooks gitlab"},
 	}
 
 	for _, tt := range tests {

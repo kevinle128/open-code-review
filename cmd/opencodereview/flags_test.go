@@ -189,6 +189,7 @@ func TestCommandNeedsGit(t *testing.T) {
 		{name: "review", cmd: &cobra.Command{Use: "review"}, want: true},
 		{name: "scan", cmd: &cobra.Command{Use: "scan"}, want: true},
 		{name: "delegate", cmd: &cobra.Command{Use: "delegate"}, want: true},
+		{name: "serve", cmd: &cobra.Command{Use: "serve"}, want: true},
 		{name: "version", cmd: &cobra.Command{Use: "version"}, want: false},
 		{name: "completion", cmd: &cobra.Command{Use: "completion"}, want: false},
 		{name: "help", cmd: &cobra.Command{Use: "help"}, want: false},
@@ -220,6 +221,13 @@ func TestCommandNeedsGit_Subcommands(t *testing.T) {
 	delegate.AddCommand(delegatePreview, delegateRule)
 	root.AddCommand(delegate)
 
+	serve := &cobra.Command{Use: "serve"}
+	serveHooks := &cobra.Command{Use: "hooks"}
+	serveHooksGitLab := &cobra.Command{Use: "gitlab"}
+	serveHooks.AddCommand(serveHooksGitLab)
+	serve.AddCommand(serveHooks)
+	root.AddCommand(serve)
+
 	rules := &cobra.Command{Use: "rules"}
 	rulesCheck := &cobra.Command{Use: "check"}
 	rules.AddCommand(rulesCheck)
@@ -233,6 +241,8 @@ func TestCommandNeedsGit_Subcommands(t *testing.T) {
 		{name: "delegate preview", cmd: delegatePreview, want: true},
 		{name: "delegate rule", cmd: delegateRule, want: true},
 		{name: "delegate", cmd: delegate, want: true},
+		{name: "serve hooks gitlab", cmd: serveHooksGitLab, want: true},
+		{name: "serve", cmd: serve, want: true},
 		{name: "rules check", cmd: rulesCheck, want: false},
 		{name: "rules", cmd: rules, want: false},
 		{name: "root", cmd: root, want: false},

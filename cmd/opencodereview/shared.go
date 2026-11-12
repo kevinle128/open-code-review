@@ -109,6 +109,12 @@ func previewMaxTokens(templateDefault, cliOverride int) (int, error) {
 // tool.ParseReviewMode(from, to, commit).RefValue(to, commit). Pass "" to
 // read the working tree, which is what scan wants.
 func loadCommonContext(repoDirInput, rulePath, contentRef string, maxTools, maxGitProcs int, requireGit bool) (*commonContext, error) {
+	return loadCommonContextWith(repoDirInput, rulePath, contentRef, maxTools, maxGitProcs, requireGit, rules.ResolverOptions{})
+}
+
+// loadCommonContextWith is loadCommonContext with extra resolver options;
+// Ref and Runner in ruleOpts are always set here.
+func loadCommonContextWith(repoDirInput, rulePath, contentRef string, maxTools, maxGitProcs int, requireGit bool, ruleOpts rules.ResolverOptions) (*commonContext, error) {
 	tpl, err := template.LoadDefault()
 	if err != nil {
 		return nil, fmt.Errorf("load default template: %w", err)
@@ -129,10 +135,8 @@ func loadCommonContext(repoDirInput, rulePath, contentRef string, maxTools, maxG
 	// through this limiter.
 	gitRunner := gitcmd.New(maxGitProcs)
 
-	resolver, fileFilter, err := rules.NewResolver(repoDir, rulePath, rules.ResolverOptions{
-		Ref:    contentRef,
-		Runner: gitRunner,
-	})
+	ruleOpts.Ref, ruleOpts.Runner = contentRef, gitRunner
+	resolver, fileFilter, err := rules.NewResolver(repoDir, rulePath, ruleOpts)
 	if err != nil {
 		return nil, fmt.Errorf("load rules: %w", err)
 	}

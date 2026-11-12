@@ -1,0 +1,19 @@
+{
+  "action": "resolved",
+  "thread": {"node_id": "PRRT_abc", "comments": []},
+  "pull_request": {
+    "number": 7,
+    "title": "Add retry to the importer",
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "merged_at": null,
+    "user": {"login": "dependabot[bot]", "type": "Bot"},
+    "labels": [],
+    "head": {"ref": "feat/retry", "sha": "1111111111111111111111111111111111111111"},
+    "base": {"ref": "main", "sha": "2222222222222222222222222222222222222222"}
+  },
+  "repository": {"full_name": "acme/widgets"},
+  "installation": {"id": 4242},
+  "sender": {"login": "alice", "type": "User"}
+}

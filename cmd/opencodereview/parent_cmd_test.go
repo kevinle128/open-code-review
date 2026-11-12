@@ -28,6 +28,8 @@ func TestParentCommands_UnknownSubcommand(t *testing.T) {
 		{"delegate alias", []string{"d", "bogus"}, "unknown command"},
 		{"llm", []string{"llm", "bogus"}, "unknown command"},
 		{"rules", []string{"rules", "bogus"}, "unknown command"},
+		{"serve", []string{"serve", "bogus"}, "unknown command"},
+		{"serve hooks", []string{"serve", "hooks", "bogus"}, "unknown command"},
 	}
 
 	for _, tt := range tests {
@@ -70,6 +72,7 @@ func TestParentCommands_KnownSubcommandStillWorks(t *testing.T) {
 		{"llm test help", []string{"llm", "test", "--help"}},
 		{"llm providers help", []string{"llm", "providers", "--help"}},
 		{"rules check help", []string{"rules", "check", "--help"}},
+		{"serve hooks gitlab help", []string{"serve", "hooks", "gitlab", "--help"}},
 	}
 
 	for _, tt := range tests {

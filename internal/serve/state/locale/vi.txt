@@ -1,0 +1,46 @@
+# Văn bản do `ocr serve` đăng lên. Mỗi dòng một cặp `key = value`; `\n` là xuống dòng.
+# Phần trong ngoặc nhọn do dịch vụ điền. Phải có đủ mọi key của en.txt.
+
+category.bug = Lỗi
+category.security = Bảo mật
+category.performance = Hiệu năng
+category.maintainability = Khả năng bảo trì
+category.test = Kiểm thử
+category.style = Phong cách
+category.documentation = Tài liệu
+category.other = Khác
+
+severity.critical = Nghiêm trọng
+severity.high = Cao
+severity.medium = Trung bình
+severity.low = Thấp
+
+finding.original_location = Vị trí gốc: {location}; bình luận được chuyển chỗ vì các dòng đó không nằm trong diff.
+finding.suggestion = Đề xuất:
+
+summary.title = Review code bằng OCR
+summary.round = Vòng tự động: {round}/{max}
+summary.reviewed = Commit đã review: {sha}
+summary.reviewed_none = Commit đã review: chưa có
+summary.open = Vấn đề chưa xử lý: {count}
+summary.runs_title = Các lần chạy gần đây
+summary.runs_header = | Lần chạy | Loại | Phạm vi | Vấn đề |
+summary.hint = Hãy resolve mọi thread trước khi merge. Lệnh: `/review` (review toàn bộ), `/review-commit` (chỉ commit mới nhất).
+summary.skipped = Lần review gần nhất không có thay đổi nào cần review (ví dụ mọi file thay đổi đều bị loại trừ) và không tính là một vòng.
+
+run.auto = Vòng {n}
+run.manual = Thủ công
+run.kind.full = toàn bộ
+run.kind.incremental = commit mới
+run.kind.manual-full = toàn bộ
+run.kind.manual-commit = commit mới nhất
+
+pending.round = Đang review vòng {round}/{max}...
+pending.manual = Đang chạy review theo yêu cầu...
+pending.failed = Lần review trước bị lỗi và không tính là một vòng. Review sẽ chạy lại ở lần push tiếp theo hoặc khi có `/review`.
+
+limit.note = Đã dừng review tự động sau {max} vòng. Bình luận `/review` để review toàn bộ hoặc `/review-commit` để review commit mới nhất.
+
+command.done = Review xong: {count} vấn đề mới.
+command.error = Lệnh thất bại: {reason}
+command.help = Lệnh hỗ trợ: `/review [--effort=low|medium|high]` (review toàn bộ) và `/review-commit` (chỉ commit mới nhất).
