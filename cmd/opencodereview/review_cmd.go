@@ -161,106 +161,12 @@ func executeReviewContext(ctx context.Context, opts reviewOptions) (retErr error
 		return err
 	}
 
-	mainToolDefs, err := loadToolDefs(cc.Template.MainTask.Tools)
-	if err != nil {
-		return fmt.Errorf("MAIN_TASK.tools: %w", err)
-	}
-	var planToolDefs []llm.ToolDef
-	if plan := cc.Template.PlanTask; plan != nil {
-		planToolDefs, err = loadToolDefs(plan.ToolReferences)
-		if err != nil {
-			return fmt.Errorf("PLAN_TASK.tool_references: %w", err)
-		}
-	}
-	rt, err := loadLLMRuntime(cc.Template, llm.ResolveOptions{
-		Provider: opts.provider,
-		Model:    opts.model,
-		Context:  ctx,
-	})
+	prepared, err := prepareReviewAgent(ctx, cc, opts, resumeState)
 	if err != nil {
 		return err
 	}
-	maxTokens, err := resolveMaxTokens(cc.Template.MaxTokens, rt.AppCfg, opts.maxTokens)
-	if err != nil {
-		return err
-	}
-	cc.Template.MaxTokens = maxTokens
-
-	effort, err := resolveEffort(rt.AppCfg, opts.effort)
-	if err != nil {
-		return err
-	}
-	cc.Template.ApplyEffort(effort)
-
-	// Strictly before agent.New, so a rejected resume persists nothing. The sealed
-	// input it returns pins the run to the very commits this check passed on, so
-	// the decision cannot be undone by a ref moving afterwards.
-	sealed, err := validateResumeIdentity(ctx, cc, opts, rt, resumeState)
-	if err != nil {
-		return err
-	}
-
-	llmIdentity := &jsonLLMIdentity{
-		Provider: rt.Provider,
-		Model:    rt.Model,
-	}
-
-	var sealedInput *diff.InputResolution
-	if sealed != nil {
-		sealedInput = &sealed.Resolution
-	}
-
-	codeTools, err := prepareReviewCodeTools(ctx, cc.RepoDir, opts, cc.GitRunner, sealedInput)
-	if err != nil {
-		return fmt.Errorf("prepare code tools: %w", err)
-	}
-	if codeTools.access != nil {
-		mainToolDefs, err = toolsconfig.WithComparisonSides(mainToolDefs)
-		if err != nil {
-			return err
-		}
-		planToolDefs, err = toolsconfig.WithComparisonSides(planToolDefs)
-		if err != nil {
-			return err
-		}
-	}
-	tools := buildToolRegistryWithCodeAccess(rt.Collector, codeTools.reader, codeTools.access)
-
-	mcpClients := initMCPClients(ctx, rt.AppCfg, tools, cc.RepoDir, Version)
-	defer closeReviewMCPClients(mcpClients)
-
-	mcpToolDefs := mcp.CollectToolDefs(mcpClients, tools)
-	planToolDefs = append(planToolDefs, mcpToolDefs...)
-	mainToolDefs = append(mainToolDefs, mcpToolDefs...)
-
-	ag := agent.New(agent.Args{
-		RepoDir:               cc.RepoDir,
-		From:                  opts.from,
-		To:                    opts.to,
-		Commit:                opts.commit,
-		ReviewMode:            reviewModeFromOptions(opts),
-		Template:              *cc.Template,
-		SystemRule:            cc.Resolver,
-		FileFilter:            cc.FileFilter,
-		LLMClient:             rt.Client,
-		Tools:                 tools,
-		PlanToolDefs:          planToolDefs,
-		MainToolDefs:          mainToolDefs,
-		CommentCollector:      rt.Collector,
-		CommentWorkerPool:     agent.NewCommentWorkerPool(opts.concurrency),
-		MaxConcurrency:        opts.concurrency,
-		ConcurrentTaskTimeout: opts.concurrentTaskTimeout,
-		Model:                 rt.Model,
-		Provider:              rt.Provider,
-		EndpointSource:        rt.Source,
-		Background:            opts.background,
-		GitRunner:             cc.GitRunner,
-		Resume:                resumeState,
-		SealedInput:           codeTools.resolution,
-		MaxTokensBudget:       int64(opts.maxTokensBudget),
-		SkipFilter:            opts.noFilter,
-		RuntimeConfig:         rt.RuntimeConfig,
-	})
+	defer prepared.closeMCP()
+	ag, rt, llmIdentity := prepared.ag, prepared.rt, prepared.llmIdentity
 
 	closeRaw := bindRawWriter(rt.RawHolder, cc.RepoDir, ag.Session())
 	defer closeRaw()
@@ -341,6 +247,127 @@ func executeReviewContext(ctx context.Context, opts reviewOptions) (retErr error
 		return errors.Join(resultErr, emitErr)
 	}
 	return emitErr
+}
+
+// preparedReview is a review agent ready to run. closeMCP must be called
+// exactly once after the run, on every path.
+type preparedReview struct {
+	ag          *agent.Agent
+	rt          *llmRuntime
+	llmIdentity *jsonLLMIdentity
+	closeMCP    func()
+}
+
+// prepareReviewAgent builds the LLM runtime, the tool registry and the agent
+// for one review. It is shared by `ocr review` and `ocr serve`, so both run
+// the same setup sequence.
+func prepareReviewAgent(ctx context.Context, cc *commonContext, opts reviewOptions, resumeState *session.ResumeState) (*preparedReview, error) {
+	mainToolDefs, err := loadToolDefs(cc.Template.MainTask.Tools)
+	if err != nil {
+		return nil, fmt.Errorf("MAIN_TASK.tools: %w", err)
+	}
+	var planToolDefs []llm.ToolDef
+	if plan := cc.Template.PlanTask; plan != nil {
+		planToolDefs, err = loadToolDefs(plan.ToolReferences)
+		if err != nil {
+			return nil, fmt.Errorf("PLAN_TASK.tool_references: %w", err)
+		}
+	}
+	rt, err := loadLLMRuntime(cc.Template, llm.ResolveOptions{
+		Provider: opts.provider,
+		Model:    opts.model,
+		Context:  ctx,
+	})
+	if err != nil {
+		return nil, err
+	}
+	maxTokens, err := resolveMaxTokens(cc.Template.MaxTokens, rt.AppCfg, opts.maxTokens)
+	if err != nil {
+		return nil, err
+	}
+	cc.Template.MaxTokens = maxTokens
+
+	effort, err := resolveEffort(rt.AppCfg, opts.effort)
+	if err != nil {
+		return nil, err
+	}
+	cc.Template.ApplyEffort(effort)
+
+	// Strictly before agent.New, so a rejected resume persists nothing. The sealed
+	// input it returns pins the run to the very commits this check passed on, so
+	// the decision cannot be undone by a ref moving afterwards.
+	sealed, err := validateResumeIdentity(ctx, cc, opts, rt, resumeState)
+	if err != nil {
+		return nil, err
+	}
+
+	llmIdentity := &jsonLLMIdentity{
+		Provider: rt.Provider,
+		Model:    rt.Model,
+	}
+
+	var sealedInput *diff.InputResolution
+	if sealed != nil {
+		sealedInput = &sealed.Resolution
+	}
+
+	codeTools, err := prepareReviewCodeTools(ctx, cc.RepoDir, opts, cc.GitRunner, sealedInput)
+	if err != nil {
+		return nil, fmt.Errorf("prepare code tools: %w", err)
+	}
+	if codeTools.access != nil {
+		mainToolDefs, err = toolsconfig.WithComparisonSides(mainToolDefs)
+		if err != nil {
+			return nil, err
+		}
+		planToolDefs, err = toolsconfig.WithComparisonSides(planToolDefs)
+		if err != nil {
+			return nil, err
+		}
+	}
+	tools := buildToolRegistryWithCodeAccess(rt.Collector, codeTools.reader, codeTools.access)
+
+	mcpClients := initMCPClients(ctx, rt.AppCfg, tools, cc.RepoDir, Version)
+
+	mcpToolDefs := mcp.CollectToolDefs(mcpClients, tools)
+	planToolDefs = append(planToolDefs, mcpToolDefs...)
+	mainToolDefs = append(mainToolDefs, mcpToolDefs...)
+
+	ag := agent.New(agent.Args{
+		RepoDir:               cc.RepoDir,
+		From:                  opts.from,
+		To:                    opts.to,
+		Commit:                opts.commit,
+		ReviewMode:            reviewModeFromOptions(opts),
+		Template:              *cc.Template,
+		SystemRule:            cc.Resolver,
+		FileFilter:            cc.FileFilter,
+		LLMClient:             rt.Client,
+		Tools:                 tools,
+		PlanToolDefs:          planToolDefs,
+		MainToolDefs:          mainToolDefs,
+		CommentCollector:      rt.Collector,
+		CommentWorkerPool:     agent.NewCommentWorkerPool(opts.concurrency),
+		MaxConcurrency:        opts.concurrency,
+		ConcurrentTaskTimeout: opts.concurrentTaskTimeout,
+		Model:                 rt.Model,
+		Provider:              rt.Provider,
+		EndpointSource:        rt.Source,
+		Background:            opts.background,
+		GitRunner:             cc.GitRunner,
+		Resume:                resumeState,
+		SealedInput:           codeTools.resolution,
+		MaxTokensBudget:       int64(opts.maxTokensBudget),
+		SkipFilter:            opts.noFilter,
+		RuntimeConfig:         rt.RuntimeConfig,
+	})
+
+	return &preparedReview{
+		ag:          ag,
+		rt:          rt,
+		llmIdentity: llmIdentity,
+		closeMCP:    func() { closeReviewMCPClients(mcpClients) },
+	}, nil
 }
 
 func resolveReviewMaxTools(templateDefault, cliValue int) int {
