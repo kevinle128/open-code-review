@@ -185,13 +185,7 @@ func ResolveRange(a Action, baseSHA, headSHA string, ancestry int) (from, to, ki
 // not review the same commits again. A manual commit review changes neither.
 // The run history keeps the newest 30 entries.
 func Apply(m *Marker, a Action, from, to, base string, ids []string, limit int) Marker {
-	out := Initial(limit)
-	if m != nil {
-		out = *m
-		out.V = markerVersion
-		out.Max = limit
-		out.Runs = slices.Clone(m.Runs)
-	}
+	out := carry(m, limit)
 	ids = slices.Clone(ids)
 	if ids == nil {
 		ids = []string{}
@@ -217,6 +211,29 @@ func Apply(m *Marker, a Action, from, to, base string, ids []string, limit int) 
 	if len(out.Runs) > maxRuns {
 		out.Runs = out.Runs[len(out.Runs)-maxRuns:]
 	}
+	return out
+}
+
+// ApplySkipped returns the marker after an automatic round that found nothing
+// to review, for example because every changed file is excluded. Such a round
+// does not count toward the limit and adds no run entry, but it moves Reviewed
+// and Base to the commits it looked at, so the same commits are not looked at
+// again and the next round starts after them.
+func ApplySkipped(m *Marker, to, base string, limit int) Marker {
+	out := carry(m, limit)
+	out.Reviewed, out.Base = to, base
+	return out
+}
+
+// carry copies m for an update, or starts from the initial marker.
+func carry(m *Marker, limit int) Marker {
+	if m == nil {
+		return Initial(limit)
+	}
+	out := *m
+	out.V = markerVersion
+	out.Max = limit
+	out.Runs = slices.Clone(m.Runs)
 	return out
 }
 

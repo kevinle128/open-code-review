@@ -249,7 +249,14 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 		ids[i] = fd.ID
 	}
 	next := state.Apply(st.marker, a, from, to, st.pr.BaseSHA, ids, limit)
-	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, open, s.loc, "")); err != nil {
+	line := ""
+	if res.Terminal == review.TerminalSkipped {
+		line = s.loc.Text("summary.skipped")
+		if a.Kind == state.RunAuto {
+			next = state.ApplySkipped(st.marker, to, st.pr.BaseSHA, limit)
+		}
+	}
+	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, open, s.loc, line)); err != nil {
 		return s.runFailed(f, ref, st, a, j, "commit summary", err, true, log)
 	}
 	if open > 0 {

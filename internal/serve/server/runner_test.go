@@ -361,6 +361,87 @@ func TestManualReviewBeforeRoundOne(t *testing.T) {
 	}
 }
 
+func TestSkippedReviewConsumesNoRound(t *testing.T) {
+	skipped := func(context.Context, review.Request) (review.Result, error) {
+		return review.Result{Terminal: review.TerminalSkipped}, nil
+	}
+
+	t.Run("round one", func(t *testing.T) {
+		h := newHarness(t)
+		ref := glRef(20)
+		h.gl.setPR(openPR(ref, sha1))
+		h.rev.set(skipped)
+		h.auto(ref, state.TriggerOpened)
+		m := h.gl.marker(t, ref)
+		if m.Auto != 0 || m.Reviewed != sha1 || m.Base != shaBase || len(m.Runs) != 0 {
+			t.Fatalf("skipped round one must not count: %+v", m)
+		}
+		mustContain(t, h.gl.summary(ref), h.loc.Text("summary.skipped"))
+		if len(h.srv.store.List()) != 0 {
+			t.Fatal("a skipped review leaves nothing to wait for")
+		}
+
+		h.auto(ref, state.TriggerPush)
+		if len(h.rev.requests()) != 1 {
+			t.Fatal("the skipped head must not be reviewed again")
+		}
+
+		h.gl.push(ref, sha2)
+		h.rev.set(findingsResult(comment("a.go", 1)))
+		h.auto(ref, state.TriggerPush)
+		r := h.rev.requests()
+		if len(r) != 2 || r[1].From != sha1 || r[1].To != sha2 {
+			t.Fatalf("round one must start after the skipped commits: %+v", r)
+		}
+		m = h.gl.marker(t, ref)
+		if m.Auto != 1 || m.Reviewed != sha2 || len(m.Runs) != 1 || m.Runs[0].N != 1 {
+			t.Fatalf("after round one %+v", m)
+		}
+		if strings.Contains(h.gl.summary(ref), h.loc.Text("summary.skipped")) {
+			t.Fatal("a counted round must clear the skipped line")
+		}
+	})
+
+	t.Run("later round", func(t *testing.T) {
+		h := newHarness(t)
+		ref := ghRef(21)
+		h.gh.setPR(openPR(ref, sha2))
+		before := state.Marker{V: 1, Auto: 2, Max: 3, Reviewed: sha1, Base: shaBase,
+			Runs: []state.Run{{N: 2, Kind: state.KindFull, From: shaBase, To: sha1, IDs: []string{}}}}
+		h.gh.summaries[ref.Key()] = state.RenderSummary(before, 0, h.loc, "")
+		h.rev.set(skipped)
+		h.auto(ref, state.TriggerPush)
+		m := h.gh.marker(t, ref)
+		if m.Auto != 2 || m.Reviewed != sha2 || len(m.Runs) != 1 {
+			t.Fatalf("skipped round three must not count: %+v", m)
+		}
+		mustContain(t, h.gh.summary(ref), h.loc.Text("summary.round", "round", "2", "max", "3"))
+
+		h.gh.push(ref, sha3)
+		h.rev.set(findingsResult())
+		h.auto(ref, state.TriggerPush)
+		if m := h.gh.marker(t, ref); m.Auto != 3 || m.Runs[1].From != sha2 {
+			t.Fatalf("round three must still run after the skipped one: %+v", m)
+		}
+	})
+
+	t.Run("manual command", func(t *testing.T) {
+		h := newHarness(t)
+		ref := ghRef(22)
+		h.gh.setPR(openPR(ref, sha1))
+		h.rev.set(skipped)
+		h.command(ref, "/review", "c1")
+		m := h.gh.marker(t, ref)
+		if m.Auto != 0 || m.Reviewed != sha1 {
+			t.Fatalf("marker %+v", m)
+		}
+		mustContain(t, h.gh.summary(ref), h.loc.Text("summary.skipped"))
+		if got := h.gh.reactionList(); len(got) != 1 || got[0] != "c1:success" {
+			t.Fatalf("reactions %v", got)
+		}
+	})
+}
+
 func TestUnreadableMarker(t *testing.T) {
 	h := newHarness(t)
 	ref := ghRef(9)

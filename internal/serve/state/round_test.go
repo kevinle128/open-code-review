@@ -223,6 +223,39 @@ func TestApply(t *testing.T) {
 	})
 }
 
+func TestApplySkipped(t *testing.T) {
+	t.Run("before any round", func(t *testing.T) {
+		got := ApplySkipped(nil, shaB, shaA, 3)
+		want := Marker{V: 1, Auto: 0, Max: 3, Reviewed: shaB, Base: shaA, Runs: []Run{}}
+		if got.Auto != want.Auto || got.Reviewed != want.Reviewed || got.Base != want.Base || got.Max != 3 || len(got.Runs) != 0 {
+			t.Fatalf("got %+v", got)
+		}
+		// The next push goes through the round-one gate and reviews only
+		// the commits after the skipped ones.
+		a := Decide(Input{Trigger: TriggerPush, PR: openPR(shaC), SummaryPresent: true, Marker: &got, Repo: repo(3)})
+		if a.Kind != RunAuto || a.Round != 1 || a.Mode != ModeIncremental || a.From != shaB {
+			t.Fatalf("next action %+v", a)
+		}
+	})
+
+	t.Run("keeps count, runs and limit note", func(t *testing.T) {
+		m := markerAt(2, shaB, true)
+		m.Runs = []Run{{N: 2, Kind: KindIncremental, From: shaA, To: shaB, IDs: []string{"r2-x"}}}
+		got := ApplySkipped(m, shaC, shaD, 4)
+		if got.Auto != 2 || got.Reviewed != shaC || got.Base != shaD || got.Max != 4 || !got.LimitNoted ||
+			!reflect.DeepEqual(got.Runs, m.Runs) {
+			t.Fatalf("got %+v", got)
+		}
+		got.Runs[0].N = 9
+		if m.Runs[0].N != 2 || m.Reviewed != shaB {
+			t.Fatalf("input mutated: %+v", m)
+		}
+		if _, err := Decode(Encode(got)); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestFindingID(t *testing.T) {
 	f := forge.Finding{Path: "a.go", StartLine: 3, EndLine: 5, Category: "bug", Content: "one wording"}
 	g := f

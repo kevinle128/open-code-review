@@ -27,6 +27,7 @@ summary.open = Open findings: {count}
 summary.runs_title = Recent runs
 summary.runs_header = | Run | Type | Range | Findings |
 summary.hint = Resolve every finding thread before merging. Commands: `/review` (full review), `/review-commit` (latest commit only).
+summary.skipped = The last review found no reviewable change (for example, every changed file is excluded) and did not count as a round.
 
 run.auto = Round {n}
 run.manual = Manual
