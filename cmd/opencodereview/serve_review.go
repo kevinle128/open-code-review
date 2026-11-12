@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/alibaba/open-code-review/internal/agent"
 	"github.com/alibaba/open-code-review/internal/config/rules"
@@ -42,7 +43,8 @@ func (serveReviewer) Review(ctx context.Context, req review.Request) (review.Res
 	if req.Commit == "" && (req.From == "" || req.To == "") {
 		return failed, errors.New("review needs a commit or a from and to range")
 	}
-	if err := refuseMCPServers(); err != nil {
+	lang, err := serveAppLanguage()
+	if err != nil {
 		return failed, err
 	}
 
@@ -80,7 +82,7 @@ func (serveReviewer) Review(ctx context.Context, req review.Request) (review.Res
 	if err != nil {
 		return failed, err
 	}
-	opts.background = bg
+	opts.background = withOutputLanguage(bg, lang)
 
 	prepared, err := prepareReviewAgent(ctx, cc, opts, nil)
 	if err != nil {
@@ -102,21 +104,41 @@ func (serveReviewer) Review(ctx context.Context, req review.Request) (review.Res
 	return res, reviewResultError(runErr, manifest)
 }
 
-// refuseMCPServers stops a review when MCP servers are configured: their
-// setup commands would run inside the checkout of an untrusted PR.
-func refuseMCPServers() error {
+// serveAppLanguage returns the configured output language. It stops a
+// review when MCP servers are configured: their setup commands would run
+// inside the checkout of an untrusted PR.
+func serveAppLanguage() (string, error) {
 	path, err := defaultConfigPath()
 	if err != nil {
-		return err
+		return "", err
 	}
 	cfg, err := LoadAppConfig(path)
 	if err != nil {
-		return fmt.Errorf("load app config: %w", err)
+		return "", fmt.Errorf("load app config: %w", err)
 	}
-	if cfg != nil && len(cfg.MCPServers) > 0 {
-		return fmt.Errorf("mcp_servers is set in %s; ocr serve does not run MCP servers", path)
+	if cfg == nil {
+		return "", nil
 	}
-	return nil
+	if len(cfg.MCPServers) > 0 {
+		return "", fmt.Errorf("mcp_servers is set in %s; ocr serve does not run MCP servers", path)
+	}
+	return strings.TrimSpace(cfg.Language), nil
+}
+
+// withOutputLanguage appends an output-language directive to the review
+// background. The system-prompt directive alone does not always hold: a
+// model can still write its findings in English. The background goes into
+// the user task message, so the rule is repeated next to the diff.
+func withOutputLanguage(background, lang string) string {
+	if lang == "" || strings.EqualFold(lang, "English") {
+		return background
+	}
+	directive := "Write every review comment, explanation and suggestion text in " + lang +
+		". Keep code, identifiers and file paths unchanged."
+	if strings.TrimSpace(background) == "" {
+		return directive
+	}
+	return background + "\n\n" + directive
 }
 
 func terminalState(manifest *session.RunManifest, runErr error) string {

@@ -31,6 +31,19 @@ type serveFakeLLM struct {
 	fail        bool
 	requests    int
 	sawLanguage bool
+	bodies      []string
+}
+
+// sawText reports whether any request body held text.
+func (f *serveFakeLLM) sawText(text string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, b := range f.bodies {
+		if strings.Contains(b, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *serveFakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +53,7 @@ func (f *serveFakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	f.requests++
+	f.bodies = append(f.bodies, string(raw))
 	if bytes.Contains(raw, []byte("Always respond in Vietnamese")) {
 		f.sawLanguage = true
 	}
@@ -187,6 +201,60 @@ func TestServeReviewRangeAndCommitModes(t *testing.T) {
 				t.Error("the configured output language never reached the LLM")
 			}
 			assertNoSessionFiles(t, repo)
+		})
+	}
+}
+
+func TestServeReviewAddsOutputLanguageDirective(t *testing.T) {
+	directive := "Write every review comment, explanation and suggestion text in Vietnamese."
+	cases := []struct {
+		name, config, background string
+		want                     bool
+	}{
+		{"vietnamese keeps background", vietnameseConfig, "Adds a new return value", true},
+		{"vietnamese without background", vietnameseConfig, "", true},
+		{"english", `{"language":"english"}`, "Adds a new return value", false},
+		{"no language", "", "Adds a new return value", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			llm := &serveFakeLLM{}
+			startServeFakeLLM(t, llm, tc.config)
+			repo := newServeRepo(t)
+			_, err := serveReviewer{}.Review(context.Background(), review.Request{
+				RepoDir: repo.dir, From: repo.base, To: repo.head, Background: tc.background,
+			})
+			if err != nil {
+				t.Fatalf("Review: %v", err)
+			}
+			if got := llm.sawText(directive); got != tc.want {
+				t.Errorf("directive sent = %v, want %v", got, tc.want)
+			}
+			if tc.background != "" && !llm.sawText(tc.background) {
+				t.Error("the request background never reached the LLM")
+			}
+		})
+	}
+}
+
+func TestWithOutputLanguage(t *testing.T) {
+	const directive = "Write every review comment, explanation and suggestion text in Vietnamese. " +
+		"Keep code, identifiers and file paths unchanged."
+	cases := []struct {
+		name, background, lang, want string
+	}{
+		{"empty language", "PR title", "", "PR title"},
+		{"english", "PR title", "English", "PR title"},
+		{"english any case", "PR title", "ENGLISH", "PR title"},
+		{"vietnamese appends", "PR title\n\ncommit message", "Vietnamese", "PR title\n\ncommit message\n\n" + directive},
+		{"vietnamese no background", "", "Vietnamese", directive},
+		{"vietnamese blank background", "  \n", "Vietnamese", directive},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := withOutputLanguage(tc.background, tc.lang); got != tc.want {
+				t.Errorf("withOutputLanguage(%q, %q) = %q, want %q", tc.background, tc.lang, got, tc.want)
+			}
 		})
 	}
 }
