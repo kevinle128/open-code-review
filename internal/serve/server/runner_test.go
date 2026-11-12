@@ -234,6 +234,29 @@ func TestReviewErrorKeepsMarkerAndAnswersCommand(t *testing.T) {
 	}
 }
 
+func TestRunPostsPendingLineBeforeReviewWithRunDeadline(t *testing.T) {
+	h := newHarness(t, func(c *serveconfig.Config) { c.ReviewTimeout = time.Hour })
+	ref := ghRef(5)
+	h.gh.setPR(openPR(ref, sha1))
+	var sawPending bool
+	var left time.Duration
+	h.rev.set(func(ctx context.Context, _ review.Request) (review.Result, error) {
+		sawPending = strings.Contains(h.gh.summary(ref), h.loc.Text("pending.round", "round", "1", "max", "3"))
+		if dl, ok := ctx.Deadline(); ok {
+			left = time.Until(dl)
+		}
+		return review.Result{Terminal: review.TerminalComplete}, nil
+	})
+
+	h.auto(ref, state.TriggerOpened)
+	if !sawPending {
+		t.Fatal("the in-progress line must be in the summary before the review starts")
+	}
+	if left <= 59*time.Minute || left > time.Hour {
+		t.Fatalf("review deadline in %v, want about the configured hour", left)
+	}
+}
+
 func TestHeadMovedDuringFetch(t *testing.T) {
 	h := newHarness(t)
 	ref := ghRef(4)

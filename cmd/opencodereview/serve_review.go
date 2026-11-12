@@ -17,11 +17,13 @@ import (
 	"github.com/alibaba/open-code-review/internal/tool"
 )
 
-// Defaults of the `ocr review` flags. A zero reviewOptions would mean zero
-// for these, not the flag default.
+// Settings that the `ocr review` flags would give. A zero reviewOptions would
+// mean zero for these, not the flag default. The file-group limit is longer
+// than the review flag default so that it does not end a serve review before
+// the run limit (OCR_SERVE_REVIEW_TIMEOUT, default 1h) does.
 const (
 	serveReviewConcurrency    = 8
-	serveReviewTimeoutMinutes = 15
+	serveReviewTimeoutMinutes = 60
 	serveReviewMaxGitProcs    = 16
 )
 

@@ -71,7 +71,7 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &Config{
-		Addr: DefaultAddr, MaxRounds: 3, PollInterval: 2 * time.Minute, ReviewTimeout: 30 * time.Minute,
+		Addr: DefaultAddr, MaxRounds: 3, PollInterval: 2 * time.Minute, ReviewTimeout: time.Hour,
 		Workers: 2, MaxBodyBytes: 10485760, DataDir: "/data", WorkDir: "/work", BotIndicators: []string{"bot"},
 	}
 	if !reflect.DeepEqual(c, want) {
@@ -93,7 +93,7 @@ func TestLoad_NilFuncsUseProcessEnv(t *testing.T) {
 func TestLoad_Overrides(t *testing.T) {
 	testKeys(t)
 	c, err := Load(env(map[string]string{
-		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvPollInterval: "30s", EnvReviewTimeout: "1h",
+		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvPollInterval: "30s", EnvReviewTimeout: "2h",
 		EnvWorkers: "4", EnvMaxBodyBytes: "2048", EnvDataDir: "/d", EnvWorkDir: "/w",
 		EnvIgnoreRepos: "^infra/, sandbox$", EnvIgnoreAuthors: "renovate", EnvIgnoreTitles: `(?i)^\[wip\]`,
 		EnvIgnoreSourceBranch: "^release/", EnvIgnoreTargetBranch: "^gh-pages$", EnvIgnoreLabels: "no-review, skip ocr",
@@ -106,7 +106,7 @@ func TestLoad_Overrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.PollInterval != 30*time.Second || c.ReviewTimeout != time.Hour ||
+	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.PollInterval != 30*time.Second || c.ReviewTimeout != 2*time.Hour ||
 		c.Workers != 4 || c.MaxBodyBytes != 2048 || c.DataDir != "/d" || c.WorkDir != "/w" {
 		t.Fatalf("scalars %+v", c)
 	}

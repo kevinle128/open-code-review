@@ -15,9 +15,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/alibaba/open-code-review/internal/agent"
 	"github.com/alibaba/open-code-review/internal/config/rules"
+	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/checkout"
 	"github.com/alibaba/open-code-review/internal/serve/review"
 	"github.com/alibaba/open-code-review/internal/session"
@@ -444,6 +446,12 @@ func TestServeReviewSetupErrors(t *testing.T) {
 			t.Fatal("review ran without an LLM endpoint")
 		}
 	})
+}
+
+func TestServeFileGroupLimitCoversRunLimit(t *testing.T) {
+	if got := time.Duration(serveReviewTimeoutMinutes) * time.Minute; got < serveconfig.DefaultReviewTimeout {
+		t.Fatalf("file-group limit %v is shorter than the default run limit %v", got, serveconfig.DefaultReviewTimeout)
+	}
 }
 
 func TestTerminalState(t *testing.T) {
