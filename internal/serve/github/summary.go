@@ -90,7 +90,12 @@ func (f *Forge) UpsertSummary(ctx context.Context, ref forge.PRRef, body string)
 		body = forge.SummaryTag + "\n" + body
 	}
 	if existing == nil {
-		return f.PostNote(ctx, ref, body)
+		// The summary is found by its first line, so a 5xx is safe to retry
+		// once the lookup shows no summary was created.
+		return f.postIssueComment(ctx, ref, body, func(ctx context.Context) (bool, error) {
+			c, err := f.findSummary(ctx, ref)
+			return c != nil, err
+		})
 	}
 	body = state.Preserve(body, existing.Body)
 	base, _ := repoPath(ref)

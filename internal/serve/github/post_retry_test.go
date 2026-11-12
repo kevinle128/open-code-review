@@ -130,3 +130,34 @@ func TestPostNoteServerErrorIsNotRepeated(t *testing.T) {
 		t.Fatalf("posts %d, comments %d", n, len(fa.issueComments))
 	}
 }
+
+func TestSummaryCreateRetriedWithoutDuplicate(t *testing.T) {
+	issueHandler := func(fa *fakeAPI) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			payload := decodeBody(t, r)
+			writeJSON(w, 201, fa.addComment(&fa.issueComments, payload["body"].(string), testBot, "Bot"))
+		}
+	}
+	t.Run("applied", func(t *testing.T) {
+		fa := newFakeAPI(t)
+		appliedThen502(fa, "POST /repos/acme/widgets/issues/7/comments", issueHandler(fa))
+		f, _ := fa.forge(t)
+		if err := f.UpsertSummary(context.Background(), testRef, forge.SummaryTag+"\nreviewing"); err != nil {
+			t.Fatalf("an applied summary must count as written: %v", err)
+		}
+		if n := fa.count("POST /repos/acme/widgets/issues/7/comments"); n != 1 || len(fa.issueComments) != 1 {
+			t.Fatalf("posts %d, comments %d", n, len(fa.issueComments))
+		}
+	})
+	t.Run("not applied", func(t *testing.T) {
+		fa := newFakeAPI(t)
+		fa.fail["POST /repos/acme/widgets/issues/7/comments"] = []failure{{status: 502}}
+		f, _ := fa.forge(t)
+		if err := f.UpsertSummary(context.Background(), testRef, forge.SummaryTag+"\nreviewing"); err != nil {
+			t.Fatalf("a 502 that wrote nothing must be retried: %v", err)
+		}
+		if n := fa.count("POST /repos/acme/widgets/issues/7/comments"); n != 2 || len(fa.issueComments) != 1 {
+			t.Fatalf("posts %d, comments %d", n, len(fa.issueComments))
+		}
+	})
+}
