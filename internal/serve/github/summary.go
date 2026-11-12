@@ -101,13 +101,18 @@ func (f *Forge) UpsertSummary(ctx context.Context, ref forge.PRRef, body string)
 	return nil
 }
 
-// PostNote adds a top-level PR comment.
+// PostNote adds a top-level PR comment. A 5xx is not retried, because the
+// comment may already be there and a note carries no id to look for.
 func (f *Forge) PostNote(ctx context.Context, ref forge.PRRef, body string) error {
+	return f.postIssueComment(ctx, ref, body, nil)
+}
+
+func (f *Forge) postIssueComment(ctx context.Context, ref forge.PRRef, body string, landed func(context.Context) (bool, error)) error {
 	path, err := issuePath(ref)
 	if err != nil {
 		return err
 	}
-	if _, _, err := f.call(ctx, ref.InstallationID, http.MethodPost, f.apiURL+path+"/comments", map[string]string{"body": body}); err != nil {
+	if err := f.create(ctx, ref.InstallationID, f.apiURL+path+"/comments", map[string]string{"body": body}, landed); err != nil {
 		return fmt.Errorf("github: post comment: %w", err)
 	}
 	return nil

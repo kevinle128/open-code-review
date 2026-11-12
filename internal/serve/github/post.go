@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
+	"slices"
 
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 )
@@ -195,11 +195,17 @@ func (p *poster) postBatch(ctx context.Context, batch []placed) error {
 	for _, it := range batch {
 		comments = append(comments, p.lineComment(it))
 	}
-	_, _, err := p.f.call(ctx, p.pr.Ref.InstallationID, http.MethodPost, p.f.apiURL+p.pullPath+"/reviews", map[string]any{
+	ids := make([]string, 0, len(batch))
+	for _, it := range batch {
+		ids = append(ids, it.finding.ID)
+	}
+	// GitHub creates a review with all its comments or none, so finding any
+	// one of the ids means the whole batch landed.
+	err := p.f.create(ctx, p.pr.Ref.InstallationID, p.f.apiURL+p.pullPath+"/reviews", map[string]any{
 		"commit_id": p.pr.HeadSHA,
 		"event":     "COMMENT",
 		"comments":  comments,
-	})
+	}, p.landed(p.pullPath+"/comments", "review comments", ids...))
 	if err == nil {
 		for _, it := range batch {
 			p.count(it.placement)
@@ -223,7 +229,8 @@ func (p *poster) postSingleLine(ctx context.Context, it placed) error {
 	if c.StartLine > 0 {
 		payload["start_line"], payload["start_side"] = c.StartLine, c.StartSide
 	}
-	_, _, err := p.f.call(ctx, p.pr.Ref.InstallationID, http.MethodPost, p.f.apiURL+p.pullPath+"/comments", payload)
+	err := p.f.create(ctx, p.pr.Ref.InstallationID, p.f.apiURL+p.pullPath+"/comments", payload,
+		p.landed(p.pullPath+"/comments", "review comments", it.finding.ID))
 	if err == nil {
 		p.count(it.placement)
 		return nil
@@ -261,23 +268,45 @@ func (p *poster) postOther(ctx context.Context, it placed) error {
 			p.result.Skipped++
 			return nil
 		}
-		if err := p.f.PostNote(ctx, p.pr.Ref, body); err != nil {
+		issue, _ := issuePath(p.pr.Ref)
+		if err := p.f.postIssueComment(ctx, p.pr.Ref, body, p.landed(issue+"/comments", "issue comments", it.finding.ID)); err != nil {
 			return err
 		}
 		p.count(it.placement)
 		return nil
 	}
-	_, _, err := p.f.call(ctx, p.pr.Ref.InstallationID, http.MethodPost, p.f.apiURL+p.pullPath+"/comments", map[string]any{
+	err := p.f.create(ctx, p.pr.Ref.InstallationID, p.f.apiURL+p.pullPath+"/comments", map[string]any{
 		"commit_id":    p.pr.HeadSHA,
 		"path":         it.placement.Path,
 		"body":         body,
 		"subject_type": "file",
-	})
+	}, p.landed(p.pullPath+"/comments", "review comments", it.finding.ID))
 	if err != nil {
 		return fmt.Errorf("github: create file comment: %w", err)
 	}
 	p.count(it.placement)
 	return nil
+}
+
+// landed returns the check create runs after a 5xx: it lists the App's
+// comments at path again and reports whether any of ids is there. It is nil
+// when no id is known, so such a post is not retried on a 5xx.
+func (p *poster) landed(path, what string, ids ...string) func(context.Context) (bool, error) {
+	ids = slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return id == "" })
+	if len(ids) == 0 {
+		return nil
+	}
+	return func(ctx context.Context) (bool, error) {
+		bot, err := p.f.BotLogin(ctx)
+		if err != nil {
+			return false, err
+		}
+		posted, err := p.findingIDs(ctx, bot, path, what)
+		if err != nil {
+			return false, err
+		}
+		return slices.ContainsFunc(ids, func(id string) bool { return posted[id] }), nil
+	}
 }
 
 // postedAsNote reports whether a general finding already sits on a PR

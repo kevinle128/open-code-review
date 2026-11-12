@@ -61,6 +61,11 @@ func statusOf(err error) int {
 // value. The query string is dropped from error text because it may carry a
 // ref but never a secret; the token only ever travels in the header.
 func (f *Forge) send(ctx context.Context, auth, method, rawURL string, payload any) ([]byte, http.Header, error) {
+	return f.sendN(ctx, auth, method, rawURL, payload, maxAttempts)
+}
+
+// sendN is send with a given number of attempts.
+func (f *Forge) sendN(ctx context.Context, auth, method, rawURL string, payload any, attempts int) ([]byte, http.Header, error) {
 	var body []byte
 	if payload != nil {
 		var err error
@@ -86,7 +91,7 @@ func (f *Forge) send(ctx context.Context, auth, method, rawURL string, payload a
 		}
 		return req, nil
 	}
-	resp, data, err := forge.Do(ctx, f.httpc, build, f.sleep, maxAttempts)
+	resp, data, err := forge.Do(ctx, f.httpc, build, f.sleep, attempts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s %s: %w", method, stripQuery(rawURL), err)
 	}
@@ -106,15 +111,53 @@ func stripQuery(raw string) string {
 // call sends an installation-authenticated request. A 401 drops the cached
 // token so a revoked or rotated token heals on the next call.
 func (f *Forge) call(ctx context.Context, installationID int64, method, rawURL string, payload any) ([]byte, http.Header, error) {
+	return f.callN(ctx, installationID, method, rawURL, payload, maxAttempts)
+}
+
+// callN is call with a given number of attempts.
+func (f *Forge) callN(ctx context.Context, installationID int64, method, rawURL string, payload any, attempts int) ([]byte, http.Header, error) {
 	token, err := f.installationToken(ctx, installationID)
 	if err != nil {
 		return nil, nil, err
 	}
-	data, h, err := f.send(ctx, "Bearer "+token, method, rawURL, payload)
+	data, h, err := f.sendN(ctx, "Bearer "+token, method, rawURL, payload, attempts)
 	if statusOf(err) == http.StatusUnauthorized {
 		f.dropToken(installationID)
 	}
 	return data, h, err
+}
+
+// create sends a POST that adds a comment or a review. GitHub can answer 5xx
+// or 408 after it applied the write, so such an answer is not resent
+// blindly: landed, when given, re-lists the App's comments and reports
+// whether the write is there; without it the error is returned. A rate limit
+// is retried as usual, because GitHub applied nothing.
+func (f *Forge) create(ctx context.Context, installationID int64, rawURL string, payload any, landed func(context.Context) (bool, error)) error {
+	for attempt := 0; ; attempt++ {
+		_, h, err := f.callN(ctx, installationID, http.MethodPost, rawURL, payload, 1)
+		var ae *apiError
+		if err == nil || !errors.As(err, &ae) {
+			return err
+		}
+		delay, retry := forge.RetryDelay(&http.Response{StatusCode: ae.Status, Header: h}, ae.Body, attempt, f.now(), nil)
+		maybeApplied := ae.Status >= 500 || ae.Status == http.StatusRequestTimeout
+		if !retry || attempt+1 >= maxAttempts || (maybeApplied && landed == nil) {
+			return err
+		}
+		if serr := f.sleep(ctx, delay); serr != nil {
+			return serr
+		}
+		if !maybeApplied {
+			continue
+		}
+		found, lerr := landed(ctx)
+		if lerr != nil {
+			return fmt.Errorf("%w; not retried because the duplicate check failed: %v", err, lerr)
+		}
+		if found {
+			return nil
+		}
+	}
 }
 
 // list walks a paginated REST collection, calling each for every element.
