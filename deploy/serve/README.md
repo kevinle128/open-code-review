@@ -1,8 +1,9 @@
 # `ocr serve`: PR review webhook service
 
 `ocr serve` receives GitHub App and GitLab webhooks, reviews each pull request
-or merge request with OCR in bounded rounds, and posts every finding as a
-resolvable review thread. A sticky summary comment holds the round state.
+or merge request in bounded rounds, and posts every finding as a resolvable
+review thread. The review runs an agent CLI (Codex CLI or Claude Code) by
+default, or the in-process OCR review; see [Review engine](#review-engine). A sticky summary comment holds the round state.
 Combined with the forge setting "all threads must be resolved", open findings
 block the merge.
 
@@ -12,10 +13,10 @@ block the merge.
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | Multi-stage image: static binary on Alpine with `git` and `ca-certificates`, user `ocr` (uid 10001), listens on `0.0.0.0:3012`. |
+| `Dockerfile` | Multi-stage image: static binary on Debian bookworm-slim with `git`, `ca-certificates`, `curl` (health check) and `tini` (PID 1), user `ocr` (uid/gid 1000), listens on `0.0.0.0:3012`. |
 | `Dockerfile.dockerignore` | Keeps the build context to `go.mod`, `go.sum`, `cmd/` and `internal/`. |
 | `compose.example.yml` | Example service. Copy it to `compose.yml`; keep `.env`, `config.json` and `github-app.pem` next to it and out of git. |
-| `../komodo/compose.yml` | Komodo stack: every setting from the stack environment, no host files. See [Komodo](#komodo). |
+| `../komodo/compose.yml` | Komodo stack: every setting from the stack environment; the host agent CLIs and the review skill are mounted read-only. See [Komodo](#komodo). |
 
 ## Quick start
 
@@ -25,21 +26,25 @@ cp compose.example.yml compose.yml
 printf '{"language": "Vietnamese"}\n' > config.json
 # Write .env (see the table below), then copy the GitHub App key:
 install -m 600 /path/to/app.private-key.pem github-app.pem
-sudo chown 10001:10001 github-app.pem   # the container runs as uid 10001
+sudo chown 1000:1000 github-app.pem   # the container runs as uid 1000
 OCR_GIT_COMMIT=$(git rev-parse --short HEAD) docker compose build
 docker compose up -d
 curl -s http://127.0.0.1:3012/healthz
 ```
 
 Without GitHub, remove the `github-app.pem` volume and the
-`OCR_SERVE_GITHUB_PRIVATE_KEY_FILE` line from `compose.yml`.
+`OCR_SERVE_GITHUB_PRIVATE_KEY_FILE` line from `compose.yml`. The example runs
+the OCR engine (`OCR_SERVE_ENGINE=ocr`); for the CLI engine, add the mounts
+and settings of [Review engine](#review-engine).
 
 ## Komodo
 
 `deploy/komodo/compose.yml` runs the same image as a Komodo stack. Komodo
-writes the stack environment to `.env` next to the compose file, so nothing
-is kept on the host: the GitHub App key is an environment value, and the OCR
-`config.json` is generated inline from `OCR_LANGUAGE`. The inline config needs
+writes the stack environment to `.env` next to the compose file: the GitHub
+App key is an environment value, and the OCR `config.json` is generated
+inline from `OCR_LANGUAGE`. The only host files are the agent CLIs, their
+credential files and the review skill, mounted as listed in
+[Review engine](#review-engine). The inline config needs
 Docker Compose 2.23.1 or later on the server.
 
 Stack settings:
@@ -75,6 +80,10 @@ OCR_SERVE_REVIEW_CONCURRENCY=
 OCR_SERVE_BUNDLE_LINES=
 OCR_SERVE_EXCLUDE=
 OCR_LLM_TIMEOUT=900
+# Review engine; empty uses the default (cli with codex).
+OCR_SERVE_ENGINE=
+OCR_SERVE_REVIEW_CLI=
+OCR_SERVE_CODEX_EFFORT=medium
 ```
 
 - `OCR_LLM_URL`, `OCR_LLM_TOKEN` and `OCR_LLM_MODEL` are required by the
@@ -89,6 +98,11 @@ OCR_LLM_TIMEOUT=900
 - The volumes have the fixed names `ocr-review_ocr-data` and
   `ocr-review_ocr-work`, so a stack that replaces a hand-run `ocr-review`
   project keeps its state whatever project name Komodo uses.
+- The container runs as uid/gid 1000. Images before the Debian base ran as
+  uid 10001, and the volumes they created still belong to that user, so the
+  service cannot write `/data` or `/work` after the upgrade. Give them to uid
+  1000 once, with the stack stopped:
+  `docker run --rm -v ocr-review_ocr-data:/data -v ocr-review_ocr-work:/work debian:bookworm-slim chown -R 1000:1000 /data /work`.
 - The container is `ocr-review` on `127.0.0.1:3012`. To register GitLab
   hooks, pass the admin token to that run only (see
   [GitLab hooks](#gitlab-hooks)):
@@ -146,6 +160,75 @@ setting both forms is an error.
 At least one platform must be enabled; otherwise the service stops with
 `no platform enabled: set OCR_SERVE_GITHUB_APP_ID or OCR_SERVE_GITLAB_URL`.
 
+### Review engine
+
+`OCR_SERVE_ENGINE` picks the engine. Both post findings the same way: inline
+threads, the summary marker, rounds and the merge gate do not change.
+
+- `cli` (default) runs an installed agent CLI on the checkout. The service
+  selects the files with the same filters as the OCR engine (project rule,
+  per-repository and service excludes, the [file filter](#file-filter)) and
+  writes `pr.json` and `diff.patch` (the diff of the selected files) into a
+  run directory. The prompt is the review skill, read from
+  `$OCR_SERVE_SKILL_DIR/skills/ak-review-pr/SKILL.md` at run time, plus the
+  service instructions: read those two files, do not edit files or use the
+  network, and answer with findings as JSON. Findings on files outside the
+  selection are dropped. The skill is not part of this repository.
+- `ocr` runs the in-process OCR review with the `OCR_LLM_*` settings. Use it
+  to roll back: set `OCR_SERVE_ENGINE=ocr` and redeploy. The CLI settings and
+  mounts are then not used.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `OCR_SERVE_ENGINE` | `cli` | `cli` or `ocr`. |
+| `OCR_SERVE_REVIEW_CLI` | `codex` | CLI for reviews: `codex` or `claude`. |
+| `OCR_SERVE_FIX_CLI` | `claude` | CLI for fix runs: `claude` or `codex`. Checked now, not used yet. |
+| `OCR_SERVE_CODEX_BIN` | `codex` | Name on `PATH` or absolute path. The Komodo stack sets the mounted binary. |
+| `OCR_SERVE_CLAUDE_BIN` | `claude` | Same. |
+| `OCR_SERVE_CODEX_MODEL` | empty | Codex `-m`; empty uses the account default. |
+| `OCR_SERVE_CODEX_EFFORT` | empty | Codex `model_reasoning_effort`, for example `medium`. |
+| `OCR_SERVE_CLAUDE_MODEL` | empty | Claude `--model`; empty uses the `model` of the settings file. |
+| `OCR_SERVE_SKILL_DIR` | | Required with `cli`. Absolute path of the directory that holds `skills/ak-review-pr/SKILL.md` and its `references/`. |
+| `OCR_SERVE_CLI_HOME` | `$OCR_SERVE_DATA_DIR/cli-home` | Directory the service owns. Each run gets `run-<id>/` in it, removed when the run ends; leftovers are removed at startup. |
+| `OCR_SERVE_CODEX_AUTH` | | Required with `codex`. The host `~/.codex/auth.json`. Each run's `CODEX_HOME` links `auth.json` to it; nothing else of the host `~/.codex` is used. Mount it read-write so a token refresh reaches the host file. |
+| `OCR_SERVE_CLAUDE_SETTINGS` | | Required with `claude`. The host `~/.claude/settings.json`. Each run's `CLAUDE_CONFIG_DIR` gets a `settings.json` with only its `env` and `model` keys, never hooks or permissions. |
+
+At startup the service checks that the review CLI binary, the skill file and
+the CLI credential file can be read, and stops with the variable name when
+one cannot. How each CLI runs:
+
+- Codex: `codex exec --json --ephemeral --sandbox read-only` in the checkout,
+  with `project_doc_max_bytes=0` so the checkout's `AGENTS.md`, which the PR
+  author controls, is not loaded, and the answer schema passed with
+  `--output-schema`.
+- Claude: `claude -p --output-format json` with only the `Read`, `Grep` and
+  `Glob` tools, `--setting-sources user` and `--strict-mcp-config` so the
+  checkout's settings and MCP servers are not loaded, and `--add-dir` for the
+  skill and run directories.
+- The CLI gets `PATH`, locale, time zone, CA and proxy variables, and `HOME`
+  and `TMPDIR` inside the run directory; none of the service secrets. It runs
+  in its own process group: when the review limit ends it gets SIGTERM, then
+  SIGKILL after 10 seconds, and whatever it started is killed when it exits.
+- One CLI process runs at a time when `OCR_SERVE_WORKERS=1`; set that for a
+  CLI engine that shares an account with other users.
+
+The Komodo stack mounts these host paths (each one is a stack variable):
+
+| Host path (default) | Container path | Mode |
+|---|---|---|
+| `/home/vtcm/.local/share/claude` (`OCR_HOST_CLAUDE_DIR`) | `/opt/claude` | read-only |
+| `/home/vtcm/.codex/packages/standalone` (`OCR_HOST_CODEX_DIR`) | `/opt/codex` | read-only |
+| `/home/vtcm/.codex/auth.json` (`OCR_HOST_CODEX_AUTH`) | `/opt/ocr-cli/codex-auth.json` | read-write |
+| `/home/vtcm/.claude/settings.json` (`OCR_HOST_CLAUDE_SETTINGS`) | `/opt/ocr-cli/claude-settings.json` | read-only |
+| `/home/vtcm/ocr-review/skills` (`OCR_HOST_SKILL_DIR`) | `/opt/ocr-skills` | read-only |
+
+`OCR_SERVE_CLAUDE_BIN` defaults to `/opt/claude/versions/2.1.322` and
+`OCR_SERVE_CODEX_BIN` to
+`/opt/codex/releases/0.163.0-x86_64-unknown-linux-musl/bin/codex`. When a CLI
+on the host updates and removes the old version, set the variable to the new
+path and redeploy. To switch the review CLI, set `OCR_SERVE_REVIEW_CLI` and
+redeploy.
+
 ### OCR settings
 
 - `config.json` (mounted at `/home/ocr/.opencodereview/config.json`) must set
@@ -173,7 +256,7 @@ At least one platform must be enabled; otherwise the service stops with
   instead, and leave `OCR_LLM_*` unset, because the environment wins over the
   file. Example: `"llm": {"url": "...", "auth_token": "...", "model": "...",
   "protocol": "openai", "extra_body": {"temperature": 1}}`. Keep the file mode
-  readable for uid 10001 only when it holds a token.
+  readable for uid 1000 only when it holds a token.
 - A private CA: mount the bundle and set `GIT_SSL_CAINFO` (git fetch) and
   `SSL_CERT_FILE` (API calls from the service) to it; see the commented lines
   in `compose.example.yml`.
