@@ -6,8 +6,11 @@
 #
 # The default review engine runs an agent CLI installed on the host. The
 # container runs as uid/gid 1000, the host user that owns those installs, and
-# mounts them read-only together with the review skill. The Codex auth.json
-# is mounted read-write so a token refresh reaches the host file. Volumes
+# mounts them read-only together with the review skill. The Codex and Claude
+# homes are mounted as directories, not single files: a CLI on the host that
+# saves a file by rename would leave a single-file mount on the old copy. The
+# Codex home is read-write so a token refresh reaches the host auth.json; the
+# service reads and writes only that file there. Volumes
 # created by an image older than the uid 1000 user belong to uid 10001; give
 # them to 1000 once before the first start (deploy/serve/README.md).
 #
@@ -73,8 +76,10 @@
 #                                    /home/vtcm/.local/share/claude.
 #   OCR_HOST_CODEX_DIR               Host Codex install; default
 #                                    /home/vtcm/.codex/packages/standalone.
-#   OCR_HOST_CODEX_AUTH              Default /home/vtcm/.codex/auth.json.
-#   OCR_HOST_CLAUDE_SETTINGS         Default /home/vtcm/.claude/settings.json.
+#   OCR_HOST_CODEX_HOME              Host Codex home holding auth.json;
+#                                    default /home/vtcm/.codex.
+#   OCR_HOST_CLAUDE_HOME             Host Claude config dir holding
+#                                    settings.json; default /home/vtcm/.claude.
 #   OCR_HOST_SKILL_DIR               Review skill tree holding
 #                                    skills/ak-review-pr/SKILL.md; default
 #                                    /home/vtcm/ocr-review/skills.
@@ -119,8 +124,8 @@ services:
       OCR_SERVE_CODEX_EFFORT: ${OCR_SERVE_CODEX_EFFORT:-}
       OCR_SERVE_CLAUDE_BIN: ${OCR_SERVE_CLAUDE_BIN:-/opt/claude/versions/2.1.322}
       OCR_SERVE_CODEX_BIN: ${OCR_SERVE_CODEX_BIN:-/opt/codex/releases/0.163.0-x86_64-unknown-linux-musl/bin/codex}
-      OCR_SERVE_CODEX_AUTH: /opt/ocr-cli/codex-auth.json
-      OCR_SERVE_CLAUDE_SETTINGS: /opt/ocr-cli/claude-settings.json
+      OCR_SERVE_CODEX_AUTH: /opt/codex-home/auth.json
+      OCR_SERVE_CLAUDE_SETTINGS: /opt/claude-home/settings.json
       OCR_SERVE_SKILL_DIR: /opt/ocr-skills
       OCR_LLM_URL: ${OCR_LLM_URL:?set in the Komodo stack environment}
       OCR_LLM_TOKEN: ${OCR_LLM_TOKEN:?set in the Komodo stack environment}
@@ -137,8 +142,8 @@ services:
       - ocr-work:/work
       - ${OCR_HOST_CLAUDE_DIR:-/home/vtcm/.local/share/claude}:/opt/claude:ro
       - ${OCR_HOST_CODEX_DIR:-/home/vtcm/.codex/packages/standalone}:/opt/codex:ro
-      - ${OCR_HOST_CODEX_AUTH:-/home/vtcm/.codex/auth.json}:/opt/ocr-cli/codex-auth.json
-      - ${OCR_HOST_CLAUDE_SETTINGS:-/home/vtcm/.claude/settings.json}:/opt/ocr-cli/claude-settings.json:ro
+      - ${OCR_HOST_CODEX_HOME:-/home/vtcm/.codex}:/opt/codex-home
+      - ${OCR_HOST_CLAUDE_HOME:-/home/vtcm/.claude}:/opt/claude-home:ro
       - ${OCR_HOST_SKILL_DIR:-/home/vtcm/ocr-review/skills}:/opt/ocr-skills:ro
     # The service drains for up to 60 seconds on SIGTERM; Docker's default of
     # 10 seconds would cut running reviews short on every restart.

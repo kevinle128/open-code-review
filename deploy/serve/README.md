@@ -218,8 +218,8 @@ The Komodo stack mounts these host paths (each one is a stack variable):
 |---|---|---|
 | `/home/vtcm/.local/share/claude` (`OCR_HOST_CLAUDE_DIR`) | `/opt/claude` | read-only |
 | `/home/vtcm/.codex/packages/standalone` (`OCR_HOST_CODEX_DIR`) | `/opt/codex` | read-only |
-| `/home/vtcm/.codex/auth.json` (`OCR_HOST_CODEX_AUTH`) | `/opt/ocr-cli/codex-auth.json` | read-write |
-| `/home/vtcm/.claude/settings.json` (`OCR_HOST_CLAUDE_SETTINGS`) | `/opt/ocr-cli/claude-settings.json` | read-only |
+| `/home/vtcm/.codex` (`OCR_HOST_CODEX_HOME`) | `/opt/codex-home` | read-write; only `auth.json` is used |
+| `/home/vtcm/.claude` (`OCR_HOST_CLAUDE_HOME`) | `/opt/claude-home` | read-only; only the `env` and `model` keys of `settings.json` are used |
 | `/home/vtcm/ocr-review/skills` (`OCR_HOST_SKILL_DIR`) | `/opt/ocr-skills` | read-only |
 
 `OCR_SERVE_CLAUDE_BIN` defaults to `/opt/claude/versions/2.1.322` and
