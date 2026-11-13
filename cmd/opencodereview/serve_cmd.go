@@ -146,7 +146,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 		return err
 	}
 	srv, err := server.New(server.Deps{
-		Config: cfg, Forges: forges, Reviewer: serveReviewer{}, Workspaces: workspaces,
+		Config: cfg, Forges: forges, Reviewer: newServeReviewer(cfg), Workspaces: workspaces,
 		Locale: loc, Logger: log, Version: Version,
 	})
 	if err != nil {

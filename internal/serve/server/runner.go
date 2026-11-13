@@ -248,14 +248,25 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 		req.Effort = j.cmd.Effort
 	}
 	res, err := s.reviewer.Review(ctx, req)
+	// Logged before a failed run returns, so its cause is in the log too.
+	if len(res.Warnings) > 0 {
+		warnings := make([]string, len(res.Warnings))
+		for i, w := range res.Warnings {
+			warnings[i] = truncate(w, maxLoggedReason)
+		}
+		log.Warn("review warnings", "terminal", res.Terminal, "warnings", warnings)
+	}
+	logCoverage(log, res)
 	if err == nil && res.Terminal == review.TerminalFailed {
 		err = errors.New("review ended in the failed state")
 	}
 	if err != nil {
 		return s.runFailed(f, ref, st, a, j, "review", err, true, log)
 	}
-	if len(res.Warnings) > 0 {
-		log.Warn("review warnings", "terminal", res.Terminal, "warnings", res.Warnings)
+	// A full review diffs against the merge base, which differs from the
+	// base branch tip once that branch moves on.
+	if res.Base != "" && (kind == state.KindFull || kind == state.KindManualFull) {
+		from = res.Base
 	}
 
 	findings := s.findings(a, st.pr.HeadSHA, res.Findings)
@@ -280,7 +291,7 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 		ids[i] = fd.ID
 	}
 	next := state.Apply(st.marker, a, from, to, st.pr.BaseSHA, ids, limit)
-	line := ""
+	line := state.RenderCoverage(res.Coverage, s.loc)
 	if res.Terminal == review.TerminalSkipped {
 		line = s.loc.Text("summary.skipped")
 		if a.Kind == state.RunAuto {
@@ -297,10 +308,41 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 		s.unwait(ref, log)
 	}
 	log.Info("review done", "kind", kind, "from", from, "to", to, "terminal", res.Terminal,
-		"findings", len(findings), "posted", posted.Posted, "relocated", posted.Relocated,
-		"file_level", posted.FileLevel, "general", posted.General, "skipped", posted.Skipped, "open_threads", open)
+		"files", res.Coverage.Total, "reviewed_files", res.Coverage.Reviewed, "skipped_files", res.Coverage.Skipped,
+		"findings", len(findings),
+		"posted", posted.Posted, "relocated", posted.Relocated, "file_level", posted.FileLevel, "general", posted.General, "skipped", posted.Skipped, "open_threads", open)
 	s.commandDone(f, ref, j.cmd, len(findings), log)
 	return nil
+}
+
+// maxLoggedReason bounds each warning and failed file's error text in the
+// log; a large PR can fail many files with the same long provider error.
+const maxLoggedReason = 300
+
+// logCoverage names each file a run could not review, with its failure
+// class and error text, so a partial or failed run can be explained.
+func logCoverage(log *slog.Logger, res review.Result) {
+	c := res.Coverage
+	if len(c.Failed) == 0 {
+		return
+	}
+	items := make([]string, len(c.Failed))
+	for i, it := range c.Failed {
+		name := it.Path
+		if it.OldPath != "" && it.OldPath != it.Path {
+			name = it.OldPath + " -> " + it.Path
+		}
+		items[i] = name + " (" + it.Class + "): " + truncate(it.Reason, maxLoggedReason)
+	}
+	log.Warn("review coverage incomplete", "terminal", res.Terminal, "files", c.Total,
+		"reviewed_files", c.Reviewed, "failed_files", len(c.Failed), "failed", items)
+}
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "..."
+	}
+	return s
 }
 
 // projectRule reads rule.json, and the rule files it names, at the base SHA

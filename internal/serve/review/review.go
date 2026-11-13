@@ -39,11 +39,35 @@ const (
 	TerminalFailed   = "failed"
 )
 
-// Result is the outcome of a review run.
+// Result is the outcome of a review run. Base is the commit the diff was
+// taken against: for a range review the merge base of From and To, not
+// From itself. It is empty when the run did not resolve one.
 type Result struct {
 	Findings []model.LlmComment
 	Terminal string
 	Warnings []string
+	Coverage Coverage
+	Base     string
+}
+
+// Coverage counts the files a run selected for review, after filtering, and
+// the ones it finished. Failed lists the files it could not review. Skipped
+// counts the changed files the filters left out, by exclude reason.
+type Coverage struct {
+	Total    int
+	Reviewed int
+	Failed   []FailedItem
+	Skipped  map[string]int
+}
+
+// FailedItem is a file the run could not review. Class is a
+// session.FailureClass value such as "timeout" or "provider". Reason is the
+// redacted error text, for logs only: it can name internal endpoints.
+type FailedItem struct {
+	Path    string
+	OldPath string
+	Class   string
+	Reason  string
 }
 
 // Reviewer runs OCR on a checkout.

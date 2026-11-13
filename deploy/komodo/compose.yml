@@ -1,0 +1,118 @@
+# Compose stack for `ocr serve` on Komodo. Komodo clones this repository,
+# writes the stack environment to .env next to this file, then runs
+# `docker compose build` and `docker compose up -d`. No host file is needed:
+# every setting comes from the stack environment, and the OCR config.json is
+# generated inline. Needs Docker Compose 2.23.1 or later (inline config
+# `content`).
+#
+# Stack environment. [[NAME]] is a secret Komodo Variable; keep secrets there,
+# not in the stack text. Variables marked "required" stop `compose config`
+# when empty. See deploy/serve/README.md for every service variable.
+#
+#   OCR_LLM_URL                      required. OpenAI-compatible base URL;
+#                                    /chat/completions is appended.
+#   OCR_LLM_TOKEN                    required, secret: [[OCR_LLM_TOKEN]].
+#   OCR_LLM_MODEL                    required. Model name.
+#   OCR_LLM_PROTOCOL                 default openai.
+#   OCR_LANGUAGE                     default Vietnamese. Review output language,
+#                                    written into a JSON string: no quotes or
+#                                    backslashes.
+#
+#   GitHub App (set OCR_SERVE_GITHUB_APP_ID to enable; the other two are then
+#   required by the service):
+#   OCR_SERVE_GITHUB_APP_ID          App ID.
+#   OCR_SERVE_GITHUB_PRIVATE_KEY     secret: [[OCR_SERVE_GITHUB_PRIVATE_KEY]].
+#                                    PEM on one line with literal \n escapes.
+#   OCR_SERVE_GITHUB_WEBHOOK_SECRET  secret: [[OCR_SERVE_GITHUB_WEBHOOK_SECRET]].
+#
+#   GitLab (set OCR_SERVE_GITLAB_URL to enable; the other two are then
+#   required by the service):
+#   OCR_SERVE_GITLAB_URL             For example https://git.example.com.
+#   OCR_SERVE_GITLAB_TOKEN           secret: [[OCR_SERVE_GITLAB_TOKEN]]. Bot user token.
+#   OCR_SERVE_GITLAB_WEBHOOK_SECRET  secret: [[OCR_SERVE_GITLAB_WEBHOOK_SECRET]].
+#
+#   At least one platform must be enabled; the service stops otherwise.
+#
+#   Optional; empty means the service default:
+#   OCR_SERVE_IGNORE_AUTHORS         Comma-separated RE2 patterns.
+#   OCR_SERVE_MAX_ROUNDS             Default 3, 1..10.
+#   OCR_SERVE_REVIEW_TIMEOUT         Default 2h.
+#   OCR_SERVE_POLL_INTERVAL          Default 2m.
+#   OCR_SERVE_WORKERS                Default 2, 1..16.
+#   OCR_SERVE_REVIEW_CONCURRENCY     LLM subtasks per review at the same time;
+#                                    default 5, 1..32.
+#   OCR_SERVE_BUNDLE_LINES           Changed lines under which a PR with few
+#                                    files is reviewed as one group; default
+#                                    300, 50..5000.
+#   OCR_SERVE_EXCLUDE                Comma-separated globs added to the serve
+#                                    file filter (deploy/serve/README.md).
+#   OCR_LLM_TIMEOUT                  Seconds per LLM request; default 300.
+#                                    The stack sets 900.
+#   OCR_VERSION, OCR_GIT_COMMIT, OCR_BUILD_DATE
+#                                    Build labels shown by /healthz.
+name: ocr-review
+
+services:
+  ocr-review:
+    build:
+      context: ../..
+      dockerfile: deploy/serve/Dockerfile
+      args:
+        VERSION: ${OCR_VERSION:-dev}
+        GIT_COMMIT: ${OCR_GIT_COMMIT:-}
+        BUILD_DATE: ${OCR_BUILD_DATE:-}
+    image: ocr-serve:komodo
+    # The image is built here and exists on no registry, so `compose pull` must skip it.
+    pull_policy: never
+    container_name: ocr-review
+    restart: unless-stopped
+    environment:
+      OCR_SERVE_ADDR: 0.0.0.0:3012
+      OCR_SERVE_GITHUB_APP_ID: ${OCR_SERVE_GITHUB_APP_ID:-}
+      OCR_SERVE_GITHUB_PRIVATE_KEY: ${OCR_SERVE_GITHUB_PRIVATE_KEY:-}
+      OCR_SERVE_GITHUB_WEBHOOK_SECRET: ${OCR_SERVE_GITHUB_WEBHOOK_SECRET:-}
+      OCR_SERVE_GITLAB_URL: ${OCR_SERVE_GITLAB_URL:-}
+      OCR_SERVE_GITLAB_TOKEN: ${OCR_SERVE_GITLAB_TOKEN:-}
+      OCR_SERVE_GITLAB_WEBHOOK_SECRET: ${OCR_SERVE_GITLAB_WEBHOOK_SECRET:-}
+      OCR_SERVE_IGNORE_AUTHORS: ${OCR_SERVE_IGNORE_AUTHORS:-}
+      OCR_SERVE_MAX_ROUNDS: ${OCR_SERVE_MAX_ROUNDS:-}
+      OCR_SERVE_REVIEW_TIMEOUT: ${OCR_SERVE_REVIEW_TIMEOUT:-}
+      OCR_SERVE_POLL_INTERVAL: ${OCR_SERVE_POLL_INTERVAL:-}
+      OCR_SERVE_WORKERS: ${OCR_SERVE_WORKERS:-}
+      OCR_SERVE_REVIEW_CONCURRENCY: ${OCR_SERVE_REVIEW_CONCURRENCY:-}
+      OCR_SERVE_BUNDLE_LINES: ${OCR_SERVE_BUNDLE_LINES:-}
+      OCR_SERVE_EXCLUDE: ${OCR_SERVE_EXCLUDE:-}
+      OCR_LLM_URL: ${OCR_LLM_URL:?set in the Komodo stack environment}
+      OCR_LLM_TOKEN: ${OCR_LLM_TOKEN:?set in the Komodo stack environment}
+      OCR_LLM_MODEL: ${OCR_LLM_MODEL:?set in the Komodo stack environment}
+      OCR_LLM_PROTOCOL: ${OCR_LLM_PROTOCOL:-openai}
+      OCR_LLM_TIMEOUT: ${OCR_LLM_TIMEOUT:-}
+    configs:
+      - source: ocr-config
+        target: /home/ocr/.opencodereview/config.json
+    ports:
+      - "127.0.0.1:3012:3012"
+    volumes:
+      - ocr-data:/data
+      - ocr-work:/work
+    # The service drains for up to 60 seconds on SIGTERM; Docker's default of
+    # 10 seconds would cut running reviews short on every restart.
+    stop_grace_period: 75s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+configs:
+  ocr-config:
+    content: |
+      {"language": "${OCR_LANGUAGE:-Vietnamese}"}
+
+# Fixed names keep the volumes of the earlier hand-run deploy, whatever
+# project name Komodo passes to compose.
+volumes:
+  ocr-data:
+    name: ocr-review_ocr-data
+  ocr-work:
+    name: ocr-review_ocr-work

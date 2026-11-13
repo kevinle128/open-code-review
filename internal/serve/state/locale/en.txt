@@ -29,6 +29,20 @@ summary.runs_header = | Run | Type | Range | Findings |
 summary.hint = Resolve every finding thread before merging. Commands: `/review` (full review), `/review-commit` (latest commit only).
 summary.skipped = The last review found no reviewable change (for example, every changed file is excluded) and did not count as a round.
 
+coverage.complete = Files reviewed: {reviewed}/{total}.
+coverage.partial = ⚠️ The last review was partial: reviewed {reviewed}/{total} files. These files were not reviewed:
+coverage.more = and {count} more (see the service log)
+coverage.retry = Comment `/review` to review again.
+
+failure.provider = the LLM provider returned an error
+failure.timeout = the review of this file timed out
+failure.cancelled = the review was cancelled
+failure.configuration = configuration error
+failure.input = the file could not be read or is too large
+failure.budget = the review budget ran out
+failure.panic = internal error
+failure.unknown = unknown error
+
 run.auto = Round {n}
 run.manual = Manual
 run.kind.full = full

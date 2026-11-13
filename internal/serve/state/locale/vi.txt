@@ -28,6 +28,20 @@ summary.runs_header = | Lần chạy | Loại | Phạm vi | Vấn đề |
 summary.hint = Hãy resolve mọi thread trước khi merge. Lệnh: `/review` (review toàn bộ), `/review-commit` (chỉ commit mới nhất).
 summary.skipped = Lần review gần nhất không có thay đổi nào cần review (ví dụ mọi file thay đổi đều bị loại trừ) và không tính là một vòng.
 
+coverage.complete = Số file đã review: {reviewed}/{total}.
+coverage.partial = ⚠️ Lần review gần nhất chưa đầy đủ: đã review {reviewed}/{total} file. Các file sau chưa được review:
+coverage.more = và {count} file khác (xem log của dịch vụ)
+coverage.retry = Bình luận `/review` để review lại.
+
+failure.provider = nhà cung cấp LLM trả về lỗi
+failure.timeout = review file này bị quá thời gian
+failure.cancelled = review bị hủy
+failure.configuration = lỗi cấu hình
+failure.input = không đọc được file hoặc file quá lớn
+failure.budget = đã hết ngân sách review
+failure.panic = lỗi nội bộ
+failure.unknown = lỗi không xác định
+
 run.auto = Vòng {n}
 run.manual = Thủ công
 run.kind.full = toàn bộ

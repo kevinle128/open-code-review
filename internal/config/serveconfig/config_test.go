@@ -71,13 +71,14 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &Config{
-		Addr: DefaultAddr, MaxRounds: 3, PollInterval: 2 * time.Minute, ReviewTimeout: 30 * time.Minute,
+		Addr: DefaultAddr, MaxRounds: 3, PollInterval: 2 * time.Minute, ReviewTimeout: 2 * time.Hour,
 		Workers: 2, MaxBodyBytes: 10485760, DataDir: "/data", WorkDir: "/work", BotIndicators: []string{"bot"},
+		Exclude: DefaultExcludes, ReviewConcurrency: 5, BundleLines: 300,
 	}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v\nwant %+v", c, want)
 	}
-	if got := c.RepoDefaults(); !reflect.DeepEqual(got, RepoConfig{Enabled: true, MaxRounds: 3}) {
+	if got := c.RepoDefaults(); !reflect.DeepEqual(got, RepoConfig{Enabled: true, MaxRounds: 3, Exclude: DefaultExcludes}) {
 		t.Fatalf("repo defaults %+v", got)
 	}
 }
@@ -93,8 +94,9 @@ func TestLoad_NilFuncsUseProcessEnv(t *testing.T) {
 func TestLoad_Overrides(t *testing.T) {
 	testKeys(t)
 	c, err := Load(env(map[string]string{
-		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvPollInterval: "30s", EnvReviewTimeout: "1h",
+		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvPollInterval: "30s", EnvReviewTimeout: "3h",
 		EnvWorkers: "4", EnvMaxBodyBytes: "2048", EnvDataDir: "/d", EnvWorkDir: "/w",
+		EnvReviewConcurrency: "12", EnvBundleLines: "450",
 		EnvIgnoreRepos: "^infra/, sandbox$", EnvIgnoreAuthors: "renovate", EnvIgnoreTitles: `(?i)^\[wip\]`,
 		EnvIgnoreSourceBranch: "^release/", EnvIgnoreTargetBranch: "^gh-pages$", EnvIgnoreLabels: "no-review, skip ocr",
 		EnvBotIndicators: "Bot, Automation",
@@ -106,8 +108,9 @@ func TestLoad_Overrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.PollInterval != 30*time.Second || c.ReviewTimeout != time.Hour ||
-		c.Workers != 4 || c.MaxBodyBytes != 2048 || c.DataDir != "/d" || c.WorkDir != "/w" {
+	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.PollInterval != 30*time.Second || c.ReviewTimeout != 3*time.Hour ||
+		c.Workers != 4 || c.MaxBodyBytes != 2048 || c.DataDir != "/d" || c.WorkDir != "/w" ||
+		c.ReviewConcurrency != 12 || c.BundleLines != 450 {
 		t.Fatalf("scalars %+v", c)
 	}
 	if len(c.Ignore.Repos) != 2 || c.Ignore.Repos[1].String() != "sandbox$" || len(c.Ignore.Titles) != 1 ||
@@ -139,6 +142,34 @@ func TestLoad_GitHubPKCS8Key(t *testing.T) {
 	}
 }
 
+// A key passed through a stack environment or a .env line arrives on one line
+// with literal "\n" escapes; a key with real newlines must pass unchanged.
+func TestLoad_GitHubKeyNewlineForms(t *testing.T) {
+	testKeys(t)
+	oneLine := strings.ReplaceAll(strings.TrimSpace(pkcs1PEM), "\n", `\n`)
+	if strings.Contains(oneLine, "\n") {
+		t.Fatal("escaped key still has a real newline")
+	}
+	for name, raw := range map[string]string{"escaped one line": oneLine, "real newlines": pkcs1PEM} {
+		t.Run(name, func(t *testing.T) {
+			c, err := Load(env(map[string]string{EnvGitHubAppID: "1", EnvGitHubPrivateKey: raw, EnvGitHubWebhookSecret: "s"}), files(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(c.GitHub.PrivateKeyPEM); got != strings.TrimSpace(pkcs1PEM) {
+				t.Fatalf("key changed:\n%s", got)
+			}
+		})
+	}
+}
+
+func TestUnescapePEM_KeepsBackslashWhenRealNewlinePresent(t *testing.T) {
+	in := "line one\nliteral \\n stays"
+	if got := unescapePEM(in); got != in {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestLoad_InvalidValues(t *testing.T) {
 	testKeys(t)
 	cases := []struct {
@@ -150,11 +181,17 @@ func TestLoad_InvalidValues(t *testing.T) {
 		{"rounds zero", map[string]string{EnvMaxRounds: "0"}, EnvMaxRounds},
 		{"rounds not a number", map[string]string{EnvMaxRounds: "three"}, EnvMaxRounds},
 		{"workers too high", map[string]string{EnvWorkers: "17"}, EnvWorkers},
+		{"review concurrency zero", map[string]string{EnvReviewConcurrency: "0"}, EnvReviewConcurrency},
+		{"review concurrency too high", map[string]string{EnvReviewConcurrency: "33"}, EnvReviewConcurrency},
+		{"review concurrency not a number", map[string]string{EnvReviewConcurrency: "five"}, EnvReviewConcurrency},
+		{"bundle lines too low", map[string]string{EnvBundleLines: "49"}, EnvBundleLines},
+		{"bundle lines too high", map[string]string{EnvBundleLines: "5001"}, EnvBundleLines},
 		{"body bytes zero", map[string]string{EnvMaxBodyBytes: "0"}, EnvMaxBodyBytes},
 		{"poll negative", map[string]string{EnvPollInterval: "-1m"}, EnvPollInterval},
 		{"timeout zero", map[string]string{EnvReviewTimeout: "0s"}, EnvReviewTimeout},
 		{"timeout garbage", map[string]string{EnvReviewTimeout: "soon"}, EnvReviewTimeout},
 		{"bad regex", map[string]string{EnvIgnoreTitles: "([a-"}, EnvIgnoreTitles},
+		{"bad exclude glob", map[string]string{EnvExclude: "a/**, b/[x"}, EnvExclude},
 		{"github app id", map[string]string{EnvGitHubAppID: "abc", EnvGitHubPrivateKey: pkcs1PEM, EnvGitHubWebhookSecret: "s"}, EnvGitHubAppID},
 		{"github missing key", map[string]string{EnvGitHubAppID: "1", EnvGitHubWebhookSecret: "s"}, EnvGitHubPrivateKey},
 		{"github missing secret", map[string]string{EnvGitHubAppID: "1", EnvGitHubPrivateKey: pkcs1PEM}, EnvGitHubWebhookSecret},
@@ -247,5 +284,16 @@ func TestSecretFileReadError(t *testing.T) {
 		func(string) ([]byte, error) { return nil, boom })
 	if !errors.Is(err, boom) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestLoad_ReviewLimitBounds(t *testing.T) {
+	c, err := Load(env(map[string]string{EnvReviewConcurrency: "32", EnvBundleLines: "50"}), files(nil))
+	if err != nil || c.ReviewConcurrency != 32 || c.BundleLines != 50 {
+		t.Fatalf("upper concurrency, lower bundle: c=%+v err=%v", c, err)
+	}
+	c, err = Load(env(map[string]string{EnvReviewConcurrency: "1", EnvBundleLines: "5000"}), files(nil))
+	if err != nil || c.ReviewConcurrency != 1 || c.BundleLines != 5000 {
+		t.Fatalf("lower concurrency, upper bundle: c=%+v err=%v", c, err)
 	}
 }

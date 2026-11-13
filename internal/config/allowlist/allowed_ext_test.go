@@ -6,9 +6,48 @@ package allowedext
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestTestPatternsAreDefaultExcludes(t *testing.T) {
+	var all []string
+	if err := json.Unmarshal(excludeData, &all); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range testPatterns {
+		if !slices.Contains(all, p) {
+			t.Errorf("test pattern %q is not in default_exclude_patterns.json", p)
+		}
+	}
+}
+
+func TestIsExcludedNonTestPath(t *testing.T) {
+	reviewed := []string{
+		"pkg/foo_test.go", "web/a.spec.ts", "web/a.test.js", "web/__tests__/a.js",
+		"app/test_x.py", "app/x_test.py", "src/FooTest.java", "src/test/java/a/B.java",
+		"spec/models/user_spec.rb", "Tests/AppTests.swift", "contracts/test/A.t.sol",
+	}
+	for _, p := range reviewed {
+		if !IsExcludedPath(p) {
+			t.Errorf("%s: the CLI default must still exclude it", p)
+		}
+		if IsExcludedNonTestPath(p) {
+			t.Errorf("%s: a test file must be reviewable without the test patterns", p)
+		}
+	}
+	skipped := []string{
+		"pkg/testdata/x.go", "pkg/testdata/x_test.go", "web/fixtures/a.json", "web/__snapshots__/a.snap",
+		"ui/a.snap", "node_modules/x/index.js", "vendor/a/b.go", "dist/app.js", "api/a.pb.go",
+		"web/a.generated.ts", "target/x.java", "lib/forge-std/Test.sol",
+	}
+	for _, p := range skipped {
+		if !IsExcludedNonTestPath(p) {
+			t.Errorf("%s: only test patterns may be dropped", p)
+		}
+	}
+}
 
 func TestIsAllowedExt(t *testing.T) {
 	tests := []struct {

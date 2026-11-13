@@ -234,6 +234,29 @@ func TestReviewErrorKeepsMarkerAndAnswersCommand(t *testing.T) {
 	}
 }
 
+func TestRunPostsPendingLineBeforeReviewWithRunDeadline(t *testing.T) {
+	h := newHarness(t, func(c *serveconfig.Config) { c.ReviewTimeout = serveconfig.DefaultReviewTimeout })
+	ref := ghRef(5)
+	h.gh.setPR(openPR(ref, sha1))
+	var sawPending bool
+	var left time.Duration
+	h.rev.set(func(ctx context.Context, _ review.Request) (review.Result, error) {
+		sawPending = strings.Contains(h.gh.summary(ref), h.loc.Text("pending.round", "round", "1", "max", "3"))
+		if dl, ok := ctx.Deadline(); ok {
+			left = time.Until(dl)
+		}
+		return review.Result{Terminal: review.TerminalComplete}, nil
+	})
+
+	h.auto(ref, state.TriggerOpened)
+	if !sawPending {
+		t.Fatal("the in-progress line must be in the summary before the review starts")
+	}
+	if want := serveconfig.DefaultReviewTimeout; left <= want-time.Minute || left > want {
+		t.Fatalf("review deadline in %v, want about %v", left, want)
+	}
+}
+
 func TestHeadMovedDuringFetch(t *testing.T) {
 	h := newHarness(t)
 	ref := ghRef(4)
@@ -299,6 +322,24 @@ func TestRepoConfigReadAtBase(t *testing.T) {
 	h.command(ref, "/review --effort=high", "c1")
 	if r := h.rev.requests(); r[1].Effort != "high" {
 		t.Fatalf("command effort must win: %+v", r[1])
+	}
+}
+
+func TestServiceExcludesThenRepoExcludes(t *testing.T) {
+	h := newHarness(t, func(c *serveconfig.Config) { c.Exclude = []string{"**/*.html", "gen/**"} })
+	ref := ghRef(33)
+	h.gh.setPR(openPR(ref, sha1))
+	h.gh.files[shaBase+":.opencodereview/serve.json"] = []byte(`{"exclude":["**/*_test.go"]}`)
+	h.rev.set(func(context.Context, review.Request) (review.Result, error) {
+		return review.Result{Terminal: review.TerminalComplete,
+			Coverage: review.Coverage{Total: 2, Reviewed: 2, Skipped: map[string]int{"user_exclude": 3, "large_data": 1}}}, nil
+	})
+	h.auto(ref, state.TriggerOpened)
+	if got := h.rev.requests()[0].Excludes; strings.Join(got, ",") != "**/*.html,gen/**,**/*_test.go" {
+		t.Fatalf("excludes = %v", got)
+	}
+	if !strings.Contains(h.logs.String(), `"skipped_files":{"large_data":1,"user_exclude":3}`) {
+		t.Fatalf("skipped counts not logged:\n%s", h.logs.String())
 	}
 }
 
@@ -873,5 +914,98 @@ func TestStoreWriteFailureIsLogged(t *testing.T) {
 	h.auto(ref, state.TriggerPush)
 	if strings.Count(h.logs.String(), `"msg":"update waiting store"`) != 2 {
 		t.Fatalf("store errors not logged:\n%s", h.logs.String())
+	}
+}
+
+func TestPartialRunReportsCoverage(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(30)
+	h.gh.setPR(openPR(ref, sha1))
+	cov := review.Coverage{Total: 3, Reviewed: 2, Failed: []review.FailedItem{
+		{Path: "b.go", Class: "timeout", Reason: "LLM request timed out " + strings.Repeat("x", 400)},
+	}}
+	h.rev.set(func(context.Context, review.Request) (review.Result, error) {
+		return review.Result{Findings: []model.LlmComment{comment("a.go", 1)}, Terminal: review.TerminalPartial, Coverage: cov}, nil
+	})
+	h.command(ref, "/review", "c1")
+
+	mustContain(t, h.gh.summary(ref), state.RenderCoverage(cov, h.loc))
+	logs := h.logs.String()
+	line := ""
+	for l := range strings.Lines(logs) {
+		if strings.Contains(l, "review coverage incomplete") {
+			line = l
+		}
+	}
+	for _, want := range []string{`"level":"WARN"`, `"files":3`, `"reviewed_files":2`, `"failed_files":1`, `b.go (timeout): LLM request timed out`} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("coverage line missing %q:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(line, strings.Repeat("x", 300)) {
+		t.Fatalf("reason not truncated:\n%s", line)
+	}
+	if !strings.Contains(logs, `"reviewed_files":2`) || !h.logs.has("review done") {
+		t.Fatalf("review done line lacks coverage:\n%s", logs)
+	}
+
+	h.gh.push(ref, sha2)
+	h.rev.set(func(context.Context, review.Request) (review.Result, error) {
+		return review.Result{Terminal: review.TerminalComplete, Coverage: review.Coverage{Total: 3, Reviewed: 3}}, nil
+	})
+	h.command(ref, "/review", "c2")
+	sum := h.gh.summary(ref)
+	if strings.Contains(sum, "b.go") {
+		t.Fatalf("a complete run must clear the partial list:\n%s", sum)
+	}
+	mustContain(t, sum, h.loc.Text("coverage.complete", "reviewed", "3", "total", "3"))
+}
+
+func TestFailedRunLogsCoverageAndWarnings(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(31)
+	h.gh.setPR(openPR(ref, sha1))
+	h.rev.set(func(context.Context, review.Request) (review.Result, error) {
+		return review.Result{Terminal: review.TerminalFailed, Warnings: []string{"a.go: context deadline exceeded"},
+			Coverage: review.Coverage{Total: 2, Failed: []review.FailedItem{
+				{Path: "a.go", Class: "provider", Reason: "provider or subtask request failed"},
+				{Path: "new.go", OldPath: "old.go", Class: "timeout"},
+			}}}, nil
+	})
+	h.auto(ref, state.TriggerOpened)
+	logs := h.logs.String()
+	for _, want := range []string{"review coverage incomplete", "a.go (provider)", "old.go -> new.go (timeout)", "context deadline exceeded", "review run failed"} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("missing %q:\n%s", want, logs)
+		}
+	}
+}
+
+func TestFullRunRangeShowsMergeBase(t *testing.T) {
+	mergeBase := strings.Repeat("b", 40)
+	withBase := func(context.Context, review.Request) (review.Result, error) {
+		return review.Result{Terminal: review.TerminalComplete, Base: mergeBase}, nil
+	}
+
+	h := newHarness(t)
+	ref := ghRef(32)
+	h.gh.setPR(openPR(ref, sha1))
+	h.rev.set(withBase)
+	h.auto(ref, state.TriggerOpened)
+	m := h.gh.marker(t, ref)
+	if m.Runs[0].Kind != state.KindFull || m.Runs[0].From != mergeBase || m.Base != shaBase {
+		t.Fatalf("full round %+v", m)
+	}
+	mustContain(t, h.gh.summary(ref), "`bbbbbbb...1111111`")
+
+	h.gh.push(ref, sha2)
+	h.auto(ref, state.TriggerPush)
+	if m := h.gh.marker(t, ref); m.Runs[1].Kind != state.KindIncremental || m.Runs[1].From != sha1 {
+		t.Fatalf("incremental round must keep its range: %+v", m)
+	}
+
+	h.command(ref, "/review", "c1")
+	if m := h.gh.marker(t, ref); m.Runs[2].Kind != state.KindManualFull || m.Runs[2].From != mergeBase {
+		t.Fatalf("manual full review %+v", m)
 	}
 }

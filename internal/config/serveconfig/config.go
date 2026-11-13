@@ -14,9 +14,12 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // Environment variable names.
@@ -26,11 +29,14 @@ const (
 	EnvPollInterval        = "OCR_SERVE_POLL_INTERVAL"
 	EnvWorkers             = "OCR_SERVE_WORKERS"
 	EnvReviewTimeout       = "OCR_SERVE_REVIEW_TIMEOUT"
+	EnvReviewConcurrency   = "OCR_SERVE_REVIEW_CONCURRENCY"
+	EnvBundleLines         = "OCR_SERVE_BUNDLE_LINES"
 	EnvMaxBodyBytes        = "OCR_SERVE_MAX_BODY_BYTES"
 	EnvDataDir             = "OCR_SERVE_DATA_DIR"
 	EnvWorkDir             = "OCR_SERVE_WORK_DIR"
 	EnvIgnoreRepos         = "OCR_SERVE_IGNORE_REPOS"
 	EnvIgnoreAuthors       = "OCR_SERVE_IGNORE_AUTHORS"
+	EnvExclude             = "OCR_SERVE_EXCLUDE"
 	EnvIgnoreTitles        = "OCR_SERVE_IGNORE_TITLES"
 	EnvIgnoreSourceBranch  = "OCR_SERVE_IGNORE_SOURCE_BRANCHES"
 	EnvIgnoreTargetBranch  = "OCR_SERVE_IGNORE_TARGET_BRANCHES"
@@ -54,17 +60,28 @@ const (
 	DefaultMaxRounds     = 3
 	DefaultPollInterval  = 2 * time.Minute
 	DefaultWorkers       = 2
-	DefaultReviewTimeout = 30 * time.Minute
+	DefaultReviewTimeout = 2 * time.Hour
 	DefaultMaxBodyBytes  = 10 << 20
 	DefaultDataDir       = "/data"
 	DefaultWorkDir       = "/work"
 	DefaultGitHubAPIURL  = "https://api.github.com"
 
-	MinRounds        = 1
-	MaxRounds        = 10
-	MinWorkers       = 1
-	MaxWorkers       = 16
-	MaxBodyBytesHigh = 100 << 20
+	// DefaultReviewConcurrency is lower than the `ocr review` default of 8:
+	// several reviews run at the same time against one LLM endpoint.
+	DefaultReviewConcurrency = 5
+	// DefaultBundleLines is higher than the template value of 200, so more
+	// small PRs go to one review instead of one review per file.
+	DefaultBundleLines = 300
+
+	MinRounds            = 1
+	MaxRounds            = 10
+	MinWorkers           = 1
+	MaxWorkers           = 16
+	MaxBodyBytesHigh     = 100 << 20
+	MinReviewConcurrency = 1
+	MaxReviewConcurrency = 32
+	MinBundleLines       = 50
+	MaxBundleLines       = 5000
 )
 
 // Config is the global service configuration.
@@ -75,12 +92,21 @@ type Config struct {
 	ReviewTimeout time.Duration
 	Workers       int
 	MaxBodyBytes  int64
+	// ReviewConcurrency is the number of LLM subtasks one review runs at the
+	// same time.
+	ReviewConcurrency int
+	// BundleLines replaces the template GROUPING_BUNDLE_LINE_THRESHOLD for
+	// serve reviews: a change set with fewer files than the grouping minimum
+	// and fewer changed lines than this is reviewed as one group.
+	BundleLines   int
 	DataDir       string
 	WorkDir       string
 	Ignore        IgnoreRules
 	BotIndicators []string
-	GitHub        *GitHubConfig // nil = disabled
-	GitLab        *GitLabConfig // nil = disabled
+	Exclude       []string // DefaultExcludes, then OCR_SERVE_EXCLUDE
+
+	GitHub *GitHubConfig // nil = disabled
+	GitLab *GitLabConfig // nil = disabled
 }
 
 // GitHubConfig holds the GitHub App settings.
@@ -182,8 +208,11 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		ReviewTimeout: l.duration(EnvReviewTimeout, DefaultReviewTimeout),
 		Workers:       l.intIn(EnvWorkers, DefaultWorkers, MinWorkers, MaxWorkers),
 		MaxBodyBytes:  int64(l.intIn(EnvMaxBodyBytes, DefaultMaxBodyBytes, 1, MaxBodyBytesHigh)),
-		DataDir:       l.str(EnvDataDir, DefaultDataDir),
-		WorkDir:       l.str(EnvWorkDir, DefaultWorkDir),
+		ReviewConcurrency: l.intIn(EnvReviewConcurrency, DefaultReviewConcurrency,
+			MinReviewConcurrency, MaxReviewConcurrency),
+		BundleLines: l.intIn(EnvBundleLines, DefaultBundleLines, MinBundleLines, MaxBundleLines),
+		DataDir:     l.str(EnvDataDir, DefaultDataDir),
+		WorkDir:     l.str(EnvWorkDir, DefaultWorkDir),
 		Ignore: IgnoreRules{
 			Repos:          l.regexps(EnvIgnoreRepos),
 			Authors:        l.regexps(EnvIgnoreAuthors),
@@ -193,6 +222,7 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 			Labels:         splitList(getenv(EnvIgnoreLabels)),
 		},
 		BotIndicators: l.botIndicators(),
+		Exclude:       l.excludes(),
 	}
 	c.GitHub = l.github()
 	c.GitLab = l.gitlab()
@@ -278,6 +308,20 @@ func (l *loader) regexps(key string) []*regexp.Regexp {
 	return out
 }
 
+// excludes appends the comma-separated OCR_SERVE_EXCLUDE globs to the
+// defaults, so a glob cannot contain a comma.
+func (l *loader) excludes() []string {
+	out := slices.Clone(DefaultExcludes)
+	for _, g := range splitList(l.getenv(EnvExclude)) {
+		if !doublestar.ValidatePattern(g) {
+			l.fail("%s: invalid glob %q", EnvExclude, g)
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
 func (l *loader) botIndicators() []string {
 	raw := l.getenv(EnvBotIndicators)
 	if strings.TrimSpace(raw) == "" {
@@ -323,7 +367,7 @@ func (l *loader) github() *GitHubConfig {
 	}
 	g := &GitHubConfig{
 		AppID:         id,
-		PrivateKeyPEM: []byte(l.secret(EnvGitHubPrivateKey)),
+		PrivateKeyPEM: []byte(unescapePEM(l.secret(EnvGitHubPrivateKey))),
 		WebhookSecret: l.secret(EnvGitHubWebhookSecret),
 		APIURL:        l.baseURL(EnvGitHubAPIURL, DefaultGitHubAPIURL),
 	}
@@ -367,6 +411,17 @@ func (l *loader) baseURL(key, def string) string {
 	return strings.TrimRight(raw, "/")
 }
 
+// unescapePEM turns a key given on one line with literal "\n" escapes back
+// into PEM. Stack environments and .env lines cannot hold real newlines, so
+// that is the only way to pass the key without a file. A value that already
+// has a real newline is left as is.
+func unescapePEM(v string) string {
+	if strings.Contains(v, "\n") || !strings.Contains(v, `\n`) {
+		return v
+	}
+	return strings.ReplaceAll(v, `\n`, "\n")
+}
+
 // checkRSAKey fails early on a key the App JWT signer could not use.
 func checkRSAKey(pemBytes []byte) error {
 	block, _ := pem.Decode(pemBytes)
@@ -398,5 +453,5 @@ func splitList(raw string) []string {
 
 // RepoDefaults is the per-repository configuration before serve.json applies.
 func (c *Config) RepoDefaults() RepoConfig {
-	return RepoConfig{Enabled: true, MaxRounds: c.MaxRounds}
+	return RepoConfig{Enabled: true, MaxRounds: c.MaxRounds, Exclude: slices.Clone(c.Exclude)}
 }

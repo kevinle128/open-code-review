@@ -23,6 +23,9 @@ const (
 	ExcludeDeleted           ExcludeReason = "deleted"
 	ExcludeBinary            ExcludeReason = "binary"
 	ExcludeTooLarge          ExcludeReason = "too_large"
+	// ExcludeLargeData is a JSON or YAML file whose diff changes more lines
+	// than FileFilter.MaxDataChangedLines.
+	ExcludeLargeData ExcludeReason = "large_data"
 )
 
 // PreviewEntry is one file's preview record (mode-agnostic).
