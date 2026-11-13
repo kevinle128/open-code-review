@@ -25,7 +25,7 @@ RUN go build -trimpath \
     -ldflags "-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X main.BuildDate=${BUILD_DATE}" \
     -o /out/opencodereview ./cmd/opencodereview
 
-FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 # git runs every checkout and diff; ca-certificates verifies the forges and
 # the LLM and agent CLI endpoints; curl runs the health check. The Claude Code
 # binary needs glibc, which is why the runtime is Debian and not Alpine.

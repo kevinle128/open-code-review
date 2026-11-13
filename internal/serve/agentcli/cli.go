@@ -77,9 +77,11 @@ func (Codex) Name() string { return "codex" }
 // Exec implements CLI. The project_doc_max_bytes=0 override keeps codex
 // from loading the checkout's AGENTS.md, which the PR author controls.
 func (c Codex) Exec(ctx context.Context, inv Invocation) (string, error) {
-	if err := os.Symlink(c.AuthFile, filepath.Join(inv.Run.Home, "auth.json")); err != nil {
+	link := filepath.Join(inv.Run.Home, "auth.json")
+	if err := os.Symlink(c.AuthFile, link); err != nil {
 		return "", fmt.Errorf("link codex auth: %w", err)
 	}
+	defer syncAuthBack(link, c.AuthFile)
 	last := filepath.Join(inv.Run.Out, "last.json")
 	args := []string{"exec", "--json", "--skip-git-repo-check", "--ephemeral",
 		"--sandbox", "read-only", "-C", inv.RepoDir, "-o", last,
@@ -109,6 +111,25 @@ func (c Codex) Exec(ctx context.Context, inv Invocation) (string, error) {
 		return string(b), nil
 	}
 	return codexStreamMessage(p.Stdout)
+}
+
+// syncAuthBack writes a refreshed token back to the host auth file. Codex
+// can save auth.json by replacing the file, which turns the link into a
+// regular file that the run dir removal would delete. The host file is
+// written in place because it is a bind mount and cannot be replaced.
+func syncAuthBack(link, host string) {
+	fi, err := os.Lstat(link)
+	if err != nil || !fi.Mode().IsRegular() {
+		return
+	}
+	b, err := os.ReadFile(link)
+	if err != nil || len(bytes.TrimSpace(b)) == 0 || !json.Valid(b) {
+		return
+	}
+	if old, err := os.ReadFile(host); err == nil && bytes.Equal(old, b) {
+		return
+	}
+	_ = os.WriteFile(host, b, 0o600)
 }
 
 // codexStreamMessage returns the last agent message of a `codex exec --json`

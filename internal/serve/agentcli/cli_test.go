@@ -352,3 +352,38 @@ func TestTruncate(t *testing.T) {
 		t.Fatalf("truncate %q", got)
 	}
 }
+
+func TestSyncAuthBack(t *testing.T) {
+	dir := t.TempDir()
+	host := filepath.Join(dir, "host.json")
+	link := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(host, []byte(`{"v":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A link that is still a link leaves the host file alone.
+	if err := os.Symlink(host, link); err != nil {
+		t.Fatal(err)
+	}
+	syncAuthBack(link, host)
+	if b, _ := os.ReadFile(host); string(b) != `{"v":1}` {
+		t.Fatalf("host changed through a link: %s", b)
+	}
+	// A replaced file with a valid token is written back.
+	_ = os.Remove(link)
+	if err := os.WriteFile(link, []byte(`{"v":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncAuthBack(link, host)
+	if b, _ := os.ReadFile(host); string(b) != `{"v":2}` {
+		t.Fatalf("refreshed token not written back: %s", b)
+	}
+	// Invalid JSON and a missing file are ignored.
+	if err := os.WriteFile(link, []byte(`{broken`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncAuthBack(link, host)
+	syncAuthBack(filepath.Join(dir, "missing"), host)
+	if b, _ := os.ReadFile(host); string(b) != `{"v":2}` {
+		t.Fatalf("host overwritten by bad data: %s", b)
+	}
+}

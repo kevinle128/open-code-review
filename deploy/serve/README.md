@@ -13,7 +13,7 @@ block the merge.
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | Multi-stage image: static binary on Debian bookworm-slim with `git`, `ca-certificates`, `curl` (health check) and `tini` (PID 1), user `ocr` (uid/gid 1000), listens on `0.0.0.0:3012`. |
+| `Dockerfile` | Multi-stage image: static binary on Debian trixie-slim with `git`, `ca-certificates`, `curl` (health check) and `tini` (PID 1), user `ocr` (uid/gid 1000), listens on `0.0.0.0:3012`. |
 | `Dockerfile.dockerignore` | Keeps the build context to `go.mod`, `go.sum`, `cmd/` and `internal/`. |
 | `compose.example.yml` | Example service. Copy it to `compose.yml`; keep `.env`, `config.json` and `github-app.pem` next to it and out of git. |
 | `../komodo/compose.yml` | Komodo stack: every setting from the stack environment; the host agent CLIs and the review skill are mounted read-only. See [Komodo](#komodo). |
@@ -102,7 +102,7 @@ OCR_SERVE_CODEX_EFFORT=medium
   uid 10001, and the volumes they created still belong to that user, so the
   service cannot write `/data` or `/work` after the upgrade. Give them to uid
   1000 once, with the stack stopped:
-  `docker run --rm -v ocr-review_ocr-data:/data -v ocr-review_ocr-work:/work debian:bookworm-slim chown -R 1000:1000 /data /work`.
+  `docker run --rm -v ocr-review_ocr-data:/data -v ocr-review_ocr-work:/work debian:trixie-slim chown -R 1000:1000 /data /work`.
 - The container is `ocr-review` on `127.0.0.1:3012`. To register GitLab
   hooks, pass the admin token to that run only (see
   [GitLab hooks](#gitlab-hooks)):
