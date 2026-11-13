@@ -133,6 +133,10 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	}
 	log := server.NewLogger(env.logOut)
 
+	reviewer, err := buildServeReviewer(cfg, env.getenv)
+	if err != nil {
+		return fmt.Errorf("review engine %s: %w", cfg.Engine, err)
+	}
 	forges, err := buildServeForges(ctx, cfg, env.httpc)
 	if err != nil {
 		return err
@@ -146,7 +150,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 		return err
 	}
 	srv, err := server.New(server.Deps{
-		Config: cfg, Forges: forges, Reviewer: newServeReviewer(cfg), Workspaces: workspaces,
+		Config: cfg, Forges: forges, Reviewer: reviewer, Workspaces: workspaces,
 		Locale: loc, Logger: log, Version: Version,
 	})
 	if err != nil {
@@ -171,7 +175,8 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpSrv.Serve(ln) }()
-	log.Info("listening", "addr", ln.Addr().String(), "version", Version, "platforms", platformNames(forges))
+	log.Info("listening", "addr", ln.Addr().String(), "version", Version, "platforms", platformNames(forges),
+		"engine", engineName(cfg))
 	if env.ready != nil {
 		env.ready(ln.Addr().String())
 	}
@@ -244,6 +249,14 @@ func buildServeForges(ctx context.Context, cfg *serveconfig.Config, httpc *http.
 		forges[forge.GitLab] = gl
 	}
 	return forges, nil
+}
+
+// engineName names the review engine for the startup log.
+func engineName(cfg *serveconfig.Config) string {
+	if cfg.Engine == serveconfig.EngineCLI {
+		return cfg.Engine + "/" + cfg.CLI.ReviewCLI
+	}
+	return cfg.Engine
 }
 
 // serveRoutes serves the handler at the root and under servePathPrefix, so
