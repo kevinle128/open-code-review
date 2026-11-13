@@ -73,6 +73,12 @@ func TestLocale_EveryCategoryAndSeverityHasAKey(t *testing.T) {
 			t.Fatalf("run.kind.%s missing", k)
 		}
 	}
+	// The per-file failure classes of session.FailureClass.
+	for _, c := range []string{"provider", "timeout", "cancelled", "configuration", "input", "budget", "panic", "unknown"} {
+		if _, ok := en["failure."+c]; !ok {
+			t.Fatalf("failure.%s missing", c)
+		}
+	}
 }
 
 func TestLoadLocale_Errors(t *testing.T) {

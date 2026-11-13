@@ -98,7 +98,13 @@ func (serveReviewer) Review(ctx context.Context, req review.Request) (review.Res
 	res := review.Result{
 		Findings: comments,
 		Terminal: terminalState(manifest, runErr),
-		Warnings: warningTexts(warningsForOutput(ag.Warnings(), manifest)),
+		// Unlike `ocr review` JSON, the subtask errors stay: serve only logs
+		// warnings, and the manifest keeps a generic reason per file.
+		Warnings: warningTexts(ag.Warnings()),
+		Coverage: serveCoverage(manifest),
+	}
+	if manifest != nil {
+		res.Base = manifest.Input.ResolvedBase
 	}
 	if err := deleteServeSession(cc.RepoDir, ag.SessionID()); err != nil {
 		res.Warnings = append(res.Warnings, err.Error())
@@ -152,6 +158,25 @@ func terminalState(manifest *session.RunManifest, runErr error) string {
 	}
 	// `ocr review` publishes a run without a manifest as a success too.
 	return review.TerminalComplete
+}
+
+// serveCoverage reads the coverage counts and failed files from the
+// manifest. A serve review never resumes, so no file is waived.
+func serveCoverage(manifest *session.RunManifest) review.Coverage {
+	if manifest == nil {
+		return review.Coverage{}
+	}
+	cov := manifest.Coverage
+	out := review.Coverage{
+		Total:    len(cov.Selected),
+		Reviewed: len(cov.Completed) + len(cov.Reused),
+	}
+	for _, it := range cov.Failed {
+		out.Failed = append(out.Failed, review.FailedItem{
+			Path: it.Path, OldPath: it.OldPath, Class: string(it.Classification), Reason: it.Reason,
+		})
+	}
+	return out
 }
 
 func warningTexts(warnings []agent.AgentWarning) []string {

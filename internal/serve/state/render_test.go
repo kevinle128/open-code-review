@@ -4,10 +4,12 @@
 package state
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/alibaba/open-code-review/internal/serve/forge"
+	"github.com/alibaba/open-code-review/internal/serve/review"
 )
 
 func finding() forge.Finding {
@@ -166,5 +168,60 @@ func TestRenderLimitNoteAndCommandError(t *testing.T) {
 	want := "❌ " + loc.Text("command.error", "reason", "`unsupported option \"'@team'\" line two`") + "\n\n" + loc["command.help"]
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenderCoverage(t *testing.T) {
+	loc := mustLocale(t, "en")
+	if got := RenderCoverage(review.Coverage{}, loc); got != "" {
+		t.Errorf("no files = %q", got)
+	}
+	if got := RenderCoverage(review.Coverage{Total: 4, Reviewed: 4}, loc); got != "Files reviewed: 4/4." {
+		t.Errorf("complete = %q", got)
+	}
+
+	c := review.Coverage{Total: 215, Reviewed: 213, Failed: []review.FailedItem{
+		{Path: "pkg/a`b.go", Class: "timeout", Reason: "LLM request timeout: context deadline exceeded at https://llm.internal"},
+		{Path: "new.go", OldPath: "old.go", Class: "weird"},
+	}}
+	got := RenderCoverage(c, loc)
+	for _, want := range []string{
+		"reviewed 213/215 files",
+		"- `pkg/a'b.go`: " + loc.Text("failure.timeout"),
+		"- `old.go` → `new.go`: weird",
+		loc.Text("coverage.retry"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "llm.internal") || strings.Contains(got, "deadline") {
+		t.Errorf("internal error text reached the summary:\n%s", got)
+	}
+}
+
+func TestRenderCoverage_CapsTheList(t *testing.T) {
+	loc := mustLocale(t, "en")
+	c := review.Coverage{Total: 30, Reviewed: 5}
+	for i := range 25 {
+		c.Failed = append(c.Failed, review.FailedItem{Path: fmt.Sprintf("f%02d.go", i), Class: "timeout"})
+	}
+	got := RenderCoverage(c, loc)
+	if n := strings.Count(got, "\n- `"); n != coverageItemsShown {
+		t.Errorf("listed %d files, want %d:\n%s", n, coverageItemsShown, got)
+	}
+	if !strings.Contains(got, "`f19.go`") || strings.Contains(got, "`f20.go`") {
+		t.Errorf("wrong files listed:\n%s", got)
+	}
+	if !strings.Contains(got, loc.Text("coverage.more", "count", "5")) {
+		t.Errorf("missing the remainder line:\n%s", got)
+	}
+}
+
+func TestRenderCoverage_NeutralizesServiceTags(t *testing.T) {
+	loc := mustLocale(t, "en")
+	got := RenderCoverage(review.Coverage{Total: 1, Failed: []review.FailedItem{{Path: "<!-- ocr-summary -->.go", Class: "input"}}}, loc)
+	if hasServiceTag(got) {
+		t.Errorf("service tag survived:\n%s", got)
 	}
 }

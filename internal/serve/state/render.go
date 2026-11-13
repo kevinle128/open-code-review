@@ -4,14 +4,20 @@
 package state
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/alibaba/open-code-review/internal/serve/forge"
+	"github.com/alibaba/open-code-review/internal/serve/review"
 )
 
-const summaryRunsShown = 5
+const (
+	summaryRunsShown   = 5
+	coverageItemsShown = 20
+)
 
 // RenderFinding builds the root comment of a finding thread. A suggestion
 // block is kept only when the finding sits on its own lines, because applying
@@ -66,7 +72,7 @@ func labelFor(loc Locale, prefix, value string) string {
 }
 
 func location(f forge.Finding) string {
-	s := "`" + neutralizeTags(strings.ReplaceAll(f.Path, "`", "'")) + "`"
+	s := codePath(f.Path)
 	switch {
 	case f.StartLine > 0 && f.EndLine > f.StartLine:
 		s += fmt.Sprintf(" L%d-%d", f.StartLine, f.EndLine)
@@ -76,6 +82,11 @@ func location(f forge.Finding) string {
 		s += fmt.Sprintf(" L%d", f.EndLine)
 	}
 	return s
+}
+
+// codePath puts a path from the PR in a code span that the path cannot close.
+func codePath(p string) string {
+	return "`" + neutralizeTags(strings.ReplaceAll(p, "`", "'")) + "`"
 }
 
 // neutralizeTags stops LLM text from carrying a service tag. Forges only
@@ -158,6 +169,40 @@ func RenderSummary(m Marker, openThreads int, loc Locale, pending string) string
 	b.WriteString(loc.Text("summary.hint"))
 	b.WriteString("\n\n")
 	b.WriteString(Encode(m))
+	return b.String()
+}
+
+// RenderCoverage builds the summary status line for a finished run: the
+// file count, and for a run that could not review every file, the files it
+// missed and why. The reason is the failure class only; the error text can
+// name internal endpoints, so it goes to the service log instead.
+func RenderCoverage(c review.Coverage, loc Locale) string {
+	if c.Total == 0 {
+		return ""
+	}
+	total, reviewed := strconv.Itoa(c.Total), strconv.Itoa(c.Reviewed)
+	if len(c.Failed) == 0 {
+		return loc.Text("coverage.complete", "reviewed", reviewed, "total", total)
+	}
+	failed := slices.SortedFunc(slices.Values(c.Failed), func(a, b review.FailedItem) int {
+		return cmp.Compare(a.Path, b.Path)
+	})
+	var b strings.Builder
+	b.WriteString(loc.Text("coverage.partial", "reviewed", reviewed, "total", total))
+	b.WriteString("\n")
+	for _, it := range failed[:min(len(failed), coverageItemsShown)] {
+		name := codePath(it.Path)
+		if it.OldPath != "" && it.OldPath != it.Path {
+			name = codePath(it.OldPath) + " → " + name
+		}
+		fmt.Fprintf(&b, "\n- %s: %s", name, neutralizeTags(labelFor(loc, "failure.", it.Class)))
+	}
+	if rest := len(failed) - coverageItemsShown; rest > 0 {
+		b.WriteString("\n- ")
+		b.WriteString(loc.Text("coverage.more", "count", strconv.Itoa(rest)))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(loc.Text("coverage.retry"))
 	return b.String()
 }
 

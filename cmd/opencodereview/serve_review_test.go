@@ -489,3 +489,82 @@ func TestDeleteServeSession(t *testing.T) {
 		t.Error("invalid id accepted")
 	}
 }
+
+func TestServeCoverage(t *testing.T) {
+	if got := serveCoverage(nil); got.Total != 0 || got.Reviewed != 0 || got.Failed != nil {
+		t.Errorf("nil manifest = %+v", got)
+	}
+	m := &session.RunManifest{Coverage: session.Coverage{
+		Selected:  make([]session.CoverageItem, 5),
+		Completed: make([]session.CoverageItem, 2),
+		Reused:    make([]session.CoverageItem, 1),
+		Failed: []session.CoverageItem{
+			{Path: "b.go", Classification: session.FailureTimeout, Reason: "LLM request timeout"},
+			{Path: "new.go", OldPath: "old.go", Classification: session.FailureProvider, Reason: "502"},
+		},
+	}}
+	got := serveCoverage(m)
+	if got.Total != 5 || got.Reviewed != 3 || len(got.Failed) != 2 {
+		t.Fatalf("coverage = %+v", got)
+	}
+	want := review.FailedItem{Path: "new.go", OldPath: "old.go", Class: "provider", Reason: "502"}
+	if got.Failed[0].Class != "timeout" || got.Failed[1] != want {
+		t.Errorf("failed = %+v", got.Failed)
+	}
+}
+
+func TestServeReviewReportsCoverage(t *testing.T) {
+	t.Run("complete", func(t *testing.T) {
+		startServeFakeLLM(t, &serveFakeLLM{}, "")
+		repo := newServeRepo(t)
+		res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
+		if err != nil {
+			t.Fatalf("Review: %v", err)
+		}
+		if res.Coverage.Total != 1 || res.Coverage.Reviewed != 1 || len(res.Coverage.Failed) != 0 {
+			t.Fatalf("coverage = %+v", res.Coverage)
+		}
+	})
+	t.Run("failed", func(t *testing.T) {
+		startServeFakeLLM(t, &serveFakeLLM{fail: true}, "")
+		repo := newServeRepo(t)
+		res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
+		if err == nil {
+			t.Fatal("failed review returned no error")
+		}
+		c := res.Coverage
+		if c.Total != 1 || c.Reviewed != 0 || len(c.Failed) != 1 || c.Failed[0].Path != "a.go" || c.Failed[0].Class == "" {
+			t.Fatalf("coverage = %+v", c)
+		}
+		// The manifest keeps a generic reason only; the provider's error
+		// text reaches the service log through the warnings.
+		if !strings.Contains(strings.Join(res.Warnings, "\n"), "payment required") {
+			t.Fatalf("warnings = %v, want the provider error", res.Warnings)
+		}
+	})
+}
+
+// The base branch moves on after the PR branches off, so its tip is not the
+// commit the review diffs against; the merge base is.
+func TestServeReviewReportsMergeBase(t *testing.T) {
+	startServeFakeLLM(t, &serveFakeLLM{}, "")
+	repo := newServeRepo(t)
+	retryTestGit(t, repo.dir, "checkout", "-q", "-b", "feature", repo.head)
+	retryTestGit(t, repo.dir, "checkout", "-q", "main")
+	retryTestGit(t, repo.dir, "reset", "-q", "--hard", repo.base)
+	if err := os.WriteFile(filepath.Join(repo.dir, "b.go"), []byte("package p\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	retryTestGit(t, repo.dir, "add", ".")
+	retryTestGit(t, repo.dir, "commit", "-q", "-m", "main moves on")
+	tip := serveGitOut(t, repo.dir, "rev-parse", "HEAD")
+	retryTestGit(t, repo.dir, "checkout", "-q", "feature")
+
+	res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: tip, To: repo.head})
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if res.Base != repo.base {
+		t.Fatalf("base = %q, want merge base %q (base tip %q)", res.Base, repo.base, tip)
+	}
+}
