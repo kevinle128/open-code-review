@@ -250,6 +250,7 @@ type ghUser struct {
 type ghPull struct {
 	Number   int     `json:"number"`
 	Title    string  `json:"title"`
+	Body     string  `json:"body"`
 	State    string  `json:"state"`
 	Draft    bool    `json:"draft"`
 	Merged   bool    `json:"merged"`
@@ -283,6 +284,7 @@ func (p ghPull) toPR(ref forge.PRRef) forge.PR {
 	return forge.PR{
 		Ref:          ref,
 		Title:        p.Title,
+		Description:  p.Body,
 		Author:       p.User.Login,
 		AuthorIsBot:  p.User.Type == "Bot",
 		Labels:       labels,

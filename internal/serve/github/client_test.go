@@ -128,7 +128,7 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		contents: map[string]map[string]any{},
 		nextID:   1000,
 		pull: map[string]any{
-			"number": 7, "title": "Add retry", "state": "open", "draft": false, "merged": false,
+			"number": 7, "title": "Add retry", "body": "Retries the import.", "state": "open", "draft": false, "merged": false,
 			"user":   map[string]any{"login": "alice", "type": "User"},
 			"labels": []any{map[string]any{"name": "backend"}},
 			"head":   map[string]any{"ref": "feat/retry", "sha": headSHA},
@@ -408,7 +408,7 @@ func TestGetPR(t *testing.T) {
 		t.Fatalf("GetPR: %v", err)
 	}
 	want := forge.PR{
-		Ref: testRef, Title: "Add retry", Author: "alice", Labels: []string{"backend"},
+		Ref: testRef, Title: "Add retry", Description: "Retries the import.", Author: "alice", Labels: []string{"backend"},
 		SourceBranch: "feat/retry", TargetBranch: "main", HeadSHA: headSHA, BaseSHA: baseSHA, State: forge.StateOpen,
 	}
 	if fmt.Sprint(pr) != fmt.Sprint(want) {

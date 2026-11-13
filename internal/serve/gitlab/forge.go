@@ -102,6 +102,7 @@ type apiDiffRefs struct {
 type apiMR struct {
 	IID            int          `json:"iid"`
 	Title          string       `json:"title"`
+	Description    string       `json:"description"`
 	Author         apiUser      `json:"author"`
 	Labels         []string     `json:"labels"`
 	SourceBranch   string       `json:"source_branch"`
@@ -150,6 +151,7 @@ func (f *Forge) toPR(ref forge.PRRef, mr apiMR) forge.PR {
 	return forge.PR{
 		Ref:          ref,
 		Title:        mr.Title,
+		Description:  mr.Description,
 		Author:       mr.Author.Username,
 		AuthorIsBot:  mr.Author.Bot || f.isBotSender(hookUser{ID: mr.Author.ID, Username: mr.Author.Username}),
 		Labels:       mr.Labels,

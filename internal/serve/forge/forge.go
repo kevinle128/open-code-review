@@ -47,6 +47,7 @@ func (r PRRef) Key() string {
 type PR struct {
 	Ref          PRRef
 	Title        string
+	Description  string
 	Author       string
 	AuthorIsBot  bool
 	Labels       []string

@@ -240,7 +240,7 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 	from, to, kind := state.ResolveRange(a, st.pr.BaseSHA, st.pr.HeadSHA, ancestry)
 	req := review.Request{RepoDir: ws.Dir(), From: from, To: to,
 		Background: st.repo.Background, Effort: st.repo.Effort, Excludes: st.repo.Exclude,
-		ProjectRule: st.rule}
+		ProjectRule: st.rule, PR: st.pr}
 	if a.Kind == state.RunManualCommit {
 		req.From, req.To, req.Commit = "", "", st.pr.HeadSHA
 	}

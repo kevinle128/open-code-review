@@ -20,6 +20,10 @@ import (
 // ProjectRule is the repository's rule.json as read at the PR base, or nil
 // for none. It replaces the file in the checkout, which the PR controls, so
 // a PR cannot change its own review rules or exclusions.
+//
+// PR is the pull request as read from the forge. Engines that hand the
+// review to an external agent pass its identity and description on; the
+// in-process OCR engine ignores it.
 type Request struct {
 	RepoDir     string
 	From        string
@@ -29,6 +33,7 @@ type Request struct {
 	Effort      string
 	Excludes    []string
 	ProjectRule *rules.ProjectRule
+	PR          forge.PR
 }
 
 // Terminal states of a review run.
@@ -70,7 +75,7 @@ type FailedItem struct {
 	Reason  string
 }
 
-// Reviewer runs OCR on a checkout.
+// Reviewer runs a review engine on a checkout.
 type Reviewer interface {
 	Review(ctx context.Context, req Request) (Result, error)
 }
