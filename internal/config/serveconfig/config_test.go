@@ -74,6 +74,11 @@ func TestLoad_Defaults(t *testing.T) {
 		Addr: DefaultAddr, MaxRounds: 3, PollInterval: 2 * time.Minute, ReviewTimeout: 2 * time.Hour,
 		Workers: 2, MaxBodyBytes: 10485760, DataDir: "/data", WorkDir: "/work", BotIndicators: []string{"bot"},
 		Exclude: DefaultExcludes, ReviewConcurrency: 5, BundleLines: 300,
+		Engine: EngineCLI,
+		CLI: CLIConfig{
+			ReviewCLI: CLICodex, FixCLI: CLIClaude, CodexBin: "codex", ClaudeBin: "claude",
+			Home: "/data/cli-home",
+		},
 	}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v\nwant %+v", c, want)
@@ -104,6 +109,7 @@ func TestLoad_Overrides(t *testing.T) {
 		EnvGitHubAPIURL: "https://ghe.example.com/api/v3/",
 		EnvGitLabURL:    "https://git.example.com/", EnvGitLabToken + "_FILE": "/run/gl", EnvGitLabWebhookSecret: " gl-secret ",
 		EnvGitLabAdminToken: "admin", EnvGitLabHookURL: "https://hooks.example.com/ocr/gitlab/webhook", EnvGitLabBotUsername: "ocr-bot",
+		EnvEngine: "ocr",
 	}), files(map[string]string{"/run/key.pem": pkcs1PEM, "/run/gl": "glpat-x\n"}))
 	if err != nil {
 		t.Fatal(err)

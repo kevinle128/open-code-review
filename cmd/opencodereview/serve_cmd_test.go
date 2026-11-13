@@ -77,6 +77,7 @@ func serveTestEnv(t *testing.T) map[string]string {
 		serveconfig.EnvGitHubAppID:                "42",
 		serveconfig.EnvGitHubPrivateKey + "_FILE": keyPath,
 		serveconfig.EnvGitHubWebhookSecret:        "gh-secret",
+		serveconfig.EnvEngine:                     serveconfig.EngineOCR,
 	}
 }
 

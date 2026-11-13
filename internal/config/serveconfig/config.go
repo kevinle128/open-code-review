@@ -105,6 +105,11 @@ type Config struct {
 	BotIndicators []string
 	Exclude       []string // DefaultExcludes, then OCR_SERVE_EXCLUDE
 
+	// Engine picks the review engine: EngineCLI runs an agent CLI, EngineOCR
+	// the in-process OCR review.
+	Engine string
+	CLI    CLIConfig
+
 	GitHub *GitHubConfig // nil = disabled
 	GitLab *GitLabConfig // nil = disabled
 }
@@ -223,7 +228,9 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		},
 		BotIndicators: l.botIndicators(),
 		Exclude:       l.excludes(),
+		Engine:        l.engine(),
 	}
+	c.CLI = l.cli(c.DataDir)
 	c.GitHub = l.github()
 	c.GitLab = l.gitlab()
 	if err := errors.Join(l.errs...); err != nil {
@@ -233,13 +240,16 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 }
 
 // RequireServe checks what the webhook service needs on top of Load: at
-// least one platform, and the GitLab token and webhook secret when GitLab is
-// enabled.
+// least one platform, the GitLab token and webhook secret when GitLab is
+// enabled, and the CLI engine settings when that engine is selected.
 func (c *Config) RequireServe() error {
 	if c.GitHub == nil && c.GitLab == nil {
 		return fmt.Errorf("no platform enabled: set %s or %s", EnvGitHubAppID, EnvGitLabURL)
 	}
 	var errs []error
+	if err := c.requireCLI(); err != nil {
+		errs = append(errs, err)
+	}
 	if c.GitLab != nil {
 		if c.GitLab.Token == "" {
 			errs = append(errs, fmt.Errorf("%s is required when %s is set", EnvGitLabToken, EnvGitLabURL))
