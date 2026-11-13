@@ -21,9 +21,9 @@ import (
 // Settings that the `ocr review` flags would give. A zero reviewOptions would
 // mean zero for these, not the flag default. The file-group limit is longer
 // than the review flag default so that it does not end a serve review before
-// the run limit (OCR_SERVE_REVIEW_TIMEOUT, default 2h) does.
+// the run limit (OCR_SERVE_REVIEW_TIMEOUT, default 2h) does. The concurrency
+// comes from OCR_SERVE_REVIEW_CONCURRENCY.
 const (
-	serveReviewConcurrency    = 8
 	serveReviewTimeoutMinutes = 120
 	serveReviewMaxGitProcs    = 16
 )
@@ -32,61 +32,26 @@ const (
 // Several reviews run at the same time, so it changes no process-wide
 // state: no stdout quieting, no output writer and no raw capture file.
 // Each review's session file is removed when the review ends.
-type serveReviewer struct{}
+//
+// A zero bundleLines would turn bundling off, so build it with
+// newServeReviewer.
+type serveReviewer struct {
+	concurrency int
+	bundleLines int
+}
 
 var _ review.Reviewer = serveReviewer{}
 
-func (serveReviewer) Review(ctx context.Context, req review.Request) (review.Result, error) {
+func newServeReviewer(cfg *serveconfig.Config) serveReviewer {
+	return serveReviewer{concurrency: cfg.ReviewConcurrency, bundleLines: cfg.BundleLines}
+}
+
+func (r serveReviewer) Review(ctx context.Context, req review.Request) (review.Result, error) {
 	failed := review.Result{Terminal: review.TerminalFailed}
-	if req.RepoDir == "" {
-		return failed, errors.New("review repo dir is required")
-	}
-	// An empty mode would review the working tree, which a checkout never
-	// has changes in.
-	if req.Commit == "" && (req.From == "" || req.To == "") {
-		return failed, errors.New("review needs a commit or a from and to range")
-	}
-	lang, err := serveAppLanguage()
+	cc, opts, err := r.prepare(ctx, req)
 	if err != nil {
 		return failed, err
 	}
-
-	opts := reviewOptions{
-		repoDir:               req.RepoDir,
-		from:                  req.From,
-		to:                    req.To,
-		commit:                req.Commit,
-		background:            req.Background,
-		effort:                req.Effort,
-		outputFormat:          "text",
-		audience:              "human",
-		concurrency:           serveReviewConcurrency,
-		concurrentTaskTimeout: serveReviewTimeoutMinutes,
-		maxGitProcs:           serveReviewMaxGitProcs,
-	}
-	if err := validateReviewOptions(&opts); err != nil {
-		return failed, err
-	}
-
-	contentRef, _ := tool.ParseReviewMode(opts.from, opts.to, opts.commit).RefValue(opts.to, opts.commit)
-	cc, err := loadCommonContextWith(opts.repoDir, "", contentRef, 0, opts.maxGitProcs, true,
-		rules.ResolverOptions{OverrideProject: true, Project: req.ProjectRule})
-	if err != nil {
-		return failed, err
-	}
-	cc.Template.MaxToolRequestTimes = resolveReviewMaxTools(cc.Template.MaxToolRequestTimes, opts.maxTools)
-	applyCLIExcludes(cc, req.Excludes)
-	applyServeFilter(cc)
-
-	opts.from = checkout.RangeStart(ctx, cc.RepoDir, opts.from)
-	if err := validateReviewRefs(cc.RepoDir, opts); err != nil {
-		return failed, err
-	}
-	bg, err := resolveBackground(cc.RepoDir, opts.background, "", opts.commit)
-	if err != nil {
-		return failed, err
-	}
-	opts.background = withOutputLanguage(bg, lang)
 
 	prepared, err := prepareReviewAgent(ctx, cc, opts, nil)
 	if err != nil {
@@ -113,6 +78,65 @@ func (serveReviewer) Review(ctx context.Context, req review.Request) (review.Res
 		res.Warnings = append(res.Warnings, err.Error())
 	}
 	return res, reviewResultError(runErr, manifest)
+}
+
+// prepare checks the request and builds the review context and options
+// that prepareReviewAgent turns into the agent. The bundle threshold is set on
+// this review's own template copy, so `ocr review` keeps the template value.
+func (r serveReviewer) prepare(ctx context.Context, req review.Request) (*commonContext, reviewOptions, error) {
+	var opts reviewOptions
+	if req.RepoDir == "" {
+		return nil, opts, errors.New("review repo dir is required")
+	}
+	// An empty mode would review the working tree, which a checkout never
+	// has changes in.
+	if req.Commit == "" && (req.From == "" || req.To == "") {
+		return nil, opts, errors.New("review needs a commit or a from and to range")
+	}
+	lang, err := serveAppLanguage()
+	if err != nil {
+		return nil, opts, err
+	}
+
+	opts = reviewOptions{
+		repoDir:               req.RepoDir,
+		from:                  req.From,
+		to:                    req.To,
+		commit:                req.Commit,
+		background:            req.Background,
+		effort:                req.Effort,
+		outputFormat:          "text",
+		audience:              "human",
+		concurrency:           r.concurrency,
+		concurrentTaskTimeout: serveReviewTimeoutMinutes,
+		maxGitProcs:           serveReviewMaxGitProcs,
+	}
+	if err := validateReviewOptions(&opts); err != nil {
+		return nil, opts, err
+	}
+
+	contentRef, _ := tool.ParseReviewMode(opts.from, opts.to, opts.commit).RefValue(opts.to, opts.commit)
+	cc, err := loadCommonContextWith(opts.repoDir, "", contentRef, 0, opts.maxGitProcs, true,
+		rules.ResolverOptions{OverrideProject: true, Project: req.ProjectRule})
+	if err != nil {
+		return nil, opts, err
+	}
+	cc.Template.GroupingBundleLineThreshold = r.bundleLines
+	cc.Template.MaxToolRequestTimes = resolveReviewMaxTools(cc.Template.MaxToolRequestTimes, opts.maxTools)
+	applyCLIExcludes(cc, req.Excludes)
+	applyServeFilter(cc)
+
+	opts.from = checkout.RangeStart(ctx, cc.RepoDir, opts.from)
+	if err := validateReviewRefs(cc.RepoDir, opts); err != nil {
+		return nil, opts, err
+	}
+	bg, err := resolveBackground(cc.RepoDir, opts.background, "", opts.commit)
+	if err != nil {
+		return nil, opts, err
+	}
+	opts.background = withOutputLanguage(bg, lang)
+
+	return cc, opts, nil
 }
 
 // serveAppLanguage returns the configured output language. It stops a

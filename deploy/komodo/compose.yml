@@ -39,6 +39,11 @@
 #   OCR_SERVE_REVIEW_TIMEOUT         Default 2h.
 #   OCR_SERVE_POLL_INTERVAL          Default 2m.
 #   OCR_SERVE_WORKERS                Default 2, 1..16.
+#   OCR_SERVE_REVIEW_CONCURRENCY     LLM subtasks per review at the same time;
+#                                    default 5, 1..32.
+#   OCR_SERVE_BUNDLE_LINES           Changed lines under which a PR with few
+#                                    files is reviewed as one group; default
+#                                    300, 50..5000.
 #   OCR_SERVE_EXCLUDE                Comma-separated globs added to the serve
 #                                    file filter (deploy/serve/README.md).
 #   OCR_LLM_TIMEOUT                  Seconds per LLM request; default 300.
@@ -74,6 +79,8 @@ services:
       OCR_SERVE_REVIEW_TIMEOUT: ${OCR_SERVE_REVIEW_TIMEOUT:-}
       OCR_SERVE_POLL_INTERVAL: ${OCR_SERVE_POLL_INTERVAL:-}
       OCR_SERVE_WORKERS: ${OCR_SERVE_WORKERS:-}
+      OCR_SERVE_REVIEW_CONCURRENCY: ${OCR_SERVE_REVIEW_CONCURRENCY:-}
+      OCR_SERVE_BUNDLE_LINES: ${OCR_SERVE_BUNDLE_LINES:-}
       OCR_SERVE_EXCLUDE: ${OCR_SERVE_EXCLUDE:-}
       OCR_LLM_URL: ${OCR_LLM_URL:?set in the Komodo stack environment}
       OCR_LLM_TOKEN: ${OCR_LLM_TOKEN:?set in the Komodo stack environment}

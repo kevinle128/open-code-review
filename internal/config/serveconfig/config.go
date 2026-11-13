@@ -29,6 +29,8 @@ const (
 	EnvPollInterval        = "OCR_SERVE_POLL_INTERVAL"
 	EnvWorkers             = "OCR_SERVE_WORKERS"
 	EnvReviewTimeout       = "OCR_SERVE_REVIEW_TIMEOUT"
+	EnvReviewConcurrency   = "OCR_SERVE_REVIEW_CONCURRENCY"
+	EnvBundleLines         = "OCR_SERVE_BUNDLE_LINES"
 	EnvMaxBodyBytes        = "OCR_SERVE_MAX_BODY_BYTES"
 	EnvDataDir             = "OCR_SERVE_DATA_DIR"
 	EnvWorkDir             = "OCR_SERVE_WORK_DIR"
@@ -64,11 +66,22 @@ const (
 	DefaultWorkDir       = "/work"
 	DefaultGitHubAPIURL  = "https://api.github.com"
 
-	MinRounds        = 1
-	MaxRounds        = 10
-	MinWorkers       = 1
-	MaxWorkers       = 16
-	MaxBodyBytesHigh = 100 << 20
+	// DefaultReviewConcurrency is lower than the `ocr review` default of 8:
+	// several reviews run at the same time against one LLM endpoint.
+	DefaultReviewConcurrency = 5
+	// DefaultBundleLines is higher than the template value of 200, so more
+	// small PRs go to one review instead of one review per file.
+	DefaultBundleLines = 300
+
+	MinRounds            = 1
+	MaxRounds            = 10
+	MinWorkers           = 1
+	MaxWorkers           = 16
+	MaxBodyBytesHigh     = 100 << 20
+	MinReviewConcurrency = 1
+	MaxReviewConcurrency = 32
+	MinBundleLines       = 50
+	MaxBundleLines       = 5000
 )
 
 // Config is the global service configuration.
@@ -79,6 +92,13 @@ type Config struct {
 	ReviewTimeout time.Duration
 	Workers       int
 	MaxBodyBytes  int64
+	// ReviewConcurrency is the number of LLM subtasks one review runs at the
+	// same time.
+	ReviewConcurrency int
+	// BundleLines replaces the template GROUPING_BUNDLE_LINE_THRESHOLD for
+	// serve reviews: a change set with fewer files than the grouping minimum
+	// and fewer changed lines than this is reviewed as one group.
+	BundleLines   int
 	DataDir       string
 	WorkDir       string
 	Ignore        IgnoreRules
@@ -188,8 +208,11 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		ReviewTimeout: l.duration(EnvReviewTimeout, DefaultReviewTimeout),
 		Workers:       l.intIn(EnvWorkers, DefaultWorkers, MinWorkers, MaxWorkers),
 		MaxBodyBytes:  int64(l.intIn(EnvMaxBodyBytes, DefaultMaxBodyBytes, 1, MaxBodyBytesHigh)),
-		DataDir:       l.str(EnvDataDir, DefaultDataDir),
-		WorkDir:       l.str(EnvWorkDir, DefaultWorkDir),
+		ReviewConcurrency: l.intIn(EnvReviewConcurrency, DefaultReviewConcurrency,
+			MinReviewConcurrency, MaxReviewConcurrency),
+		BundleLines: l.intIn(EnvBundleLines, DefaultBundleLines, MinBundleLines, MaxBundleLines),
+		DataDir:     l.str(EnvDataDir, DefaultDataDir),
+		WorkDir:     l.str(EnvWorkDir, DefaultWorkDir),
 		Ignore: IgnoreRules{
 			Repos:          l.regexps(EnvIgnoreRepos),
 			Authors:        l.regexps(EnvIgnoreAuthors),

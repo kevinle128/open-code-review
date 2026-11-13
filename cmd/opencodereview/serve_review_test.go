@@ -189,7 +189,7 @@ func TestServeReviewRangeAndCommitModes(t *testing.T) {
 			startServeFakeLLM(t, llm, vietnameseConfig)
 			repo := newServeRepo(t)
 
-			res, err := serveReviewer{}.Review(context.Background(), tc.req(repo))
+			res, err := testServeReviewer(t).Review(context.Background(), tc.req(repo))
 			if err != nil {
 				t.Fatalf("Review: %v", err)
 			}
@@ -223,7 +223,7 @@ func TestServeReviewAddsOutputLanguageDirective(t *testing.T) {
 			llm := &serveFakeLLM{}
 			startServeFakeLLM(t, llm, tc.config)
 			repo := newServeRepo(t)
-			_, err := serveReviewer{}.Review(context.Background(), review.Request{
+			_, err := testServeReviewer(t).Review(context.Background(), review.Request{
 				RepoDir: repo.dir, From: repo.base, To: repo.head, Background: tc.background,
 			})
 			if err != nil {
@@ -265,7 +265,7 @@ func TestServeReviewFailedRunReturnsError(t *testing.T) {
 	llm := &serveFakeLLM{fail: true}
 	startServeFakeLLM(t, llm, "")
 	repo := newServeRepo(t)
-	res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
+	res, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
 	if err == nil {
 		t.Fatal("failed review returned no error")
 	}
@@ -279,7 +279,7 @@ func TestServeReviewExcludedChangeIsSkipped(t *testing.T) {
 	llm := &serveFakeLLM{}
 	startServeFakeLLM(t, llm, "")
 	repo := newServeRepo(t)
-	res, err := serveReviewer{}.Review(context.Background(), review.Request{
+	res, err := testServeReviewer(t).Review(context.Background(), review.Request{
 		RepoDir: repo.dir, From: repo.base, To: repo.head, Excludes: []string{"*.go"},
 	})
 	if err != nil {
@@ -306,7 +306,7 @@ func TestServeReviewIgnoresRuleFileFromCheckout(t *testing.T) {
 	retryTestGit(t, repo.dir, "commit", "-q", "-m", "exclude everything")
 	head := serveGitOut(t, repo.dir, "rev-parse", "HEAD")
 
-	res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: head})
+	res, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: head})
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestServeReviewUsesBaseProjectRule(t *testing.T) {
 	llm := &serveFakeLLM{}
 	startServeFakeLLM(t, llm, "")
 	repo := newServeRepo(t)
-	res, err := serveReviewer{}.Review(context.Background(), review.Request{
+	res, err := testServeReviewer(t).Review(context.Background(), review.Request{
 		RepoDir: repo.dir, From: repo.base, To: repo.head,
 		ProjectRule: &rules.ProjectRule{Exclude: []string{"*.go"}},
 	})
@@ -337,7 +337,7 @@ func TestServeReviewFallsBackToFetchedBase(t *testing.T) {
 	repo := newServeRepo(t)
 	retryTestGit(t, repo.dir, "update-ref", checkout.BaseRef, repo.base)
 	gone := strings.Repeat("0", 39) + "1"
-	res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: gone, To: repo.head})
+	res, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, From: gone, To: repo.head})
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -356,12 +356,13 @@ func TestServeReviewParallelRuns(t *testing.T) {
 		err error
 	}
 	results := make([]outcome, len(repos))
+	reviewer := testServeReviewer(t)
 	var wg sync.WaitGroup
 	for i, repo := range repos {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
+			res, err := reviewer.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
 			results[i] = outcome{res, err}
 		}()
 	}
@@ -381,7 +382,7 @@ func TestServeReviewRefusesMCPServers(t *testing.T) {
 	llm := &serveFakeLLM{}
 	startServeFakeLLM(t, llm, `{"mcp_servers":{"probe":{"command":"true","setup":"touch setup-ran"}}}`)
 	repo := newServeRepo(t)
-	_, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
+	_, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
 	if err == nil || !strings.Contains(err.Error(), "mcp_servers") {
 		t.Fatalf("err = %v, want mcp_servers refusal", err)
 	}
@@ -414,7 +415,7 @@ func TestServeReviewRejectsBadRequests(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := serveReviewer{}.Review(context.Background(), tc.req)
+			res, err := testServeReviewer(t).Review(context.Background(), tc.req)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
@@ -432,7 +433,7 @@ func TestServeReviewSetupErrors(t *testing.T) {
 	t.Run("unreadable app config", func(t *testing.T) {
 		startServeFakeLLM(t, &serveFakeLLM{}, "{not json")
 		repo := newServeRepo(t)
-		if _, err := (serveReviewer{}).Review(context.Background(), review.Request{RepoDir: repo.dir, Commit: repo.head}); err == nil {
+		if _, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, Commit: repo.head}); err == nil {
 			t.Fatal("broken config.json accepted")
 		}
 	})
@@ -442,7 +443,7 @@ func TestServeReviewSetupErrors(t *testing.T) {
 			t.Setenv(key, "")
 		}
 		repo := newServeRepo(t)
-		if _, err := (serveReviewer{}).Review(context.Background(), review.Request{RepoDir: repo.dir, Commit: repo.head}); err == nil {
+		if _, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, Commit: repo.head}); err == nil {
 			t.Fatal("review ran without an LLM endpoint")
 		}
 	})
@@ -517,7 +518,7 @@ func TestServeReviewReportsCoverage(t *testing.T) {
 	t.Run("complete", func(t *testing.T) {
 		startServeFakeLLM(t, &serveFakeLLM{}, "")
 		repo := newServeRepo(t)
-		res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
+		res, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
 		if err != nil {
 			t.Fatalf("Review: %v", err)
 		}
@@ -528,7 +529,7 @@ func TestServeReviewReportsCoverage(t *testing.T) {
 	t.Run("failed", func(t *testing.T) {
 		startServeFakeLLM(t, &serveFakeLLM{fail: true}, "")
 		repo := newServeRepo(t)
-		res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
+		res, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head})
 		if err == nil {
 			t.Fatal("failed review returned no error")
 		}
@@ -560,7 +561,7 @@ func TestServeReviewReportsMergeBase(t *testing.T) {
 	tip := serveGitOut(t, repo.dir, "rev-parse", "HEAD")
 	retryTestGit(t, repo.dir, "checkout", "-q", "feature")
 
-	res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: tip, To: repo.head})
+	res, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, From: tip, To: repo.head})
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -594,7 +595,7 @@ func TestServeReviewFileFilter(t *testing.T) {
 	retryTestGit(t, repo.dir, "commit", "-q", "-m", "more files")
 	head := serveGitOut(t, repo.dir, "rev-parse", "HEAD")
 
-	res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: head})
+	res, err := testServeReviewer(t).Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: head})
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -604,5 +605,60 @@ func TestServeReviewFileFilter(t *testing.T) {
 	}
 	if c.Skipped["large_data"] != 1 || c.Skipped["default_path"] != 1 {
 		t.Fatalf("skipped = %v", c.Skipped)
+	}
+}
+
+// testServeReviewer returns the reviewer that serveMain builds from an
+// environment without serve settings.
+func testServeReviewer(t *testing.T) serveReviewer {
+	t.Helper()
+	cfg, err := serveconfig.Load(func(string) string { return "" }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newServeReviewer(cfg)
+}
+
+func TestNewServeReviewer(t *testing.T) {
+	got := newServeReviewer(&serveconfig.Config{ReviewConcurrency: 7, BundleLines: 400})
+	if got != (serveReviewer{concurrency: 7, bundleLines: 400}) {
+		t.Fatalf("reviewer = %+v", got)
+	}
+}
+
+// The serve limits reach the options and the template that prepareReviewAgent
+// hands to the agent, and `ocr review` keeps its own defaults.
+func TestServeReviewLimits(t *testing.T) {
+	startServeFakeLLM(t, &serveFakeLLM{}, "")
+	repo := newServeRepo(t)
+	req := review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head}
+
+	cc, opts, err := testServeReviewer(t).prepare(context.Background(), req)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if opts.concurrency != 5 || cc.Template.GroupingBundleLineThreshold != 300 {
+		t.Fatalf("default concurrency = %d, bundle lines = %d, want 5 and 300",
+			opts.concurrency, cc.Template.GroupingBundleLineThreshold)
+	}
+
+	cc, opts, err = newServeReviewer(&serveconfig.Config{ReviewConcurrency: 12, BundleLines: 450}).prepare(context.Background(), req)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if opts.concurrency != 12 || cc.Template.GroupingBundleLineThreshold != 450 {
+		t.Fatalf("override concurrency = %d, bundle lines = %d, want 12 and 450",
+			opts.concurrency, cc.Template.GroupingBundleLineThreshold)
+	}
+
+	if def := reviewCmd.Flags().Lookup("concurrency").DefValue; def != "8" {
+		t.Errorf("ocr review --concurrency default = %s, want 8", def)
+	}
+	cli, err := loadCommonContext(repo.dir, "", "", 0, 4, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cli.Template.GroupingBundleLineThreshold; got != 200 {
+		t.Errorf("ocr review bundle lines = %d, want the template value 200", got)
 	}
 }
