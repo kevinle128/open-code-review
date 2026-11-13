@@ -18,6 +18,9 @@ services:
     environment:
       OCR_SERVE_ADDR: 0.0.0.0:3012
       OCR_SERVE_GITHUB_PRIVATE_KEY_FILE: /run/secrets/github-app.pem
+      # The CLI engine needs the host agent CLI and the review skill mounted;
+      # see "Review engine" in README.md. This example runs the OCR engine.
+      OCR_SERVE_ENGINE: ${OCR_SERVE_ENGINE:-ocr}
       # GIT_SSL_CAINFO: /etc/ocr/ca.pem
       # SSL_CERT_FILE: /etc/ocr/ca.pem
     ports:

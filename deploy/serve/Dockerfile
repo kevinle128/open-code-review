@@ -25,14 +25,23 @@ RUN go build -trimpath \
     -ldflags "-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X main.BuildDate=${BUILD_DATE}" \
     -o /out/opencodereview ./cmd/opencodereview
 
-FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 # git runs every checkout and diff; ca-certificates verifies the forges and
-# the LLM endpoint. The directories are created and owned here because a
-# single-file bind mount of config.json would otherwise create a root-owned
-# parent, and session files could then not be written.
-RUN apk add --no-cache git ca-certificates \
-    && addgroup -S -g 10001 ocr \
-    && adduser -S -D -u 10001 -G ocr -h /home/ocr ocr \
+# the LLM and agent CLI endpoints; curl runs the health check. The Claude Code
+# binary needs glibc, which is why the runtime is Debian and not Alpine.
+# tini runs as PID 1 and reaps the tools an agent CLI leaves behind, which
+# the service would otherwise keep as zombies.
+#
+# The user has uid and gid 1000, the owner of the host CLI installs and
+# credential files that the CLI engine mounts. The directories are created
+# and owned here because a single-file bind mount of config.json would
+# otherwise create a root-owned parent, and session files could then not be
+# written.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates curl tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 1000 ocr \
+    && useradd -u 1000 -g 1000 -m -d /home/ocr -s /usr/sbin/nologin ocr \
     && mkdir -p /home/ocr/.opencodereview /data /work \
     && chown -R ocr:ocr /home/ocr /data /work
 COPY --from=compile /out/opencodereview /usr/local/bin/opencodereview
@@ -40,10 +49,10 @@ ENV HOME=/home/ocr \
     OCR_SERVE_ADDR=0.0.0.0:3012 \
     OCR_SERVE_DATA_DIR=/data \
     OCR_SERVE_WORK_DIR=/work
-USER ocr
+USER 1000:1000
 WORKDIR /home/ocr
 VOLUME ["/data", "/work"]
 EXPOSE 3012
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:3012/healthz >/dev/null || exit 1
-ENTRYPOINT ["opencodereview", "serve"]
+    CMD curl -fsS -o /dev/null http://127.0.0.1:3012/healthz || exit 1
+ENTRYPOINT ["/usr/bin/tini", "--", "opencodereview", "serve"]
