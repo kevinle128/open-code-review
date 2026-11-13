@@ -71,6 +71,7 @@ OCR_SERVE_MAX_ROUNDS=
 OCR_SERVE_REVIEW_TIMEOUT=
 OCR_SERVE_POLL_INTERVAL=
 OCR_SERVE_WORKERS=
+OCR_SERVE_EXCLUDE=
 OCR_LLM_TIMEOUT=900
 ```
 
@@ -128,6 +129,7 @@ setting both forms is an error.
 | `OCR_SERVE_IGNORE_SOURCE_BRANCHES` | empty | Same format. |
 | `OCR_SERVE_IGNORE_TARGET_BRANCHES` | empty | Same format. |
 | `OCR_SERVE_IGNORE_LABELS` | empty | Comma-separated, exact match. |
+| `OCR_SERVE_EXCLUDE` | empty | Comma-separated globs added to the serve file filter for every repository; see [File filter](#file-filter). |
 | `OCR_SERVE_BOT_INDICATORS` | `bot` | Substrings that mark a GitLab sender as a bot. |
 | `OCR_SERVE_GITHUB_APP_ID` | empty | Enables GitHub. |
 | `OCR_SERVE_GITHUB_PRIVATE_KEY` / `_FILE` | | Required with GitHub. The example compose sets `_FILE`. A one-line value with literal `\n` escapes is accepted. |
@@ -176,7 +178,7 @@ At least one platform must be enabled; otherwise the service stops with
 
 `.opencodereview/serve.json` is read from the base commit of the PR, so a PR
 cannot change its own limits. Keys: `enabled` (bool), `max_rounds` (1..10),
-`exclude` (globs added to OCR excludes), `background` (string, at most 4000
+`exclude` (globs added to the [file filter](#file-filter)), `background` (string, at most 4000
 characters), `effort` (`low`, `medium` or `high`). Unknown keys are logged and
 ignored. If the file cannot be read (an API error, not a missing file), the
 PR is not reviewed until the next event.
@@ -188,6 +190,36 @@ or exclusions. Each file is read through the forge API and may be up to
 until the next event (`read project rules` in the log). A rule file that cannot
 be read, or is larger, leaves only its own rule empty (`read rule file failed`).
 An invalid `rule.json` gives a review with the built-in rules only.
+
+### File filter
+
+A serve review skips files that take long to review and rarely hold a defect.
+It applies, in addition to OCR's built-in excludes (binary files, secret
+paths, unsupported extensions, dependency, build and generated directories,
+test data, fixtures and snapshots):
+
+| Glob | Skips |
+|---|---|
+| `**/.*/**/*` | every file inside a directory whose name starts with `.`, at any depth (`.github`, `.claude`, `.cursor`, `.vscode`, ...). A dotfile such as `.eslintrc.js` is still reviewed. |
+| `**/.mcp.json` | MCP client config |
+| `**/_bmad-output/**`, `**/claude-design/**`, `**/plans/**`, `**/third_party/**` | agent and tool output, plans, third-party code |
+| `**/*.lock`, `**/yarn.lock`, `**/go.sum`, `**/Cargo.lock`, `**/composer.lock` | lock files |
+| `**/*.map` | source maps |
+| `**/locales/**/*.json`, `**/i18n/**/*.json` | translation tables |
+| `**/docs/**/*.html`, `**/*.html`, `**/*.htm`, `**/*.css` | plain markup and styles |
+
+It also skips a `.json`, `.yaml` or `.yml` file whose diff changes more than
+1000 lines.
+
+Unlike `ocr review`, a serve review covers test files (`*_test.go`,
+`*.spec.ts`, `test_*.py`, `__tests__/`, ...). To skip them in a repository,
+add their globs to `exclude` in its `serve.json`.
+
+`OCR_SERVE_EXCLUDE` and the `serve.json` `exclude` key add globs to this list;
+nothing removes a default. The `review done` log line counts the skipped files
+by reason in `skipped_files` (`user_exclude` for the globs above,
+`default_path` for OCR's built-in paths, `large_data` for the size limit).
+The summary's file count covers only the files left after filtering.
 
 ## Review rounds
 

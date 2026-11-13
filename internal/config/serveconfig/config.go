@@ -14,9 +14,12 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // Environment variable names.
@@ -31,6 +34,7 @@ const (
 	EnvWorkDir             = "OCR_SERVE_WORK_DIR"
 	EnvIgnoreRepos         = "OCR_SERVE_IGNORE_REPOS"
 	EnvIgnoreAuthors       = "OCR_SERVE_IGNORE_AUTHORS"
+	EnvExclude             = "OCR_SERVE_EXCLUDE"
 	EnvIgnoreTitles        = "OCR_SERVE_IGNORE_TITLES"
 	EnvIgnoreSourceBranch  = "OCR_SERVE_IGNORE_SOURCE_BRANCHES"
 	EnvIgnoreTargetBranch  = "OCR_SERVE_IGNORE_TARGET_BRANCHES"
@@ -79,8 +83,10 @@ type Config struct {
 	WorkDir       string
 	Ignore        IgnoreRules
 	BotIndicators []string
-	GitHub        *GitHubConfig // nil = disabled
-	GitLab        *GitLabConfig // nil = disabled
+	Exclude       []string // DefaultExcludes, then OCR_SERVE_EXCLUDE
+
+	GitHub *GitHubConfig // nil = disabled
+	GitLab *GitLabConfig // nil = disabled
 }
 
 // GitHubConfig holds the GitHub App settings.
@@ -193,6 +199,7 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 			Labels:         splitList(getenv(EnvIgnoreLabels)),
 		},
 		BotIndicators: l.botIndicators(),
+		Exclude:       l.excludes(),
 	}
 	c.GitHub = l.github()
 	c.GitLab = l.gitlab()
@@ -274,6 +281,20 @@ func (l *loader) regexps(key string) []*regexp.Regexp {
 			continue
 		}
 		out = append(out, re)
+	}
+	return out
+}
+
+// excludes appends the comma-separated OCR_SERVE_EXCLUDE globs to the
+// defaults, so a glob cannot contain a comma.
+func (l *loader) excludes() []string {
+	out := slices.Clone(DefaultExcludes)
+	for _, g := range splitList(l.getenv(EnvExclude)) {
+		if !doublestar.ValidatePattern(g) {
+			l.fail("%s: invalid glob %q", EnvExclude, g)
+			continue
+		}
+		out = append(out, g)
 	}
 	return out
 }
@@ -409,5 +430,5 @@ func splitList(raw string) []string {
 
 // RepoDefaults is the per-repository configuration before serve.json applies.
 func (c *Config) RepoDefaults() RepoConfig {
-	return RepoConfig{Enabled: true, MaxRounds: c.MaxRounds}
+	return RepoConfig{Enabled: true, MaxRounds: c.MaxRounds, Exclude: slices.Clone(c.Exclude)}
 }

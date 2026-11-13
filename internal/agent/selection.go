@@ -4,6 +4,9 @@
 package agent
 
 import (
+	"path"
+	"strings"
+
 	allowedext "github.com/alibaba/open-code-review/internal/config/allowlist"
 	"github.com/alibaba/open-code-review/internal/llm"
 	"github.com/alibaba/open-code-review/internal/llmloop"
@@ -49,6 +52,8 @@ func (a *Agent) selectFiles(diffs []model.Diff) []fileDecision {
 		case dec.Reason != ExcludeNone:
 		case d.IsDeleted:
 			dec.Reason = ExcludeDeleted
+		case a.isLargeDataFile(d):
+			dec.Reason = ExcludeLargeData
 		case limit > 0:
 			// Counted only when a limit is configured, so the tokenizer pass is
 			// skipped entirely for max_tokens=0.
@@ -94,11 +99,44 @@ func (a *Agent) whyExcluded(d model.Diff) ExcludeReason {
 		return ExcludeExtension
 	}
 
-	if allowedext.IsExcludedPath(path) {
+	excluded := allowedext.IsExcludedPath
+	if f != nil && f.ReviewTests {
+		excluded = allowedext.IsExcludedNonTestPath
+	}
+	if excluded(path) {
 		return ExcludeDefaultPath
 	}
 
 	return ExcludeNone
+}
+
+// isLargeDataFile applies FileFilter.MaxDataChangedLines.
+func (a *Agent) isLargeDataFile(d model.Diff) bool {
+	f := a.args.FileFilter
+	if f == nil || f.MaxDataChangedLines <= 0 {
+		return false
+	}
+	switch strings.ToLower(path.Ext(effectivePath(d))) {
+	case ".json", ".yaml", ".yml":
+		return d.Insertions+d.Deletions > int64(f.MaxDataChangedLines)
+	}
+	return false
+}
+
+// skippedByReason counts the files a selection did not select, by reason,
+// or returns nil when it selected every file.
+func skippedByReason(decisions []fileDecision) map[string]int {
+	var out map[string]int
+	for _, dec := range decisions {
+		if dec.selected() {
+			continue
+		}
+		if out == nil {
+			out = map[string]int{}
+		}
+		out[string(dec.Reason)]++
+	}
+	return out
 }
 
 // selectionCounts is the run-level rollup of one selection pass.

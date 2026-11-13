@@ -325,6 +325,24 @@ func TestRepoConfigReadAtBase(t *testing.T) {
 	}
 }
 
+func TestServiceExcludesThenRepoExcludes(t *testing.T) {
+	h := newHarness(t, func(c *serveconfig.Config) { c.Exclude = []string{"**/*.html", "gen/**"} })
+	ref := ghRef(33)
+	h.gh.setPR(openPR(ref, sha1))
+	h.gh.files[shaBase+":.opencodereview/serve.json"] = []byte(`{"exclude":["**/*_test.go"]}`)
+	h.rev.set(func(context.Context, review.Request) (review.Result, error) {
+		return review.Result{Terminal: review.TerminalComplete,
+			Coverage: review.Coverage{Total: 2, Reviewed: 2, Skipped: map[string]int{"user_exclude": 3, "large_data": 1}}}, nil
+	})
+	h.auto(ref, state.TriggerOpened)
+	if got := h.rev.requests()[0].Excludes; strings.Join(got, ",") != "**/*.html,gen/**,**/*_test.go" {
+		t.Fatalf("excludes = %v", got)
+	}
+	if !strings.Contains(h.logs.String(), `"skipped_files":{"large_data":1,"user_exclude":3}`) {
+		t.Fatalf("skipped counts not logged:\n%s", h.logs.String())
+	}
+}
+
 func TestRepoConfigProblemsFallBack(t *testing.T) {
 	t.Run("invalid json", func(t *testing.T) {
 		h := newHarness(t)

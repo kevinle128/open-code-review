@@ -11,6 +11,7 @@ import (
 
 	"github.com/alibaba/open-code-review/internal/agent"
 	"github.com/alibaba/open-code-review/internal/config/rules"
+	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/checkout"
 	"github.com/alibaba/open-code-review/internal/serve/review"
 	"github.com/alibaba/open-code-review/internal/session"
@@ -75,6 +76,7 @@ func (serveReviewer) Review(ctx context.Context, req review.Request) (review.Res
 	}
 	cc.Template.MaxToolRequestTimes = resolveReviewMaxTools(cc.Template.MaxToolRequestTimes, opts.maxTools)
 	applyCLIExcludes(cc, req.Excludes)
+	applyServeFilter(cc)
 
 	opts.from = checkout.RangeStart(ctx, cc.RepoDir, opts.from)
 	if err := validateReviewRefs(cc.RepoDir, opts); err != nil {
@@ -103,6 +105,7 @@ func (serveReviewer) Review(ctx context.Context, req review.Request) (review.Res
 		Warnings: warningTexts(ag.Warnings()),
 		Coverage: serveCoverage(manifest),
 	}
+	res.Coverage.Skipped = ag.SkippedFiles()
 	if manifest != nil {
 		res.Base = manifest.Input.ResolvedBase
 	}
@@ -158,6 +161,16 @@ func terminalState(manifest *session.RunManifest, runErr error) string {
 	}
 	// `ocr review` publishes a run without a manifest as a success too.
 	return review.TerminalComplete
+}
+
+// applyServeFilter reviews test files, which `ocr review` skips by default,
+// and skips oversized JSON and YAML diffs.
+func applyServeFilter(cc *commonContext) {
+	if cc.FileFilter == nil {
+		cc.FileFilter = &rules.FileFilter{}
+	}
+	cc.FileFilter.ReviewTests = true
+	cc.FileFilter.MaxDataChangedLines = serveconfig.MaxDataChangedLines
 }
 
 // serveCoverage reads the coverage counts and failed files from the

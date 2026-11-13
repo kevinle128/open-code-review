@@ -218,9 +218,18 @@ type ProjectRule struct {
 
 // FileFilter holds the merged user-configured include/exclude glob patterns
 // collected from all rule.json layers (custom, project, global).
+//
+// ReviewTests drops only the test-file patterns from the built-in default
+// excludes; test data, fixtures, generated code and dependency directories
+// stay excluded. MaxDataChangedLines, when above zero, skips a JSON or YAML
+// file whose diff changes more lines than that: such a diff is generated
+// data or translations far more often than logic, and it fills the model's
+// context. Neither has a rule.json key.
 type FileFilter struct {
-	Include []string
-	Exclude []string
+	Include             []string
+	Exclude             []string
+	ReviewTests         bool
+	MaxDataChangedLines int
 }
 
 // HasInclude reports whether any include patterns are configured.

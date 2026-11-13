@@ -308,7 +308,8 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 		s.unwait(ref, log)
 	}
 	log.Info("review done", "kind", kind, "from", from, "to", to, "terminal", res.Terminal,
-		"files", res.Coverage.Total, "reviewed_files", res.Coverage.Reviewed, "findings", len(findings),
+		"files", res.Coverage.Total, "reviewed_files", res.Coverage.Reviewed, "skipped_files", res.Coverage.Skipped,
+		"findings", len(findings),
 		"posted", posted.Posted, "relocated", posted.Relocated, "file_level", posted.FileLevel, "general", posted.General, "skipped", posted.Skipped, "open_threads", open)
 	s.commandDone(f, ref, j.cmd, len(findings), log)
 	return nil

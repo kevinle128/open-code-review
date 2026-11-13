@@ -30,6 +30,7 @@ const (
 	ExcludeDeleted           = model.ExcludeDeleted
 	ExcludeBinary            = model.ExcludeBinary
 	ExcludeTooLarge          = model.ExcludeTooLarge
+	ExcludeLargeData         = model.ExcludeLargeData
 )
 
 // Preview loads diffs and applies the same selection the real run applies

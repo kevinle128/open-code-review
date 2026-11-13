@@ -49,8 +49,61 @@ var (
 
 var (
 	excludePatterns []string // raw patterns from JSON (may contain {a,b} syntax)
+	nonTestPatterns []string // excludePatterns without testPatterns
 	excludeOnce     sync.Once
 )
+
+// testPatterns are the default exclude patterns that name only test code.
+// IsExcludedNonTestPath drops them so a caller can review tests. Test data,
+// fixtures, snapshots, generated code and dependency or build directories
+// are not in this list: they stay excluded either way.
+var testPatterns = []string{
+	"**/*_test.go",
+	"**/src/test/java/**/*.java",
+	"**/src/test/**/*.{kt,kts}",
+	"**/*Test.fs",
+	"**/*.test.{js,jsx,ts,tsx}",
+	"**/*.spec.{js,jsx,ts,tsx}",
+	"**/__tests__/**",
+	"**/test/**/*_test.py",
+	"**/tests/**/*_test.py",
+	"**/*_test.py",
+	"**/test_*.py",
+	"**/*_spec.rb",
+	"**/spec/**/*_spec.rb",
+	"**/*Test.java",
+	"**/*Tests.java",
+	"**/*_test.rs",
+	"**/*.test.ets",
+	"**/test/**/*.jl",
+	"**/test/**/*.hs",
+	"**/*Spec.hs",
+	"**/test/**/*.lhs",
+	"**/*Spec.lhs",
+	"**/tests/**/*.nim",
+	"**/tests/**/*.nu",
+	"**/test/**/*.nu",
+	"**/*_test.nu",
+	"**/test_*.nu",
+	"**/test-*.nu",
+	"**/tests/**/*.R",
+	"**/test/**/*.{clj,cljs,cljc}",
+	"**/*_test.{clj,cljs,cljc}",
+	"**/*Test.swift",
+	"**/*Tests.swift",
+	"**/Tests/**/*.swift",
+	"**/tests/**/*.elm",
+	"**/test/**/*.zig",
+	"**/*_test.zig",
+	"**/test/**/*.ml",
+	"**/tb_*.{v,sv,vhd,vhdl}",
+	"**/*_tb.{v,sv,vhd,vhdl}",
+	"**/*.t.sol",
+	"**/test/**/*.sol",
+	"**/tests/**/*.sol",
+	"**/test/**/*.vy",
+	"**/tests/**/*.vy",
+}
 
 func initMap() {
 	var exts []string
@@ -67,8 +120,15 @@ func initExclude() {
 	if err := json.Unmarshal(excludeData, &excludePatterns); err != nil {
 		panic("allowedext: failed to parse default_exclude_patterns.json: " + err.Error())
 	}
+	tests := make(map[string]bool, len(testPatterns))
+	for _, p := range testPatterns {
+		tests[strings.ToLower(p)] = true
+	}
 	for i, p := range excludePatterns {
 		excludePatterns[i] = strings.ToLower(p)
+		if !tests[excludePatterns[i]] {
+			nonTestPatterns = append(nonTestPatterns, excludePatterns[i])
+		}
 	}
 }
 
@@ -90,8 +150,19 @@ func IsAllowedExt(ext string) bool {
 //	"**/*.test.{js,ts}"  matches "src/app.test.js", "lib/util.test.ts"
 func IsExcludedPath(path string) bool {
 	excludeOnce.Do(initExclude)
+	return matchesAny(excludePatterns, path)
+}
+
+// IsExcludedNonTestPath is IsExcludedPath without the test-file patterns, for
+// a review that covers tests too.
+func IsExcludedNonTestPath(path string) bool {
+	excludeOnce.Do(initExclude)
+	return matchesAny(nonTestPatterns, path)
+}
+
+func matchesAny(patterns []string, path string) bool {
 	lowerPath := strings.ToLower(path)
-	for _, pattern := range excludePatterns {
+	for _, pattern := range patterns {
 		if matched, _ := doublestar.Match(pattern, lowerPath); matched {
 			return true
 		}

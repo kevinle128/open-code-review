@@ -568,3 +568,41 @@ func TestServeReviewReportsMergeBase(t *testing.T) {
 		t.Fatalf("base = %q, want merge base %q (base tip %q)", res.Base, repo.base, tip)
 	}
 }
+
+// Serve reviews test files, still skips test data, and skips a JSON or YAML
+// file whose diff is larger than the data limit.
+func TestServeReviewFileFilter(t *testing.T) {
+	startServeFakeLLM(t, &serveFakeLLM{}, "")
+	repo := newServeRepo(t)
+	big := strings.Repeat("  \"k\": 1,\n", serveconfig.MaxDataChangedLines+1)
+	files := map[string]string{
+		"a_test.go":         "package p\n\nfunc TestA() {}\n",
+		"pkg/testdata/x.go": "package x\n",
+		"data/big.json":     "{\n" + big + "}\n",
+		"data/small.json":   "{\"k\": 1}\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(repo.dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	retryTestGit(t, repo.dir, "add", ".")
+	retryTestGit(t, repo.dir, "commit", "-q", "-m", "more files")
+	head := serveGitOut(t, repo.dir, "rev-parse", "HEAD")
+
+	res, err := serveReviewer{}.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: head})
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	c := res.Coverage
+	if c.Total != 3 {
+		t.Fatalf("total = %d, want a.go, a_test.go and data/small.json", c.Total)
+	}
+	if c.Skipped["large_data"] != 1 || c.Skipped["default_path"] != 1 {
+		t.Fatalf("skipped = %v", c.Skipped)
+	}
+}

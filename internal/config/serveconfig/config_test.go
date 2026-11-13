@@ -73,11 +73,12 @@ func TestLoad_Defaults(t *testing.T) {
 	want := &Config{
 		Addr: DefaultAddr, MaxRounds: 3, PollInterval: 2 * time.Minute, ReviewTimeout: 2 * time.Hour,
 		Workers: 2, MaxBodyBytes: 10485760, DataDir: "/data", WorkDir: "/work", BotIndicators: []string{"bot"},
+		Exclude: DefaultExcludes,
 	}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v\nwant %+v", c, want)
 	}
-	if got := c.RepoDefaults(); !reflect.DeepEqual(got, RepoConfig{Enabled: true, MaxRounds: 3}) {
+	if got := c.RepoDefaults(); !reflect.DeepEqual(got, RepoConfig{Enabled: true, MaxRounds: 3, Exclude: DefaultExcludes}) {
 		t.Fatalf("repo defaults %+v", got)
 	}
 }
@@ -183,6 +184,7 @@ func TestLoad_InvalidValues(t *testing.T) {
 		{"timeout zero", map[string]string{EnvReviewTimeout: "0s"}, EnvReviewTimeout},
 		{"timeout garbage", map[string]string{EnvReviewTimeout: "soon"}, EnvReviewTimeout},
 		{"bad regex", map[string]string{EnvIgnoreTitles: "([a-"}, EnvIgnoreTitles},
+		{"bad exclude glob", map[string]string{EnvExclude: "a/**, b/[x"}, EnvExclude},
 		{"github app id", map[string]string{EnvGitHubAppID: "abc", EnvGitHubPrivateKey: pkcs1PEM, EnvGitHubWebhookSecret: "s"}, EnvGitHubAppID},
 		{"github missing key", map[string]string{EnvGitHubAppID: "1", EnvGitHubWebhookSecret: "s"}, EnvGitHubPrivateKey},
 		{"github missing secret", map[string]string{EnvGitHubAppID: "1", EnvGitHubPrivateKey: pkcs1PEM}, EnvGitHubWebhookSecret},

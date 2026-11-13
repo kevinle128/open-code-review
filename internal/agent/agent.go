@@ -196,6 +196,10 @@ type Agent struct {
 	// and consumed by finalizeManifest to fill the manifest input/repository.
 	inputResolution    diff.InputResolution
 	repoRemoteIdentity string
+
+	// skipped counts the changed files this run's selection left out, by
+	// reason; set once before dispatch.
+	skipped map[string]int
 }
 
 // ResumeInfo summarizes file-level reuse for a resumed review.
@@ -324,6 +328,7 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	fmt.Fprintf(stdout.Writer(), "[ocr] %d file(s) changed, reviewing %d in %s\n", totalChanged, reviewCount, a.args.RepoDir)
 
 	a.logExclusions(decisions)
+	a.skipped = skippedByReason(decisions)
 	a.diffs = kept
 
 	// One run-level skip signal, keyed on the selected set rather than on what
@@ -449,6 +454,12 @@ func (a *Agent) SessionID() string {
 		return ""
 	}
 	return a.session.SessionID
+}
+
+// SkippedFiles returns how many changed files the selection left out, keyed
+// by ExcludeReason, or nil when it selected every file or never ran.
+func (a *Agent) SkippedFiles() map[string]int {
+	return a.skipped
 }
 
 // RunManifest returns the immutable coverage snapshot produced for this review,
@@ -2010,6 +2021,9 @@ func (a *Agent) logExclusions(decisions []fileDecision) {
 			fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — matches a built-in secret path\n", effectivePath(dec.Diff))
 		case ExcludeUserRule, ExcludeExtension, ExcludeDefaultPath:
 			fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — filtered by path/extension rules\n", effectivePath(dec.Diff))
+		case ExcludeLargeData:
+			fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — data file with %d changed lines\n",
+				effectivePath(dec.Diff), dec.Diff.Insertions+dec.Diff.Deletions)
 		default:
 			continue
 		}

@@ -50,12 +50,14 @@ type Result struct {
 	Base     string
 }
 
-// Coverage counts the files a run selected for review and the ones it
-// finished. Failed lists the files it could not review.
+// Coverage counts the files a run selected for review, after filtering, and
+// the ones it finished. Failed lists the files it could not review. Skipped
+// counts the changed files the filters left out, by exclude reason.
 type Coverage struct {
 	Total    int
 	Reviewed int
 	Failed   []FailedItem
+	Skipped  map[string]int
 }
 
 // FailedItem is a file the run could not review. Class is a
