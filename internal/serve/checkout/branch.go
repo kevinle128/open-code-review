@@ -33,7 +33,9 @@ func (w *workspace) FetchBranch(ctx context.Context, spec forge.CloneSpec, headS
 	if err := w.fetchRefs(ctx, spec, headSHA, baseSHA); err != nil {
 		return err
 	}
-	if _, err := runGit(ctx, w.dir, gitEnv(), "checkout", "-q", "-B", branch, "--end-of-options", headSHA); err != nil {
+	// The branch comes from a validated ref and headSHA is a 40-hex id.
+	// git checkout before 2.47 rejects --end-of-options.
+	if _, err := runGit(ctx, w.dir, gitEnv(), "checkout", "-q", "-B", branch, headSHA); err != nil {
 		return fmt.Errorf("git checkout: %w", err)
 	}
 	sum, err := w.gitConfigSum()

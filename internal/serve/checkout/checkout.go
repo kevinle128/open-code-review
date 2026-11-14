@@ -140,8 +140,10 @@ func (w *workspace) Fetch(ctx context.Context, spec forge.CloneSpec, headSHA, ba
 	if err := w.fetchRefs(ctx, spec, headSHA, baseSHA); err != nil {
 		return err
 	}
+	// headSHA is checked to be a 40-hex id, so it cannot be read as an
+	// option. git checkout before 2.47 rejects --end-of-options.
 	if _, err := runGit(ctx, w.dir, gitEnv(), "-c", "advice.detachedHead=false",
-		"checkout", "-q", "--detach", "--end-of-options", headSHA); err != nil {
+		"checkout", "-q", "--detach", headSHA); err != nil {
 		return fmt.Errorf("git checkout: %w", err)
 	}
 	return nil
