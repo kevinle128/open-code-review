@@ -57,6 +57,9 @@ type PR struct {
 	BaseSHA      string
 	Draft        bool
 	State        string // open, closed or merged
+	// Fork is true when the head branch lives in another repository, or in
+	// one that no longer exists; the service cannot push to such a branch.
+	Fork bool
 }
 
 // PR states.
@@ -113,10 +116,29 @@ type Finding struct {
 }
 
 // Thread is a resolvable thread whose root comment the service posted.
+// Path and Line are where the thread sits (Line is 0 for a file-level
+// thread); Body is the root comment as posted. Replies are the later
+// comments in the thread, without the ones the service wrote.
 type Thread struct {
 	ID        string
 	FindingID string
 	Resolved  bool
+	Path      string
+	Line      int
+	Body      string
+	Replies   []Reply
+}
+
+// Reply is a comment a person added to a finding thread.
+type Reply struct {
+	Author string
+	Body   string
+}
+
+// Identity is the git author the service commits as.
+type Identity struct {
+	Name  string
+	Email string
 }
 
 // Comment is a top-level PR comment or note.
@@ -194,4 +216,18 @@ type Forge interface {
 	// ReadFile reads path at sha. The bool is false when the file does not
 	// exist; a file over maxBytes is an error.
 	ReadFile(ctx context.Context, ref PRRef, sha, path string, maxBytes int) ([]byte, bool, error)
+	// PushSpec returns fetch and push settings for the PR head branch itself
+	// (HeadRef is refs/heads/<source branch>) with a token that may push.
+	// It refuses a fork PR. Call it again right before a push: the token of
+	// an earlier call can expire during a long run.
+	PushSpec(ctx context.Context, pr PR) (CloneSpec, error)
+	// CommitIdentity is the git author for commits the service pushes.
+	CommitIdentity(ctx context.Context, ref PRRef) (Identity, error)
+	// ReplyThread adds a reply to a thread from ListOCRThreads.
+	ReplyThread(ctx context.Context, ref PRRef, threadID, body string) error
+	// ResolveThread resolves a thread from ListOCRThreads.
+	ResolveThread(ctx context.Context, ref PRRef, threadID string) error
 }
+
+// ErrFork is returned by PushSpec for a PR whose head branch is in a fork.
+var ErrFork = errors.New("the head branch is in a fork")

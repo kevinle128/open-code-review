@@ -13,12 +13,25 @@ import (
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 )
 
-func thread(id string, resolved bool, login, typename, body string) map[string]any {
-	root := map[string]any{"body": body}
+func commentNode(login, typename, body string) map[string]any {
+	c := map[string]any{"body": body}
 	if login != "" {
-		root["author"] = map[string]any{"login": login, "__typename": typename}
+		c["author"] = map[string]any{"login": login, "__typename": typename}
 	}
-	return map[string]any{"id": id, "isResolved": resolved, "root": map[string]any{"nodes": []any{root}}}
+	return c
+}
+
+func thread(id string, resolved bool, login, typename, body string, replies ...map[string]any) map[string]any {
+	nodes := append([]any{commentNode(login, typename, body)}, toAny(replies)...)
+	return map[string]any{"id": id, "isResolved": resolved, "comments": map[string]any{"nodes": nodes}}
+}
+
+func toAny(ms []map[string]any) []any {
+	out := make([]any, len(ms))
+	for i, m := range ms {
+		out[i] = m
+	}
+	return out
 }
 
 func TestListOCRThreads(t *testing.T) {
@@ -33,7 +46,7 @@ func TestListOCRThreads(t *testing.T) {
 		thread("T4", false, "other-app", "Bot", tag("r1-aaaa-04")),
 		thread("T5", false, testSlug, "Bot", "a bot thread with no finding tag"),
 		thread("T6", false, "", "", tag("r1-aaaa-06")),
-		{"id": "T7", "isResolved": false, "root": map[string]any{"nodes": []any{}}},
+		{"id": "T7", "isResolved": false, "comments": map[string]any{"nodes": []any{}}},
 		thread("T8", false, testBot, "Bot", tag("m-bbbb-08")),
 	}
 	f, _ := fa.forge(t)
@@ -42,9 +55,9 @@ func TestListOCRThreads(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []forge.Thread{
-		{ID: "T1", FindingID: "r1-aaaa-01"},
-		{ID: "T2", FindingID: "r1-aaaa-02", Resolved: true},
-		{ID: "T8", FindingID: "m-bbbb-08"},
+		{ID: "T1", FindingID: "r1-aaaa-01", Body: tag("r1-aaaa-01") + "\nbody"},
+		{ID: "T2", FindingID: "r1-aaaa-02", Resolved: true, Body: tag("r1-aaaa-02")},
+		{ID: "T8", FindingID: "m-bbbb-08", Body: tag("m-bbbb-08")},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("threads = %+v, want %+v", got, want)
@@ -58,6 +71,34 @@ func TestListOCRThreads(t *testing.T) {
 	}
 	if fa.graphqlVars[1]["cursor"] != "2" {
 		t.Fatalf("second page cursor = %v", fa.graphqlVars[1]["cursor"])
+	}
+}
+
+// TestListOCRThreadsPlaceAndReplies reads where a thread sits, falls back to
+// the original line of an outdated thread, and keeps only replies that the
+// App did not write.
+func TestListOCRThreadsPlaceAndReplies(t *testing.T) {
+	fa := newFakeAPI(t)
+	tag := forge.FindingTag
+	live := thread("T1", true, testSlug, "Bot", tag("r1-aaaa-01"),
+		commentNode("alice", "User", "This is intended."),
+		commentNode(testSlug, "Bot", "Skipped by the fix run."),
+		commentNode("", "", "ghost reply"))
+	live["path"], live["line"], live["originalLine"] = "a.go", 12, 10
+	outdated := thread("T2", false, testSlug, "Bot", tag("r1-aaaa-02"))
+	outdated["path"], outdated["line"], outdated["originalLine"] = "b.go", nil, 7
+	fa.threads = []map[string]any{live, outdated}
+	f, _ := fa.forge(t)
+	got, err := f.ListOCRThreads(context.Background(), testRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Path != "a.go" || got[0].Line != 12 || got[1].Path != "b.go" || got[1].Line != 7 {
+		t.Fatalf("threads = %+v", got)
+	}
+	want := []forge.Reply{{Author: "alice", Body: "This is intended."}, {Author: "", Body: "ghost reply"}}
+	if fmt.Sprint(got[0].Replies) != fmt.Sprint(want) || got[1].Replies != nil {
+		t.Fatalf("replies = %+v / %+v", got[0].Replies, got[1].Replies)
 	}
 }
 

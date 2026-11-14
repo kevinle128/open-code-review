@@ -50,6 +50,9 @@ type fakeForge struct {
 	errs      map[string]error // method name -> error to return
 	errOnce   map[string]error // method name -> error for the next call only
 	headAfter map[string]string
+	replies   []string // threadID + ":" + body
+	resolved  []string
+	pushSpecs int
 
 	calls     atomic.Int64
 	gate      chan struct{} // when set, API calls wait for it to close
@@ -205,6 +208,51 @@ func (f *fakeForge) ReadFile(_ context.Context, _ forge.PRRef, sha, path string,
 		return nil, false, fmt.Errorf("%s exceeds %d bytes", path, maxBytes)
 	}
 	return raw, ok, nil
+}
+
+func (f *fakeForge) PushSpec(_ context.Context, pr forge.PR) (forge.CloneSpec, error) {
+	if err := f.api("PushSpec"); err != nil {
+		return forge.CloneSpec{}, err
+	}
+	if pr.Fork {
+		return forge.CloneSpec{}, forge.ErrFork
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pushSpecs++
+	return forge.CloneSpec{URL: "file:///" + pr.Ref.Repo, HeadRef: "refs/heads/" + pr.SourceBranch, BaseRef: "refs/heads/" + pr.TargetBranch}, nil
+}
+
+func (f *fakeForge) CommitIdentity(context.Context, forge.PRRef) (forge.Identity, error) {
+	if err := f.api("CommitIdentity"); err != nil {
+		return forge.Identity{}, err
+	}
+	return forge.Identity{Name: "ocr[bot]", Email: "1+ocr[bot]@users.noreply.github.com"}, nil
+}
+
+func (f *fakeForge) ReplyThread(_ context.Context, _ forge.PRRef, threadID, body string) error {
+	if err := f.api("ReplyThread"); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.replies = append(f.replies, threadID+":"+body)
+	return nil
+}
+
+func (f *fakeForge) ResolveThread(_ context.Context, ref forge.PRRef, threadID string) error {
+	if err := f.api("ResolveThread"); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolved = append(f.resolved, threadID)
+	for i := range f.threads[ref.Key()] {
+		if f.threads[ref.Key()][i].ID == threadID {
+			f.threads[ref.Key()][i].Resolved = true
+		}
+	}
+	return nil
 }
 
 // Test helpers on the fake.
