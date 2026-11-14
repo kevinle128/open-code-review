@@ -167,9 +167,6 @@ func TestServeMain_StartupErrors(t *testing.T) {
 		{"work dir unusable", okConfig, func(m map[string]string) {
 			m[serveconfig.EnvWorkDir] = filepath.Join(notADir, "work")
 		}, "checkout work dir"},
-		{"data dir unusable", okConfig, func(m map[string]string) {
-			m[serveconfig.EnvDataDir] = filepath.Join(notADir, "data")
-		}, "store directory"},
 		{"cli engine without its skill", okConfig, func(m map[string]string) {
 			m[serveconfig.EnvEngine] = serveconfig.EngineCLI
 			m[serveconfig.EnvSkillDir] = t.TempDir()
@@ -208,7 +205,6 @@ func TestServeMain_ServesAndShutsDown(t *testing.T) {
 	m[serveconfig.EnvGitLabURL] = gl.URL
 	m[serveconfig.EnvGitLabToken] = "gl-token"
 	m[serveconfig.EnvGitLabWebhookSecret] = "gl-secret"
-	m[serveconfig.EnvPollInterval] = "1h"
 
 	var logs bytes.Buffer
 	var logMu sync.Mutex
@@ -387,7 +383,7 @@ func fakeGitLabHooks(t *testing.T) (*httptest.Server, *[]string) {
 		}
 		switch r.URL.EscapedPath() {
 		case "/api/v4/projects/group%2Fapp":
-			_, _ = io.WriteString(w, `{"id": 9, "path_with_namespace": "group/app", "only_allow_merge_if_all_discussions_are_resolved": false}`)
+			_, _ = io.WriteString(w, `{"id": 9, "path_with_namespace": "group/app", "only_allow_merge_if_pipeline_succeeds": false}`)
 		case "/api/v4/projects/9/hooks":
 			_, _ = io.WriteString(w, `[]`)
 		default:

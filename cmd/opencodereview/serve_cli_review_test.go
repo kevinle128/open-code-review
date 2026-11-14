@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,7 +18,6 @@ import (
 	"github.com/alibaba/open-code-review/internal/serve/clireview"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/review"
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 // noLLMEnv clears the OCR LLM settings: the CLI engine must not need them.
@@ -176,10 +174,11 @@ func cliEngineConfig(t *testing.T, answer string) *serveconfig.Config {
 	return &serveconfig.Config{
 		Engine: serveconfig.EngineCLI, ReviewConcurrency: 1, BundleLines: 300,
 		CLI: serveconfig.CLIConfig{
-			ReviewCLI: serveconfig.CLICodex, FixCLI: serveconfig.CLIClaude, CodexBin: bin, ClaudeBin: bin, SkillDir: skillDir,
+			ReviewCLI: serveconfig.CLICodex, CodexBin: bin, ClaudeBin: bin, SkillDir: skillDir,
 			Home: filepath.Join(dir, "cli-home"), CodexAuth: auth, ClaudeSettings: settings,
 			BatchLines: 900, BatchFiles: 12, BatchConcurrency: 2,
 		},
+		Verify: serveconfig.VerifyConfig{CLI: serveconfig.CLIClaude},
 	}
 }
 
@@ -285,86 +284,28 @@ func TestBuildServeReviewerRunsAgy(t *testing.T) {
 	}
 }
 
-// useFakeClaudeVerifier makes claude the verify CLI of cfg, with a fake
-// claude that records its arguments and answers with verdicts.
-func useFakeClaudeVerifier(t *testing.T, cfg *serveconfig.Config, verdicts string) string {
-	t.Helper()
-	dir := t.TempDir()
-	result, err := json.Marshal(map[string]any{"type": "result", "subtype": "success", "result": verdicts})
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := filepath.Join(dir, "out.json")
-	if err := os.WriteFile(out, result, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	args := filepath.Join(dir, "args")
-	bin := filepath.Join(dir, "claude")
-	script := "#!/bin/sh\ncat >/dev/null\nfor a in \"$@\"; do echo \"$a\" >>" + args + "; done\ncat " + out + "\n"
-	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	cfg.CLI.ClaudeBin = bin
-	cfg.Verify = serveconfig.VerifyConfig{CLI: serveconfig.CLIClaude, Model: "opus", Post: []string{serveconfig.VerdictReal}}
-	return args
-}
-
-func TestBuildServeReviewerRunsTheVerifyPass(t *testing.T) {
-	writeServeAppConfig(t, `{"language": "Vietnamese"}`)
-	noLLMEnv(t)
-	repo := newServeRepo(t)
-	cfg := cliEngineConfig(t, `{"summary": "ok", "findings": [
- {"path": "a.go", "line": 4, "end_line": null, "severity": "low", "category": "bug",
-  "title": "Nil map", "body": "The map is never made.", "suggestion": null},
- {"path": "a.go", "line": 5, "end_line": null, "severity": "low", "category": "style",
-  "title": "Name", "body": "Rename it.", "suggestion": null}]}`)
+// TestBuildServeFixerUsesTheVerifySettings builds the fix run CLI from
+// the verify settings: its model replaces the CLI model, and unset it keeps
+// that CLI's own model.
+func TestBuildServeFixerUsesTheVerifySettings(t *testing.T) {
+	cfg := cliEngineConfig(t, "{}")
 	cfg.CLI.ClaudeModel = "sonnet"
-	args := useFakeClaudeVerifier(t, cfg, `{"verdicts":[
- {"id":"F1","verdict":"real","severity":"high","reason":"A write panics."},
- {"id":"F2","verdict":"minor","severity":"low","reason":"Style only."}]}`)
-
-	rev, _, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
+	cfg.Verify.Model = "opus"
+	rev, fixer, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cr := rev.(*clireview.Reviewer)
-	if c, ok := cr.Verify.CLI.(agentcli.Claude); !ok || c.Model != "opus" || cr.Verify.Post[0] != serveconfig.VerdictReal {
-		t.Fatalf("verifier %+v", cr.Verify)
+	fx := fixer.(*clireview.Fixer)
+	if c, ok := fx.CLI.(agentcli.Claude); !ok || c.Model != "opus" || fx.Language == "" {
+		t.Fatalf("fix cli %+v", fx)
 	}
-	if c := cr.CLI.(agentcli.Codex); c.Model != "" {
+	if c := rev.(*clireview.Reviewer).CLI.(agentcli.Codex); c.Model != "" {
 		t.Fatalf("the verify model reached the review cli: %+v", c)
 	}
-	pr := forge.PR{Ref: forge.PRRef{Platform: forge.GitHub, Repo: "acme/app", Number: 3}, BaseSHA: repo.base, HeadSHA: repo.head}
-	res, err := rev.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head, PR: pr})
-	if err != nil {
-		t.Fatal(err)
-	}
-	loc, err := state.LoadLocale(serveLocale)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.Findings) != 1 || res.Findings[0].Severity != "high" ||
-		!strings.HasSuffix(res.Findings[0].Content, "\n\n"+loc.Text("finding.verified", "reason", "A write panics.")) {
-		t.Fatalf("findings %+v", res.Findings)
-	}
-	if res.Verify != (review.Verification{Checked: 2, Posted: 1}) || res.Terminal != review.TerminalComplete {
-		t.Fatalf("result %+v", res)
-	}
-	b, err := os.ReadFile(args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(b)
-	if !strings.Contains(got, "--model\nopus\n") || !strings.Contains(got, "--allowedTools\nRead,Grep,Glob\n") {
-		t.Fatalf("claude args %q", got)
-	}
-
 	cfg.Verify.Model = ""
-	if v, err := buildVerifier(cfg.CLI, cfg.Verify, cfg.Sandbox, nil); err != nil || v.CLI.(agentcli.Claude).Model != "sonnet" {
-		t.Fatalf("an unset verify model must keep the claude model: %+v %v", v, err)
-	}
-	if v, err := buildVerifier(cfg.CLI, serveconfig.VerifyConfig{CLI: serveconfig.VerifyNone}, cfg.Sandbox, nil); v != nil || err != nil {
-		t.Fatalf("verify off built %+v %v", v, err)
+	cli, err := buildFixCLI(cfg.CLI, cfg.Verify, cfg.Sandbox, nil)
+	if err != nil || cli.(agentcli.Claude).Model != "sonnet" {
+		t.Fatalf("an unset verify model must keep the claude model: %+v %v", cli, err)
 	}
 }
 
@@ -382,7 +323,7 @@ func TestBuildServeReviewerPicksTheEngine(t *testing.T) {
 	cfg = cliEngineConfig(t, "{}")
 	cfg.CLI.ReviewCLI = serveconfig.CLIClaude
 	cfg.CLI.ClaudeModel = "sonnet"
-	cfg.CLI.FixCLI = serveconfig.CLICodex
+	cfg.Verify.CLI = serveconfig.CLICodex
 	cfg.CLI.CodexEffort = "high"
 	rev, fixer, err = buildServeEngines(context.Background(), cfg, os.Getenv, nil)
 	if err != nil {
@@ -431,13 +372,13 @@ func TestBuildServeReviewerChecks(t *testing.T) {
 			useFakeAgy(t, c, "{}")
 			c.CLI.AgyToken = "/no/antigravity-oauth-token"
 		}, serveconfig.EnvAgyToken},
-		{"fix claude missing", func(c *serveconfig.Config) { c.CLI.ClaudeBin = "no-such-claude-binary" }, "fix cli: " + serveconfig.EnvClaudeBin},
-		{"fix claude settings missing", func(c *serveconfig.Config) { c.CLI.ClaudeSettings = "/no/settings.json" }, "fix cli: " + serveconfig.EnvClaudeSettings},
-		{"verify codex missing", func(c *serveconfig.Config) {
+		{"fix claude missing", func(c *serveconfig.Config) { c.CLI.ClaudeBin = "no-such-claude-binary" }, "fix cli (" + serveconfig.EnvVerifyCLI + "): " + serveconfig.EnvClaudeBin},
+		{"fix claude settings missing", func(c *serveconfig.Config) { c.CLI.ClaudeSettings = "/no/settings.json" }, "fix cli (" + serveconfig.EnvVerifyCLI + "): " + serveconfig.EnvClaudeSettings},
+		{"fix codex missing", func(c *serveconfig.Config) {
 			c.CLI.ReviewCLI = serveconfig.CLIClaude
 			c.CLI.CodexBin = "no-such-codex-binary"
-			c.Verify = serveconfig.VerifyConfig{CLI: serveconfig.CLICodex, Post: []string{serveconfig.VerdictReal}}
-		}, "verify cli: " + serveconfig.EnvCodexBin},
+			c.Verify = serveconfig.VerifyConfig{CLI: serveconfig.CLICodex}
+		}, "fix cli (" + serveconfig.EnvVerifyCLI + "): " + serveconfig.EnvCodexBin},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -459,21 +400,11 @@ func TestEngineName(t *testing.T) {
 	if got := engineName(cfg); got != "cli/claude" {
 		t.Fatal(got)
 	}
-	cfg.CLI.FixCLI = serveconfig.CLICodex
+	cfg.Verify.CLI = serveconfig.CLICodex
 	if got := fixCLIName(cfg); got != "codex" {
 		t.Fatal(got)
 	}
 	if got := fixCLIName(&serveconfig.Config{Engine: serveconfig.EngineOCR}); got != "none" {
-		t.Fatal(got)
-	}
-	if got := verifyCLIName(cfg); got != serveconfig.VerifyNone {
-		t.Fatal(got)
-	}
-	cfg.Verify.CLI = serveconfig.CLIClaude
-	if got := verifyCLIName(cfg); got != serveconfig.CLIClaude {
-		t.Fatal(got)
-	}
-	if got := verifyCLIName(&serveconfig.Config{Engine: serveconfig.EngineOCR, Verify: cfg.Verify}); got != serveconfig.VerifyNone {
 		t.Fatal(got)
 	}
 }

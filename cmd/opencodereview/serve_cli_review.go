@@ -19,7 +19,6 @@ import (
 	"github.com/alibaba/open-code-review/internal/serve/agentcli"
 	"github.com/alibaba/open-code-review/internal/serve/clireview"
 	"github.com/alibaba/open-code-review/internal/serve/review"
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 // defaultServeLanguage is the output language when the app config names
@@ -93,8 +92,8 @@ func (s serveSelector) Select(ctx context.Context, req review.Request) (clirevie
 }
 
 // buildServeEngines returns the review engine the configuration selects
-// and, for the CLI engine, the fix engine; the OCR engine has none, so /fix
-// answers that it is not available. For the CLI engine it checks the
+// and, for the CLI engine, the fix run of each round; the OCR engine has
+// none, so its rounds only report. For the CLI engine it checks the
 // executables, the skill and the CLI credential files, and removes the
 // sandbox containers and run directories a stopped service left.
 func buildServeEngines(ctx context.Context, cfg *serveconfig.Config, getenv func(string) string, log *slog.Logger) (review.Reviewer, review.Fixer, error) {
@@ -117,9 +116,9 @@ func buildServeEngines(ctx context.Context, cfg *serveconfig.Config, getenv func
 	if err != nil {
 		return nil, nil, err
 	}
-	fixCLI, err := buildAgentCLI(c, cfg.Sandbox, sb, c.FixCLI)
+	fixCLI, err := buildFixCLI(c, cfg.Verify, cfg.Sandbox, sb)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fix cli: %w", err)
+		return nil, nil, err
 	}
 	homes, err := agentcli.NewHomes(c.Home)
 	if err != nil {
@@ -135,43 +134,27 @@ func buildServeEngines(ctx context.Context, cfg *serveconfig.Config, getenv func
 	if lang == "" {
 		lang = defaultServeLanguage
 	}
-	verify, err := buildVerifier(c, cfg.Verify, cfg.Sandbox, sb)
-	if err != nil {
-		return nil, nil, err
-	}
 	rev := &clireview.Reviewer{
 		Selector: serveSelector{ocr: ocr}, CLI: reviewCLI, Homes: homes,
-		SkillDir: c.SkillDir, Getenv: getenv, Log: log, Verify: verify,
+		SkillDir: c.SkillDir, Getenv: getenv, Log: log,
 		Batching: clireview.Batching{Lines: c.BatchLines, Files: c.BatchFiles, Concurrency: c.BatchConcurrency},
 	}
 	fix := &clireview.Fixer{CLI: fixCLI, Homes: homes, SkillDir: c.SkillDir, Language: lang, Getenv: getenv}
 	return rev, fix, nil
 }
 
-// buildVerifier returns the verify pass, or nil when it is off. A set
-// verify model replaces the configured model of the verify CLI; unset, the
-// verify run uses that CLI's own model setting. The note on a posted
-// finding comes from the service locale.
-func buildVerifier(c serveconfig.CLIConfig, v serveconfig.VerifyConfig, sc serveconfig.SandboxConfig, sb *agentcli.Sandbox) (*clireview.Verifier, error) {
-	if !v.Enabled() {
-		return nil, nil
-	}
+// buildFixCLI returns the CLI of the fix run of each round. A set verify
+// model replaces the configured model of that CLI; unset, the run uses
+// that CLI's own model setting.
+func buildFixCLI(c serveconfig.CLIConfig, v serveconfig.VerifyConfig, sc serveconfig.SandboxConfig, sb *agentcli.Sandbox) (agentcli.CLI, error) {
 	if v.Model != "" {
 		c.ClaudeModel, c.CodexModel = v.Model, v.Model
 	}
 	cli, err := buildAgentCLI(c, sc, sb, v.CLI)
 	if err != nil {
-		return nil, fmt.Errorf("verify cli: %w", err)
+		return nil, fmt.Errorf("fix cli (%s): %w", serveconfig.EnvVerifyCLI, err)
 	}
-	loc, err := state.LoadLocale(serveLocale)
-	if err != nil {
-		return nil, err
-	}
-	return &clireview.Verifier{CLI: cli, Post: v.Post, Note: func(reason string) string {
-		return loc.Text("finding.verified", "reason", reason)
-	}, FixNote: func(fix string) string {
-		return loc.Text("finding.fix", "fix", fix)
-	}}, nil
+	return cli, nil
 }
 
 // buildSandbox checks the docker client, creates the toolchain caches under

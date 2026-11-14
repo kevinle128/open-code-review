@@ -168,7 +168,7 @@ func TestBuildServeEnginesSandboxChecks(t *testing.T) {
 			}
 		}, serveconfig.EnvSandbox + "=docker"},
 		{"codex outside its install dir", func(c *serveconfig.Config, _ string) { c.Sandbox.CodexDir = t.TempDir() }, serveconfig.EnvSandboxCodexDir},
-		{"claude outside its install dir", func(c *serveconfig.Config, _ string) { c.Sandbox.ClaudeDir = t.TempDir() }, "fix cli: " + serveconfig.EnvSandboxClaudeDir},
+		{"claude outside its install dir", func(c *serveconfig.Config, _ string) { c.Sandbox.ClaudeDir = t.TempDir() }, "fix cli (" + serveconfig.EnvVerifyCLI + "): " + serveconfig.EnvSandboxClaudeDir},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
