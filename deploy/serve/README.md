@@ -165,6 +165,7 @@ OCR_SERVE_GITLAB_WEBHOOK_SECRET=<secret>
 # OCR_SERVE_AGY_BIN=/home/<user>/.local/bin/agy
 # OCR_SERVE_AGY_TOKEN=/home/<user>/.gemini/antigravity-cli/antigravity-oauth-token
 # Optional, as on the stack: OCR_SERVE_REVIEW_CLI, OCR_SERVE_FIX_CLI,
+# OCR_SERVE_VERIFY_CLI, OCR_SERVE_VERIFY_MODEL, OCR_SERVE_VERIFY_POST,
 # OCR_SERVE_CODEX_EFFORT, OCR_SERVE_MAX_ROUNDS, OCR_SERVE_EXCLUDE, ...
 # OCR_LLM_* only for OCR_SERVE_ENGINE=ocr.
 ```
@@ -339,7 +340,7 @@ threads, the summary marker, rounds and the merge gate do not change.
 | `OCR_SERVE_AGY_MODEL` | empty | agy `--model`, a slug from `agy models`, for example `gemini-4-hydrogen-high`; empty uses the account default. |
 | `OCR_SERVE_AGY_EFFORT` | empty | agy `--effort`: `low`, `medium`, `high`, `xhigh` or `max`. |
 
-At startup the service checks that the review and fix CLI binaries, the
+At startup the service checks that the review, fix and verify CLI binaries, the
 skill file and the CLI credential files can be read, and stops with the
 variable name when one cannot. How each CLI runs:
 
@@ -360,7 +361,9 @@ variable name when one cannot. How each CLI runs:
   and the tools `Read`, `Edit`, `MultiEdit`, `Write`, `Glob`, `Grep` and
   `Task`, plus `Bash` only with `OCR_SERVE_SANDBOX=docker`, where the shell
   runs in the run's container (see [Sandbox](#sandbox)). Without the sandbox
-  it gets no shell.
+  it gets no shell. A [verify](#verify-pass) run keeps the read tools and
+  gets `Bash` the same way, only with the docker sandbox, where the checkout
+  is mounted read-only.
 - agy: `agy -p <prompt> --output-format json --json-schema <schema file>
   --dangerously-skip-permissions --disable-slash-commands --settings <json>`
   in the run input directory, not in the checkout, with `--add-dir` for the
@@ -471,6 +474,77 @@ batches of the same review, so run agy with the docker sandbox where you
 can.
 As with codex, agy has a shell (`--dangerously-skip-permissions`), so a PR
 that tricks it into a network command could send the token file out.
+
+### Verify pass
+
+`OCR_SERVE_VERIFY_CLI` turns on a second check of the findings before they
+are posted. One reviewer CLI finds the most real problems but also reports
+minor, wrong and out-of-scope ones; a second CLI that reads the code for
+each finding sorts them. Example: review with agy, verify with Claude Opus,
+and post only the real findings:
+
+```bash
+OCR_SERVE_REVIEW_CLI=agy
+OCR_SERVE_AGY_MODEL=gemini-4-carbon-medium
+OCR_SERVE_VERIFY_CLI=claude
+OCR_SERVE_VERIFY_MODEL=opus
+OCR_SERVE_VERIFY_POST=real
+```
+
+After the review has merged the findings of all batches and dropped the
+duplicates, and when at least one finding is left, the service runs the
+verify CLI once, in the same sandbox as a review and with the checkout
+read-only. Its run directory holds `pr.json`, `diff.patch` with the changes
+of every selected file, and `findings.json` with each finding under an id
+(`F1`, `F2`, ...). The prompt does not hold the review skill, only
+`pr-body-contract.md` from its `references/` and the findings. It tells the
+verifier to act as an independent senior reviewer, to read the code at each
+cited location, the PR diff (it names the `git diff` ranges), the callers
+and the tests, not to trust the finding text, and not to report new
+findings. It gives each finding one verdict, and may correct its severity:
+
+| Verdict | Meaning |
+|---|---|
+| `real` | A defect this PR introduces or touches that should be fixed before merge, with a concrete failing scenario. |
+| `minor` | True but of low impact: style, a speculative concern, hardening of configuration the project sets itself. |
+| `false` | Wrong: already handled, a misreading, or unreachable. |
+| `out_of_scope` | True, but this PR did not introduce or change the code at fault. |
+
+A PR-level finding about the PR description is judged by
+`pr-body-contract.md`; one about the PR scope is `real` when the PR clearly
+mixes unrelated changes.
+
+The service posts only the findings whose verdict is in
+`OCR_SERVE_VERIFY_POST`, with the verifier's severity and its reason as a
+last line (locale key `finding.verified`). A finding the verifier gave no
+valid verdict is posted unverified, with a warning in the log. When the
+verify run fails or times out, every finding is posted unverified, the log
+gets a `review verify failed` warning and the summary comment says that the
+check failed; the review still counts as complete (or partial). The verify
+run has 45 minutes and ends 5 minutes before the review timeout, so the
+findings can still be posted. A successful run logs one `review verify`
+line with the count of each verdict (`real`, `minor`, `out_of_scope`,
+`false`, and `missing` for findings without a verdict), the findings posted
+and the duration, and the summary comment shows how many findings were
+checked and posted.
+
+The pass runs for every review: automatic rounds, `/review`,
+`/review-commit` and the review after a `/fix` commit. `/fix`, rounds,
+threads, the merge gate and the dismissed findings do not change. A finding
+the verifier drops gets no thread, so a later round can report it again,
+and the verifier then checks it again.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `OCR_SERVE_VERIFY_CLI` | `none` | `none`, `claude` or `codex`. `agy` is refused at startup. The credential file of the CLI is required, as for the review CLI. |
+| `OCR_SERVE_VERIFY_MODEL` | empty | Model of the verify run: Claude `--model` or Codex `-m`, for example `opus`. Empty uses the model setting of that CLI (`OCR_SERVE_CLAUDE_MODEL` or `OCR_SERVE_CODEX_MODEL`), then the CLI default. Codex keeps `OCR_SERVE_CODEX_EFFORT`. |
+| `OCR_SERVE_VERIFY_POST` | `real` | Comma list of the verdicts whose findings are posted: `real`, `minor`, `out_of_scope`, `false`. |
+
+With `claude` the verify run gets `Read`, `Grep` and `Glob`, plus `Bash`
+with `OCR_SERVE_SANDBOX=docker` so it can run `git diff` and similar read
+commands in the container. As for a `/fix` run, that shell can reach the
+network, so a PR that tricks the verifier could send the token of the
+mounted settings out; without the sandbox it gets no shell.
 
 ### Sandbox
 

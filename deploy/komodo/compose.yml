@@ -73,6 +73,11 @@
 #   OCR_SERVE_BATCH_LINES, OCR_SERVE_BATCH_FILES, OCR_SERVE_BATCH_CONCURRENCY
 #                                    Review batch size and parallel batches;
 #                                    defaults 1500, 25 and 1.
+#   OCR_SERVE_VERIFY_CLI             none (default), claude or codex: a
+#                                    second CLI checks the findings first.
+#   OCR_SERVE_VERIFY_MODEL           Model of the verify run, e.g. opus;
+#                                    empty uses that CLI's model setting.
+#   OCR_SERVE_VERIFY_POST            Verdicts to post; default real.
 #   OCR_SERVE_CLAUDE_BIN             Default /opt/claude/versions/2.1.322;
 #                                    change it when the host Claude updates.
 #   OCR_SERVE_CODEX_BIN              Default /opt/codex/releases/0.163.0-
@@ -139,6 +144,9 @@ services:
       OCR_SERVE_BATCH_LINES: ${OCR_SERVE_BATCH_LINES:-}
       OCR_SERVE_BATCH_FILES: ${OCR_SERVE_BATCH_FILES:-}
       OCR_SERVE_BATCH_CONCURRENCY: ${OCR_SERVE_BATCH_CONCURRENCY:-}
+      OCR_SERVE_VERIFY_CLI: ${OCR_SERVE_VERIFY_CLI:-}
+      OCR_SERVE_VERIFY_MODEL: ${OCR_SERVE_VERIFY_MODEL:-}
+      OCR_SERVE_VERIFY_POST: ${OCR_SERVE_VERIFY_POST:-}
       OCR_SERVE_CLAUDE_BIN: ${OCR_SERVE_CLAUDE_BIN:-/opt/claude/versions/2.1.322}
       OCR_SERVE_CODEX_BIN: ${OCR_SERVE_CODEX_BIN:-/opt/codex/releases/0.163.0-x86_64-unknown-linux-musl/bin/codex}
       OCR_SERVE_CODEX_AUTH: /opt/codex-home/auth.json
