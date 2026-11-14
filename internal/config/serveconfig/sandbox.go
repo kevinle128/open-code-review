@@ -18,6 +18,7 @@ const (
 	EnvSandboxCodexDir    = "OCR_SERVE_SANDBOX_CODEX_DIR"
 	EnvSandboxClaudeDir   = "OCR_SERVE_SANDBOX_CLAUDE_DIR"
 	EnvSandboxImagePrefix = "OCR_SERVE_SANDBOX_IMAGE_"
+	EnvSandboxAddHosts    = "OCR_SERVE_SANDBOX_ADD_HOSTS"
 )
 
 // Sandbox modes.
@@ -59,6 +60,8 @@ var (
 	memoryPattern = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
 	cpusPattern   = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 	imagePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
+	// host:ip for docker --add-host; the ip may be IPv4 or IPv6.
+	addHostPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9A-Fa-f.:]+$`)
 )
 
 // SandboxConfig holds how each CLI run is isolated. Mode SandboxNone runs
@@ -74,6 +77,11 @@ type SandboxConfig struct {
 	CodexDir  string
 	ClaudeDir string
 	Images    map[string]string
+	// AddHosts are host:ip pairs added to /etc/hosts in the container. A
+	// name that the host resolves through a private DNS (Tailscale MagicDNS)
+	// can resolve to another address through the public DNS a container
+	// uses, so endpoints such as an LLM proxy on the tailnet need them.
+	AddHosts []string
 }
 
 func (l *loader) sandbox() SandboxConfig {
@@ -85,6 +93,13 @@ func (l *loader) sandbox() SandboxConfig {
 		CodexDir:  l.absPath(EnvSandboxCodexDir, ""),
 		ClaudeDir: l.absPath(EnvSandboxClaudeDir, ""),
 		Images:    make(map[string]string, len(DefaultSandboxImages)),
+	}
+	for _, h := range splitList(l.getenv(EnvSandboxAddHosts)) {
+		if !addHostPattern.MatchString(h) {
+			l.fail("%s has an invalid entry %q, want host:ip", EnvSandboxAddHosts, h)
+			continue
+		}
+		s.AddHosts = append(s.AddHosts, h)
 	}
 	for kind, def := range DefaultSandboxImages {
 		s.Images[kind] = l.pattern(EnvSandboxImagePrefix+kind, def, imagePattern)

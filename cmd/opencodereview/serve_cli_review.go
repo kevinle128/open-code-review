@@ -149,7 +149,7 @@ func buildSandbox(ctx context.Context, cfg *serveconfig.Config, log *slog.Logger
 	im := cfg.Sandbox.Images
 	sb := &agentcli.Sandbox{
 		Docker: docker, UID: os.Getuid(), GID: os.Getgid(),
-		Memory: cfg.Sandbox.Memory, CPUs: cfg.Sandbox.CPUs,
+		Memory: cfg.Sandbox.Memory, CPUs: cfg.Sandbox.CPUs, AddHosts: cfg.Sandbox.AddHosts,
 		Images: agentcli.Images{
 			Go: im[serveconfig.ImageGo], Dotnet: im[serveconfig.ImageDotnet], Rust: im[serveconfig.ImageRust],
 			Node: im[serveconfig.ImageNode], Python: im[serveconfig.ImagePython], Default: im[serveconfig.ImageDefault],

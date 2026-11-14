@@ -365,6 +365,7 @@ any container.
 | `OCR_SERVE_DOCKER_BIN` | `docker` | Name on `PATH` or absolute path of the docker CLI. |
 | `OCR_SERVE_SANDBOX_MEMORY` | `6g` | `docker run --memory`. |
 | `OCR_SERVE_SANDBOX_CPUS` | `4` | `docker run --cpus`. |
+| `OCR_SERVE_SANDBOX_ADD_HOSTS` | empty | Comma-separated `host:ip` pairs for `docker run --add-host`. A container resolves names through public DNS, so a name the host resolves through Tailscale MagicDNS (for example an LLM proxy at `vtc.<tailnet>.ts.net`) needs its tailnet IP here, or the CLI cannot reach it. |
 | `OCR_SERVE_SANDBOX_IMAGE_GO` | `golang:1-bookworm` | Checkout with `go.mod`. |
 | `OCR_SERVE_SANDBOX_IMAGE_DOTNET` | `mcr.microsoft.com/dotnet/sdk:9.0` | `*.csproj`, `*.sln` or `global.json`. |
 | `OCR_SERVE_SANDBOX_IMAGE_RUST` | `rust:1-bookworm` | `Cargo.toml`. |

@@ -66,6 +66,7 @@ type Sandbox struct {
 	Images   Images
 	CacheDir string
 	Mounts   []Mount
+	AddHosts []string
 	Log      *slog.Logger
 	// Getenv supplies the docker client environment; nil means os.Getenv.
 	Getenv func(string) string
@@ -195,6 +196,9 @@ func (s *Sandbox) runArgs(inv Invocation, p Process, name, image string) ([]stri
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--pids-limit", "1024", "--memory", s.Memory, "--cpus", s.CPUs,
 		"--network", "bridge", "-w", inv.RepoDir, "--env-file", envFile}
+	for _, h := range s.AddHosts {
+		args = append(args, "--add-host", h)
+	}
 	users, err := s.writeUserFiles(inv.Run.Dir)
 	if err != nil {
 		return nil, err

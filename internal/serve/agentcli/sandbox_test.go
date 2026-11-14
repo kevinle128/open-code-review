@@ -486,3 +486,18 @@ func TestRunDirRemoveClearsReadOnlyDirs(t *testing.T) {
 		t.Fatalf("run dir left: %v", err)
 	}
 }
+
+func TestSandboxPassesAddHosts(t *testing.T) {
+	f := newSandboxFixture(t)
+	f.sb.AddHosts = []string{"proxy.example.ts.net:100.88.18.71"}
+	result, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "result": "{}"})
+	bin := writeScript(t, t.TempDir(), "claude", recorder(f.rec)+"echo '"+string(result)+"'\n")
+	c := Claude{Bin: bin, SettingsFile: writeSettings(t, `{"model":"sonnet"}`), Sandbox: f.sb}
+	if _, err := c.Exec(context.Background(), f.inv("review")); err != nil {
+		t.Fatal(err)
+	}
+	runArgs := readFile(t, filepath.Join(f.dockerRec, "run-args"))
+	if !strings.Contains(runArgs, "--add-host\nproxy.example.ts.net:100.88.18.71\n") {
+		t.Fatalf("run args miss the --add-host pair:\n%s", runArgs)
+	}
+}

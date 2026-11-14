@@ -115,3 +115,29 @@ func TestRequireServe_SandboxRejectsCommaPaths(t *testing.T) {
 		t.Fatalf("ocr engine: %v", err)
 	}
 }
+
+func TestSandboxAddHosts(t *testing.T) {
+	l := &loader{getenv: func(k string) string {
+		if k == EnvSandboxAddHosts {
+			return "vtc.example.ts.net:100.88.18.71, v6.example:fd7a::1"
+		}
+		return ""
+	}}
+	s := l.sandbox()
+	if len(l.errs) != 0 {
+		t.Fatalf("errors: %v", l.errs)
+	}
+	want := []string{"vtc.example.ts.net:100.88.18.71", "v6.example:fd7a::1"}
+	if strings.Join(s.AddHosts, " ") != strings.Join(want, " ") {
+		t.Fatalf("got %v", s.AddHosts)
+	}
+	bad := &loader{getenv: func(k string) string {
+		if k == EnvSandboxAddHosts {
+			return "--privileged"
+		}
+		return ""
+	}}
+	if bad.sandbox(); len(bad.errs) == 0 {
+		t.Fatal("want an error for an invalid entry")
+	}
+}
