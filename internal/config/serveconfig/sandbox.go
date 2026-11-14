@@ -17,6 +17,7 @@ const (
 	EnvSandboxCPUs        = "OCR_SERVE_SANDBOX_CPUS"
 	EnvSandboxCodexDir    = "OCR_SERVE_SANDBOX_CODEX_DIR"
 	EnvSandboxClaudeDir   = "OCR_SERVE_SANDBOX_CLAUDE_DIR"
+	EnvSandboxAgyDir      = "OCR_SERVE_SANDBOX_AGY_DIR"
 	EnvSandboxImagePrefix = "OCR_SERVE_SANDBOX_IMAGE_"
 	EnvSandboxAddHosts    = "OCR_SERVE_SANDBOX_ADD_HOSTS"
 )
@@ -66,7 +67,7 @@ var (
 
 // SandboxConfig holds how each CLI run is isolated. Mode SandboxNone runs
 // the CLI as a child process of the service; SandboxDocker runs it in a
-// throwaway container. CodexDir and ClaudeDir are the install directories
+// throwaway container. CodexDir, ClaudeDir and AgyDir are the install directories
 // mounted into the container; empty means the directory of the resolved
 // binary. Images maps each toolchain kind to its image.
 type SandboxConfig struct {
@@ -76,6 +77,7 @@ type SandboxConfig struct {
 	CPUs      string
 	CodexDir  string
 	ClaudeDir string
+	AgyDir    string
 	Images    map[string]string
 	// AddHosts are host:ip pairs added to /etc/hosts in the container. A
 	// name that the host resolves through a private DNS (Tailscale MagicDNS)
@@ -92,6 +94,7 @@ func (l *loader) sandbox() SandboxConfig {
 		CPUs:      l.pattern(EnvSandboxCPUs, DefaultSandboxCPUs, cpusPattern),
 		CodexDir:  l.absPath(EnvSandboxCodexDir, ""),
 		ClaudeDir: l.absPath(EnvSandboxClaudeDir, ""),
+		AgyDir:    l.absPath(EnvSandboxAgyDir, ""),
 		Images:    make(map[string]string, len(DefaultSandboxImages)),
 	}
 	for _, h := range splitList(l.getenv(EnvSandboxAddHosts)) {
@@ -128,8 +131,9 @@ func (c *Config) requireSandbox() error {
 	for _, p := range []struct{ env, path string }{
 		{EnvDataDir, c.DataDir}, {EnvWorkDir, c.WorkDir}, {EnvCLIHome, c.CLI.Home},
 		{EnvSkillDir, c.CLI.SkillDir}, {EnvCodexAuth, c.CLI.CodexAuth},
-		{EnvClaudeSettings, c.CLI.ClaudeSettings},
+		{EnvClaudeSettings, c.CLI.ClaudeSettings}, {EnvAgyToken, c.CLI.AgyToken},
 		{EnvSandboxCodexDir, c.Sandbox.CodexDir}, {EnvSandboxClaudeDir, c.Sandbox.ClaudeDir},
+		{EnvSandboxAgyDir, c.Sandbox.AgyDir},
 	} {
 		if strings.Contains(p.path, ",") {
 			return fmt.Errorf("%s must not contain a comma with %s=%s, got %q", p.env, EnvSandbox, SandboxDocker, p.path)

@@ -18,6 +18,7 @@ func TestLoad_SandboxSettings(t *testing.T) {
 		EnvSandboxCPUs:                      "2.5",
 		EnvSandboxCodexDir:                  "/opt/codex/",
 		EnvSandboxClaudeDir:                 "/opt/claude",
+		EnvSandboxAgyDir:                    "/opt/agy/",
 		EnvSandboxImagePrefix + ImageGo:     "golang:1.26-bookworm",
 		EnvSandboxImagePrefix + ImageNode:   "registry.example.com/node@sha256:abc",
 		EnvSandboxImagePrefix + ImageRust:   "",
@@ -28,7 +29,7 @@ func TestLoad_SandboxSettings(t *testing.T) {
 	}
 	want := SandboxConfig{
 		Mode: SandboxDocker, DockerBin: "/usr/local/bin/docker", Memory: "8G", CPUs: "2.5",
-		CodexDir: "/opt/codex", ClaudeDir: "/opt/claude",
+		CodexDir: "/opt/codex", ClaudeDir: "/opt/claude", AgyDir: "/opt/agy",
 		Images: map[string]string{
 			ImageGo:      "golang:1.26-bookworm",
 			ImageDotnet:  "mcr.microsoft.com/dotnet/sdk:10.0",
@@ -49,6 +50,7 @@ func TestLoad_InvalidSandboxSettings(t *testing.T) {
 		EnvSandboxMemory:                    "6 GB",
 		EnvSandboxCPUs:                      "--privileged",
 		EnvSandboxCodexDir:                  "relative/codex",
+		EnvSandboxAgyDir:                    "relative/agy",
 		EnvSandboxImagePrefix + ImagePython: "-v /:/host",
 	}
 	for key, val := range cases {
@@ -113,6 +115,14 @@ func TestRequireServe_SandboxRejectsCommaPaths(t *testing.T) {
 	}
 	if err := c.RequireServe(); err != nil {
 		t.Fatalf("ocr engine: %v", err)
+	}
+	delete(base, EnvEngine)
+	base[EnvDataDir], base[EnvReviewCLI], base[EnvAgyToken] = "/srv/data", CLIAgy, "/agy/a,b/token"
+	if c, err = Load(env(base), files(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RequireServe(); err == nil || !strings.Contains(err.Error(), EnvAgyToken) {
+		t.Fatalf("agy token: %v", err)
 	}
 }
 

@@ -34,7 +34,7 @@ func TestLoad_CLIEngineSettings(t *testing.T) {
 		CodexBin: "/opt/codex/bin/codex", ClaudeBin: "/opt/claude/versions/2.1.322",
 		CodexModel: "gpt-6.1-sol", ClaudeModel: "claude-sonnet-5-5[1m]", CodexEffort: "medium",
 		SkillDir: "/opt/ocr-skills", Home: "/state/cli",
-		CodexAuth: "/run/codex/auth.json", ClaudeSettings: "/run/claude/settings.json",
+		CodexAuth: "/run/codex/auth.json", ClaudeSettings: "/run/claude/settings.json", AgyBin: DefaultAgyBin,
 		BatchLines: 800, BatchFiles: 10, BatchConcurrency: 4,
 	}
 	if c.Engine != EngineOCR || c.CLI != want {
@@ -42,6 +42,38 @@ func TestLoad_CLIEngineSettings(t *testing.T) {
 	}
 	if c.CLI.Bin(CLIClaude) != want.ClaudeBin || c.CLI.Bin(CLICodex) != want.CodexBin {
 		t.Fatal("Bin picks the wrong executable")
+	}
+}
+
+func TestLoad_AgySettings(t *testing.T) {
+	c, err := Load(env(map[string]string{
+		EnvReviewCLI: "AGY",
+		EnvAgyBin:    "/home/svc/.local/bin/agy",
+		EnvAgyToken:  "/home/svc/.gemini/antigravity-cli/antigravity-oauth-token",
+		EnvAgyModel:  "gemini-4-hydrogen-high",
+		EnvAgyEffort: "xhigh",
+	}), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.CLI.ReviewCLI != CLIAgy || c.CLI.FixCLI != DefaultFixCLI || c.CLI.AgyBin != "/home/svc/.local/bin/agy" ||
+		c.CLI.AgyToken != "/home/svc/.gemini/antigravity-cli/antigravity-oauth-token" ||
+		c.CLI.AgyModel != "gemini-4-hydrogen-high" || c.CLI.AgyEffort != "xhigh" {
+		t.Fatalf("cli %+v", c.CLI)
+	}
+	if c.CLI.Bin(CLIAgy) != c.CLI.AgyBin {
+		t.Fatal("Bin picks the wrong executable")
+	}
+	c, err = Load(env(nil), files(nil))
+	if err != nil || c.CLI.AgyBin != DefaultAgyBin || c.CLI.AgyEffort != "" || c.CLI.AgyModel != "" {
+		t.Fatalf("agy defaults %+v %v", c.CLI, err)
+	}
+}
+
+func TestLoad_AgyIsReviewOnly(t *testing.T) {
+	_, err := Load(env(map[string]string{EnvFixCLI: "agy"}), files(nil))
+	if err == nil || !strings.Contains(err.Error(), EnvFixCLI+"=agy is not supported: agy runs reviews only") {
+		t.Fatalf("err %v", err)
 	}
 }
 
@@ -70,6 +102,9 @@ func TestLoad_InvalidCLIEngineSettings(t *testing.T) {
 		EnvCLIHome:          "./home",
 		EnvCodexAuth:        "auth.json",
 		EnvClaudeSettings:   "~/.claude/settings.json",
+		EnvAgyToken:         "token",
+		EnvAgyModel:         "--sandbox",
+		EnvAgyEffort:        "ultra",
 		EnvBatchLines:       "99",
 		EnvBatchFiles:       "0",
 		EnvBatchConcurrency: "5",
@@ -106,6 +141,11 @@ func TestRequireServe_CLIEngine(t *testing.T) {
 		{"codex fix needs auth", Config{GitHub: gh, Engine: EngineCLI,
 			CLI: CLIConfig{ReviewCLI: CLIClaude, FixCLI: CLICodex, SkillDir: "/s", ClaudeSettings: "/c"}},
 			[]string{EnvCodexAuth + " is required when " + EnvFixCLI}},
+		{"agy needs the token", Config{GitHub: gh, Engine: EngineCLI,
+			CLI: CLIConfig{ReviewCLI: CLIAgy, FixCLI: CLIClaude, SkillDir: "/s", ClaudeSettings: "/c"}},
+			[]string{EnvAgyToken + " is required when " + EnvReviewCLI}},
+		{"agy complete", Config{GitHub: gh, Engine: EngineCLI,
+			CLI: CLIConfig{ReviewCLI: CLIAgy, FixCLI: CLIClaude, SkillDir: "/s", ClaudeSettings: "/c", AgyToken: "/t"}}, nil},
 		{"both complete", Config{GitHub: gh, Engine: EngineCLI,
 			CLI: CLIConfig{ReviewCLI: CLICodex, FixCLI: CLIClaude, SkillDir: "/s", CodexAuth: "/a", ClaudeSettings: "/c"}}, nil},
 	}

@@ -25,6 +25,10 @@ const (
 	EnvCLIHome        = "OCR_SERVE_CLI_HOME"
 	EnvCodexAuth      = "OCR_SERVE_CODEX_AUTH"
 	EnvClaudeSettings = "OCR_SERVE_CLAUDE_SETTINGS"
+	EnvAgyBin         = "OCR_SERVE_AGY_BIN"
+	EnvAgyToken       = "OCR_SERVE_AGY_TOKEN"
+	EnvAgyModel       = "OCR_SERVE_AGY_MODEL"
+	EnvAgyEffort      = "OCR_SERVE_AGY_EFFORT"
 
 	EnvBatchLines       = "OCR_SERVE_BATCH_LINES"
 	EnvBatchFiles       = "OCR_SERVE_BATCH_FILES"
@@ -53,12 +57,15 @@ const (
 
 	CLICodex  = "codex"
 	CLIClaude = "claude"
+	// CLIAgy is the Google Antigravity CLI, accepted for reviews only.
+	CLIAgy = "agy"
 
 	DefaultEngine    = EngineCLI
 	DefaultReviewCLI = CLICodex
 	DefaultFixCLI    = CLIClaude
 	DefaultCodexBin  = "codex"
 	DefaultClaudeBin = "claude"
+	DefaultAgyBin    = "agy"
 	// cliHomeName is the default CLI home directory under the data dir.
 	cliHomeName = "cli-home"
 )
@@ -69,6 +76,9 @@ var (
 	modelPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]*$`)
 	effortPattern = regexp.MustCompile(`^[a-z]+$`)
 )
+
+// AgyEfforts are the values `agy --effort` accepts.
+var AgyEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 
 // CLIConfig holds the settings of the CLI review engine, which runs an
 // installed coding-agent CLI on the checkout. ReviewCLI runs reviews;
@@ -87,6 +97,10 @@ type CLIConfig struct {
 	Home           string
 	CodexAuth      string
 	ClaudeSettings string
+	AgyBin         string
+	AgyToken       string
+	AgyModel       string
+	AgyEffort      string
 
 	BatchLines       int
 	BatchFiles       int
@@ -95,8 +109,11 @@ type CLIConfig struct {
 
 // Bin returns the configured executable of the named CLI.
 func (c CLIConfig) Bin(name string) string {
-	if name == CLIClaude {
+	switch name {
+	case CLIClaude:
 		return c.ClaudeBin
+	case CLIAgy:
+		return c.AgyBin
 	}
 	return c.CodexBin
 }
@@ -107,8 +124,8 @@ func (l *loader) engine() string {
 
 func (l *loader) cli(dataDir string) CLIConfig {
 	return CLIConfig{
-		ReviewCLI:      l.oneOf(EnvReviewCLI, DefaultReviewCLI, CLICodex, CLIClaude),
-		FixCLI:         l.oneOf(EnvFixCLI, DefaultFixCLI, CLIClaude, CLICodex),
+		ReviewCLI:      l.oneOf(EnvReviewCLI, DefaultReviewCLI, CLICodex, CLIClaude, CLIAgy),
+		FixCLI:         l.fixCLI(),
 		CodexBin:       l.str(EnvCodexBin, DefaultCodexBin),
 		ClaudeBin:      l.str(EnvClaudeBin, DefaultClaudeBin),
 		CodexModel:     l.matching(EnvCodexModel, modelPattern),
@@ -118,11 +135,33 @@ func (l *loader) cli(dataDir string) CLIConfig {
 		Home:           l.absPath(EnvCLIHome, filepath.Join(dataDir, cliHomeName)),
 		CodexAuth:      l.absPath(EnvCodexAuth, ""),
 		ClaudeSettings: l.absPath(EnvClaudeSettings, ""),
+		AgyBin:         l.str(EnvAgyBin, DefaultAgyBin),
+		AgyToken:       l.absPath(EnvAgyToken, ""),
+		AgyModel:       l.matching(EnvAgyModel, modelPattern),
+		AgyEffort:      l.optionalOneOf(EnvAgyEffort, AgyEfforts...),
 
 		BatchLines:       l.intIn(EnvBatchLines, DefaultBatchLines, MinBatchLines, MaxBatchLines),
 		BatchFiles:       l.intIn(EnvBatchFiles, DefaultBatchFiles, MinBatchFiles, MaxBatchFiles),
 		BatchConcurrency: l.intIn(EnvBatchConcurrency, DefaultBatchConcurrency, MinBatchConcurrency, MaxBatchConcurrency),
 	}
+}
+
+// fixCLI names agy in its own error, since agy is a valid review CLI and
+// the generic list of allowed values would not say why it is refused here.
+func (l *loader) fixCLI() string {
+	if strings.EqualFold(l.str(EnvFixCLI, ""), CLIAgy) {
+		l.fail("%s=%s is not supported: agy runs reviews only, set %s to %s or %s", EnvFixCLI, CLIAgy, EnvFixCLI, CLIClaude, CLICodex)
+		return DefaultFixCLI
+	}
+	return l.oneOf(EnvFixCLI, DefaultFixCLI, CLIClaude, CLICodex)
+}
+
+// optionalOneOf is oneOf for a setting whose empty value means unset.
+func (l *loader) optionalOneOf(key string, allowed ...string) string {
+	if l.str(key, "") == "" {
+		return ""
+	}
+	return l.oneOf(key, "", allowed...)
 }
 
 func (l *loader) oneOf(key, def string, allowed ...string) string {
@@ -183,6 +222,10 @@ func (c *Config) requireCLI() error {
 		case CLIClaude:
 			if c.CLI.ClaudeSettings == "" {
 				errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvClaudeSettings, use.env, CLIClaude))
+			}
+		case CLIAgy:
+			if c.CLI.AgyToken == "" {
+				errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvAgyToken, use.env, CLIAgy))
 			}
 		}
 	}

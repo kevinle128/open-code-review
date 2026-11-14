@@ -76,7 +76,7 @@ func TestLoad_Defaults(t *testing.T) {
 		Exclude: DefaultExcludes, ReviewConcurrency: 5, BundleLines: 300,
 		Engine: EngineCLI,
 		CLI: CLIConfig{
-			ReviewCLI: CLICodex, FixCLI: CLIClaude, CodexBin: "codex", ClaudeBin: "claude",
+			ReviewCLI: CLICodex, FixCLI: CLIClaude, CodexBin: "codex", ClaudeBin: "claude", AgyBin: "agy",
 			Home:       "/data/cli-home",
 			BatchLines: 1500, BatchFiles: 25, BatchConcurrency: 1,
 		},
