@@ -17,6 +17,8 @@ severity.medium = Medium
 severity.low = Low
 
 finding.original_location = Originally at {location}; the comment was moved because those lines are not in the diff.
+finding.pr_level = This finding is about the pull request as a whole.
+finding.pr_level_anchored = This finding is about the pull request as a whole; it is posted on {path} because a resolvable thread needs a file.
 finding.suggestion = Suggestion:
 
 summary.title = OCR code review

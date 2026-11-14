@@ -98,6 +98,10 @@ func TestPlace(t *testing.T) {
 			Placement{Kind: General, Relocated: true}},
 		{"incomplete inventory cannot prove outside", Finding{Path: "other.go", StartLine: 5, EndLine: 6}, Inventory{Known: map[string]bool{}}, "a.go",
 			Placement{Kind: Line, Path: "other.go", StartLine: 5, EndLine: 6}},
+		{"PR-level finding goes to first file", Finding{}, inventory(), "a.go",
+			Placement{Kind: FileLevel, Path: "a.go", Relocated: true}},
+		{"PR-level finding without file-level support", Finding{}, Inventory{}, "",
+			Placement{Kind: General, Relocated: true}},
 		{"incomplete inventory and no lines", Finding{Path: "other.go"}, Inventory{}, "",
 			Placement{Kind: General, Relocated: true}},
 	}

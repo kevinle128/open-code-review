@@ -302,3 +302,44 @@ func TestBuildPromptWithoutLanguageOrBackground(t *testing.T) {
 		t.Fatalf("prompt\n%s", p)
 	}
 }
+
+func TestToCommentsMapsPRLevelFindings(t *testing.T) {
+	repoDir := t.TempDir()
+	write(t, repoDir, "a.go", "package a\n")
+	write(t, repoDir, "Makefile", "all:\n")
+	end := 9
+	fs := []finding{
+		{Path: "pr.json", Line: 1, EndLine: &end, Title: "PR body", Body: "No test plan.", Severity: "Medium", Category: "documentation"},
+		{Path: "", Line: 0, Body: "Missing summary."},
+		{Path: "./pr.json", Line: 3, Body: "Bad title."},
+		{Path: "/home/ocr/cli-home/run-1/input/pr.json", Line: 2, Body: "No risk section."},
+		{Path: "PR description", Line: 1, Body: "Too short."},
+		{Path: "x/y.go", Line: 1, Body: "Not in the repo."},
+		{Path: "Makefile", Line: 1, Body: "An unselected repo file."},
+		{Path: "notes.txt", Line: 1, Body: "A missing file with an extension."},
+	}
+	got, dropped := toComments(fs, []string{"a.go"}, repoDir)
+	if len(got) != 5 || len(dropped) != 3 {
+		t.Fatalf("comments %+v dropped %v", got, dropped)
+	}
+	for _, c := range got {
+		if c.Path != "" || c.StartLine != 0 || c.EndLine != 0 {
+			t.Fatalf("PR-level comment %+v", c)
+		}
+	}
+	if got[0].Content != "**PR body**\n\nNo test plan." || got[0].Severity != "medium" || got[0].Category != "documentation" {
+		t.Fatalf("first comment %+v", got[0])
+	}
+	for i, want := range []string{`"x/y.go"`, `"Makefile"`, `"notes.txt"`} {
+		if !strings.Contains(dropped[i], want) {
+			t.Fatalf("dropped %v", dropped)
+		}
+	}
+}
+
+func TestPromptAsksForAnEmptyPathOnPRLevelFindings(t *testing.T) {
+	p := buildPrompt("skill", "/in", Selection{}, false)
+	if !strings.Contains(p, "`path` is `\"\"` and `line` is 0") {
+		t.Fatalf("prompt\n%s", p)
+	}
+}

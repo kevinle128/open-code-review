@@ -16,6 +16,8 @@ severity.medium = Trung bình
 severity.low = Thấp
 
 finding.original_location = Vị trí gốc: {location}; bình luận được chuyển chỗ vì các dòng đó không nằm trong diff.
+finding.pr_level = Phát hiện này nói về toàn bộ pull request.
+finding.pr_level_anchored = Phát hiện này nói về toàn bộ pull request; nó được đặt ở {path} vì một thread có thể resolve cần gắn với một file.
 finding.suggestion = Đề xuất:
 
 summary.title = Review code bằng OCR

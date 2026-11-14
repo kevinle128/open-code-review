@@ -61,12 +61,13 @@ func TestPostFindingsPlacement(t *testing.T) {
 		{ID: "notindiff", Path: "other.go", StartLine: 3, EndLine: 3},
 		{ID: "deleted", Path: "gone.go", StartLine: 1, EndLine: 1},
 		{ID: "renamed", Path: "new/name.go", StartLine: 1, EndLine: 1},
+		{ID: "prlevel"},
 	}
 	res, err := f.PostFindings(context.Background(), testPR, fs, renderKind)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res != (forge.PostResult{Posted: 7, Relocated: 1, General: 2}) {
+	if res != (forge.PostResult{Posted: 8, Relocated: 1, General: 3}) {
 		t.Fatalf("result %+v", res)
 	}
 	byID := map[string]discussionPayload{}
@@ -92,7 +93,7 @@ func TestPostFindingsPlacement(t *testing.T) {
 	if out := byID["outside"]; out.Position == nil || out.Position.NewLine != 15 || !strings.Contains(out.Body, "kind=1") {
 		t.Fatalf("outside %+v", out)
 	}
-	for _, id := range []string{"notindiff", "deleted"} {
+	for _, id := range []string{"notindiff", "deleted", "prlevel"} {
 		if p := byID[id]; p.Position != nil || !strings.Contains(p.Body, "kind=3") {
 			t.Fatalf("%s %+v", id, p)
 		}

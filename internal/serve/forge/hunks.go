@@ -148,7 +148,8 @@ type Placement struct {
 //     usable patch -> FileLevel on that file;
 //  4. a file that is provably not in the diff -> FileLevel on
 //     firstChangedPath, or General when firstChangedPath is empty (GitLab
-//     passes "" because it has no file-level threads).
+//     passes "" because it has no file-level threads). A finding with an
+//     empty path is about the PR as a whole and takes the same route.
 //
 // When the inventory cannot prove the path is outside the diff, Place returns
 // Line and leaves the forge to fall back after IsLineResolutionFailure.

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -115,7 +116,7 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (res review.R
 	if err != nil {
 		return res, fmt.Errorf("%s review: %w", r.CLI.Name(), err)
 	}
-	findings, dropped := toComments(ans.Findings, sel.Paths)
+	findings, dropped := toComments(ans.Findings, sel.Paths, req.RepoDir)
 	res.Findings = findings
 	res.Warnings = append(res.Warnings, dropped...)
 	res.Terminal = review.TerminalComplete
@@ -220,7 +221,7 @@ func buildPrompt(skill, inputDir string, sel Selection, dismissed bool) string {
 	}
 	b.WriteString("\nAnswer with ONLY one JSON object and no other text. It must match this JSON Schema:\n\n")
 	b.WriteString(findingsSchema)
-	b.WriteString("\n`path` is the repository path as shown in `diff.patch`. `line` is the new-file line where the problem shows; `end_line` is the last line of a range, or null. `suggestion` is the proposed fix as text or code, or null. Return an empty `findings` array when there is nothing to report.\n")
+	b.WriteString("\n`path` is the repository path as shown in `diff.patch`; for a finding about the PR as a whole, such as the PR description check, `path` is `\"\"` and `line` is 0, never `pr.json` or another run directory file. `line` is the new-file line where the problem shows; `end_line` is the last line of a range, or null. `suggestion` is the proposed fix as text or code, or null. Return an empty `findings` array when there is nothing to report.\n")
 	return b.String()
 }
 
@@ -285,12 +286,14 @@ func parseAnswer(msg string) (answer, error) {
 	return ans, nil
 }
 
-// toComments maps findings to OCR comments. A finding on a file outside the
+// toComments maps findings to OCR comments. A finding about the PR as a
+// whole, such as the PR description check, gets an empty path and no lines;
+// the forge posts it as a PR-level thread. A finding on a file outside the
 // selection is dropped: the filters left that file out on purpose, and a
 // secret or generated file must not get a thread. Line positions are left to
 // the forge, which moves a comment outside the diff to the nearest line or
 // the file.
-func toComments(fs []finding, paths []string) ([]model.LlmComment, []string) {
+func toComments(fs []finding, paths []string, repoDir string) ([]model.LlmComment, []string) {
 	selected := make(map[string]bool, len(paths))
 	for _, p := range paths {
 		selected[p] = true
@@ -299,6 +302,10 @@ func toComments(fs []finding, paths []string) ([]model.LlmComment, []string) {
 	var dropped []string
 	for _, f := range fs {
 		path, ok := selectedPath(f.Path, selected)
+		if !ok && prLevel(f.Path, repoDir) {
+			path, ok = "", true
+			f.Line, f.EndLine = 0, nil
+		}
 		content := strings.TrimSpace(f.Body)
 		if title := strings.TrimSpace(f.Title); title != "" {
 			content = strings.TrimSpace("**" + title + "**\n\n" + content)
@@ -334,4 +341,20 @@ func selectedPath(p string, selected map[string]bool) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// prLevel reports whether a finding path that matches no selected file
+// stands for the PR as a whole: empty, the pr.json input file the agent
+// read the PR description from, or a label such as "PR description" that
+// names no file of the checkout.
+func prLevel(p, repoDir string) bool {
+	p = strings.TrimSpace(p)
+	if p == "" || filepath.Base(filepath.FromSlash(p)) == "pr.json" {
+		return true
+	}
+	if strings.ContainsAny(p, `/\.`) {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(repoDir, p))
+	return errors.Is(err, fs.ErrNotExist)
 }
