@@ -41,6 +41,7 @@ func newFixer(t *testing.T, cli agentcli.CLI) (*Fixer, string) {
 	t.Helper()
 	skillDir := t.TempDir()
 	write(t, skillDir, SkillFile, "# ak-review-pr\n")
+	writeReferences(t, skillDir, fixReferences)
 	root := filepath.Join(t.TempDir(), "cli-home")
 	homes, err := agentcli.NewHomes(root)
 	if err != nil {
@@ -156,7 +157,7 @@ func TestWriteFixInputDefaults(t *testing.T) {
 	if err := writeFixInput(filepath.Join(dir, "gone"), req, ""); err == nil {
 		t.Fatal("write into a missing dir accepted")
 	}
-	if p := buildFixPrompt("skill", "/s", "/in", 5, ""); strings.Contains(p, "Output language") {
+	if p := buildFixPrompt("skill", "/in", 5, ""); strings.Contains(p, "Output language") {
 		t.Fatalf("prompt\n%s", p)
 	}
 }

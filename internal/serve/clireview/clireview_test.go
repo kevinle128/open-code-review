@@ -89,6 +89,7 @@ func newReviewer(t *testing.T, sel Selector, cli agentcli.CLI) (*Reviewer, strin
 	t.Helper()
 	skillDir := t.TempDir()
 	write(t, skillDir, SkillFile, "# ak-review-pr\n\n## Service mode (ocr serve)\n")
+	writeReferences(t, skillDir, reviewReferences)
 	root := filepath.Join(t.TempDir(), "cli-home")
 	homes, err := agentcli.NewHomes(root)
 	if err != nil {
@@ -96,6 +97,17 @@ func newReviewer(t *testing.T, sel Selector, cli agentcli.CLI) (*Reviewer, strin
 	}
 	return &Reviewer{Selector: sel, CLI: cli, Homes: homes, SkillDir: skillDir}, root
 }
+
+// writeReferences writes a fake reference file for each name; its text is
+// refText(name).
+func writeReferences(t *testing.T, skillDir string, names []string) {
+	t.Helper()
+	for _, n := range names {
+		write(t, skillDir, filepath.Join(filepath.Dir(SkillFile), "references", n), refText(n)+"\n")
+	}
+}
+
+func refText(name string) string { return "Reference body of " + name + "." }
 
 func runDirsLeft(t *testing.T, root string) int {
 	t.Helper()
@@ -170,7 +182,7 @@ func TestReviewMapsFindings(t *testing.T) {
 	if inv.RepoDir != r.dir || len(inv.ReadDirs) != 2 || inv.ReadDirs[0] != skillDir || inv.ReadDirs[1] != inv.Run.Input {
 		t.Fatalf("invocation %+v", inv)
 	}
-	for _, want := range []string{"# ak-review-pr", "You run under `ocr serve`", "Skill directory: `" + skillDir + "`",
+	for _, want := range []string{"# ak-review-pr", "You run under `ocr serve`", "do not look for them on disk",
 		"Run directory: `" + inv.Run.Input + "`", "Output language: Vietnamese.", "Payments service.", `"required": ["summary", "findings"]`} {
 		if !strings.Contains(inv.Prompt, want) {
 			t.Errorf("prompt misses %q", want)
@@ -285,7 +297,7 @@ func TestWriteInputUsesProjectIDWithoutRepoPath(t *testing.T) {
 }
 
 func TestBuildPromptWithoutLanguageOrBackground(t *testing.T) {
-	p := buildPrompt("skill", "/s", "/in", Selection{}, false)
+	p := buildPrompt("skill", "/in", Selection{}, false)
 	if strings.Contains(p, "Output language") || strings.Contains(p, "Review background") {
 		t.Fatalf("prompt\n%s", p)
 	}
