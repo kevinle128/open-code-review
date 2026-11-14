@@ -17,6 +17,8 @@ block the merge.
 | `Dockerfile.dockerignore` | Keeps the build context to `go.mod`, `go.sum`, `cmd/` and `internal/`. |
 | `compose.example.yml` | Example service. Copy it to `compose.yml`; keep `.env`, `config.json` and `github-app.pem` next to it and out of git. |
 | `../komodo/compose.yml` | Komodo stack: every setting from the stack environment; the host agent CLIs and the review skill are mounted read-only. See [Komodo](#komodo). |
+| `../pm2/ecosystem.config.cjs` | PM2 app `ocr-review` for a service that runs directly on a host. See [Run on a host with PM2](#run-on-a-host-with-pm2). |
+| `../pm2/deploy.sh` | Fetches a branch, builds the binary, reloads the PM2 app and checks `/healthz`; `--rollback` restores the previous binary. |
 
 ## Quick start
 
@@ -108,6 +110,113 @@ OCR_SERVE_CODEX_EFFORT=medium
   [GitLab hooks](#gitlab-hooks)):
   `docker exec -e OCR_SERVE_GITLAB_ADMIN_TOKEN -e OCR_SERVE_GITLAB_HOOK_URL -e OCR_SERVE_GITLAB_BOT_USERNAME ocr-review opencodereview serve hooks gitlab --dry-run`.
 
+## Run on a host with PM2
+
+The service can run directly on a Linux host under PM2 instead of in a
+container. Use this with the [docker sandbox](#sandbox): the service starts
+one container per CLI run with the host docker CLI, which a service
+container could only do with the docker socket mounted. The Komodo stack
+and the image stay as they are (`OCR_SERVE_SANDBOX=none`) for a rollback.
+
+Install for the service user, no root needed: Go (to build the binary),
+Node and PM2 (`npm install -g pm2`), git and curl. The user needs the
+docker CLI and membership in the `docker` group. The language toolchains
+live in the sandbox images, not on the host.
+
+Layout under `~/ocr-review/`:
+
+| Path | Purpose |
+|---|---|
+| `src/` | Checkout of this repository; `deploy.sh` clones it on the first run. |
+| `bin/ocr`, `bin/ocr.prev` | The running binary and the previous one. |
+| `data/` | `OCR_SERVE_DATA_DIR`: `waiting.json`, `cli-home/` (run dirs), `cache/` (toolchain caches). |
+| `work/` | `OCR_SERVE_WORK_DIR`: checkout slots. |
+| `skills/` | The review skill tree (`OCR_SERVE_SKILL_DIR`). |
+| `config.json` | OCR config with `language` (`OCR_CONFIG_FILE`). |
+| `ocr-review.env` | Service settings, mode 600. |
+
+`ocr-review.env` holds the same variables as the Komodo stack environment,
+one `KEY=VALUE` per line (`#` comments; one pair of quotes around a value is
+removed; the GitHub App key on one line with literal `\n`). Quote a value
+that holds spaces, so the file also loads in a shell with `set -a; . file`. The secrets are
+the values themselves, not `[[NAME]]` Komodo references. Differences from
+the stack: there is no `OCR_LANGUAGE` (the language goes into `config.json`),
+and the paths are host paths:
+
+```bash
+OCR_SERVE_ADDR=127.0.0.1:3012
+OCR_CONFIG_FILE=/home/<user>/ocr-review/config.json
+OCR_SERVE_DATA_DIR=/home/<user>/ocr-review/data
+OCR_SERVE_WORK_DIR=/home/<user>/ocr-review/work
+OCR_SERVE_SKILL_DIR=/home/<user>/ocr-review/skills
+OCR_SERVE_CODEX_BIN=/home/<user>/.local/bin/codex
+OCR_SERVE_CLAUDE_BIN=/home/<user>/.local/bin/claude
+OCR_SERVE_CODEX_AUTH=/home/<user>/.codex/auth.json
+OCR_SERVE_CLAUDE_SETTINGS=/home/<user>/.claude/settings.json
+OCR_SERVE_SANDBOX=docker
+OCR_SERVE_WORKERS=1
+OCR_SERVE_GITHUB_APP_ID=<app id>
+OCR_SERVE_GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
+OCR_SERVE_GITHUB_WEBHOOK_SECRET=<secret>
+OCR_SERVE_GITLAB_URL=https://git.example.com
+OCR_SERVE_GITLAB_TOKEN=<bot token>
+OCR_SERVE_GITLAB_WEBHOOK_SECRET=<secret>
+# Optional, as on the stack: OCR_SERVE_REVIEW_CLI, OCR_SERVE_FIX_CLI,
+# OCR_SERVE_CODEX_EFFORT, OCR_SERVE_MAX_ROUNDS, OCR_SERVE_EXCLUDE, ...
+# OCR_LLM_* only for OCR_SERVE_ENGINE=ocr.
+```
+
+The CLI binaries are resolved through their links at startup, so after a
+Claude or Codex update restart the service (`pm2 restart ocr-review`) to
+use the new version.
+
+First deploy and every later one:
+
+```bash
+mkdir -p ~/ocr-review && cd ~/ocr-review
+printf '{"language": "Vietnamese"}\n' > config.json
+install -m 600 /dev/null ocr-review.env   # then fill it in
+git clone --branch <branch> https://github.com/<owner>/open-code-review.git src
+OCR_REVIEW_BRANCH=<branch> src/deploy/pm2/deploy.sh
+```
+
+`deploy.sh` fetches `OCR_REVIEW_BRANCH` (default `main`) into `src/`, builds
+`bin/ocr.new` with `go build -trimpath` and the version labels, keeps the
+running binary as `bin/ocr.prev` when it is healthy, moves the new binary
+into place, runs `pm2 startOrReload deploy/pm2/ecosystem.config.cjs
+--update-env` and `pm2 save`, and waits until `/healthz` reports the new
+version (up to 2 minutes, which covers the drain of running reviews). It
+exits non-zero when a step fails. `deploy.sh --rollback` puts `bin/ocr.prev`
+back and checks the health again. Settings: `OCR_REVIEW_ROOT` (default
+`~/ocr-review`), `OCR_REVIEW_SRC`, `OCR_REVIEW_REPO`, `OCR_REVIEW_BRANCH`,
+`OCR_REVIEW_HEALTH_URL`, `OCR_REVIEW_HEALTH_TRIES`.
+
+The PM2 app runs `bin/ocr serve` with the settings of `ocr-review.env`, read
+by the ecosystem file each time PM2 loads it: after an edit run
+`pm2 startOrReload ~/ocr-review/src/deploy/pm2/ecosystem.config.cjs
+--update-env` (or `deploy.sh`). PM2 stops it with SIGTERM and waits 75
+seconds (`kill_timeout`) so running reviews can drain; only the service gets
+the signal, not the docker clients of running reviews. It restarts after a
+crash with a 5 second delay and when it uses more than 1 GB.
+
+- Logs: `pm2 logs ocr-review` (JSON lines, with timestamps).
+- Status: `pm2 status`, `curl -s http://127.0.0.1:3012/healthz`.
+- `pm2 save` writes the process list with its environment, secrets
+  included, to `~/.pm2/dump.pm2`; keep `~/.pm2` private:
+  `chmod 700 ~/.pm2`.
+- Start after a reboot: `pm2 startup` prints a systemd unit command that
+  needs sudo. Without sudo, add a crontab line
+  (`crontab -e`) that restores the saved list:
+
+  ```text
+  @reboot PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin pm2 resurrect >> $HOME/ocr-review/resurrect.log 2>&1
+  ```
+
+  Adjust `PATH` to where `node` and `pm2` are installed.
+- GitLab hooks: run the command with the binary and `ocr-review.env`
+  loaded in the shell, adding the admin token for that run only:
+  `set -a; . ~/ocr-review/ocr-review.env; set +a; OCR_SERVE_GITLAB_ADMIN_TOKEN=... ~/ocr-review/bin/ocr serve hooks gitlab --dry-run`.
+
 ## Routes
 
 | Method and path | Purpose |
@@ -139,8 +248,8 @@ setting both forms is an error.
 | `OCR_SERVE_REVIEW_CONCURRENCY` | `5` | LLM subtasks that one review runs at the same time, 1..32. `ocr review --concurrency` keeps its default of 8. |
 | `OCR_SERVE_BUNDLE_LINES` | `300` | A PR with fewer files than the grouping minimum (4) and fewer changed lines than this value is reviewed as one group; otherwise each file is a separate group. 50..5000. Replaces the template value of 200 for serve reviews only. |
 | `OCR_SERVE_MAX_BODY_BYTES` | `10485760` | Webhook body limit. |
-| `OCR_SERVE_DATA_DIR` | `/data` | Holds `waiting.json` (GitLab MRs waiting for resolution). |
-| `OCR_SERVE_WORK_DIR` | `/work` | Checkout slots `slot-N`, emptied after each run. |
+| `OCR_SERVE_DATA_DIR` | `~/ocr-review/data` | Holds `waiting.json` (GitLab MRs waiting for resolution), the CLI run dirs and the sandbox caches. The image sets `/data`; without `HOME` the default is `/data`. A relative path is made absolute. |
+| `OCR_SERVE_WORK_DIR` | `~/ocr-review/work` | Checkout slots `slot-N`, emptied after each run. The image sets `/work`; without `HOME` the default is `/work`. |
 | `OCR_SERVE_IGNORE_REPOS` | empty | Comma-separated RE2 patterns; match anywhere in the value. |
 | `OCR_SERVE_IGNORE_AUTHORS` | empty | Same format. |
 | `OCR_SERVE_IGNORE_TITLES` | empty | Same format. |
@@ -212,11 +321,14 @@ variable name when one cannot. How each CLI runs:
   checkout's settings and MCP servers are not loaded, and `--add-dir` for the
   skill and run directories. A `/fix` run uses `--permission-mode acceptEdits`
   and the tools `Read`, `Edit`, `MultiEdit`, `Write`, `Glob`, `Grep` and
-  `Task`, never a shell.
+  `Task`, plus `Bash` only with `OCR_SERVE_SANDBOX=docker`, where the shell
+  runs in the run's container (see [Sandbox](#sandbox)). Without the sandbox
+  it gets no shell.
 - The CLI gets `PATH`, locale, time zone, CA and proxy variables, and `HOME`
   and `TMPDIR` inside the run directory; none of the service secrets. It runs
   in its own process group: when the review limit ends it gets SIGTERM, then
   SIGKILL after 10 seconds, and whatever it started is killed when it exits.
+  With the docker sandbox the container is killed and removed instead.
 - One CLI process runs at a time when `OCR_SERVE_WORKERS=1`; set that for a
   CLI engine that shares an account with other users.
 
@@ -237,10 +349,94 @@ on the host updates and removes the old version, set the variable to the new
 path and redeploy. To switch the review CLI, set `OCR_SERVE_REVIEW_CLI` and
 redeploy.
 
+### Sandbox
+
+`OCR_SERVE_SANDBOX=docker` runs every CLI process (the codex review, the
+claude or codex `/fix`) in a throwaway container of its own. The default
+`none` runs the CLI as a child process of the service, which is right when
+the service itself runs in a container (the Komodo stack). The sandbox needs
+the docker CLI and a daemon the service user may use (on Linux, membership
+in the `docker` group); the service does not mount the docker socket into
+any container.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `OCR_SERVE_SANDBOX` | `none` | `none` or `docker`. Used only by the `cli` engine. |
+| `OCR_SERVE_DOCKER_BIN` | `docker` | Name on `PATH` or absolute path of the docker CLI. |
+| `OCR_SERVE_SANDBOX_MEMORY` | `6g` | `docker run --memory`. |
+| `OCR_SERVE_SANDBOX_CPUS` | `4` | `docker run --cpus`. |
+| `OCR_SERVE_SANDBOX_IMAGE_GO` | `golang:1-bookworm` | Checkout with `go.mod`. |
+| `OCR_SERVE_SANDBOX_IMAGE_DOTNET` | `mcr.microsoft.com/dotnet/sdk:9.0` | `*.csproj`, `*.sln` or `global.json`. |
+| `OCR_SERVE_SANDBOX_IMAGE_RUST` | `rust:1-bookworm` | `Cargo.toml`. |
+| `OCR_SERVE_SANDBOX_IMAGE_NODE` | `node:22-bookworm` | `package.json`. |
+| `OCR_SERVE_SANDBOX_IMAGE_PYTHON` | `python:3.12-bookworm` | `pyproject.toml` or `requirements.txt`. |
+| `OCR_SERVE_SANDBOX_IMAGE_DEFAULT` | `buildpack-deps:bookworm` | None of the above. |
+| `OCR_SERVE_SANDBOX_CODEX_DIR` | directory of the codex binary | Codex install mounted read-only. The binary is resolved through its links first, so `~/.local/bin/codex` mounts the release directory it points to. |
+| `OCR_SERVE_SANDBOX_CLAUDE_DIR` | directory of the claude binary | Same for Claude, for example `~/.local/share/claude/versions`. |
+
+Images. The service looks at the files in the checkout root and one
+directory level below it (monorepos), not in hidden directories. When
+several match, the first row of the table wins: Go, .NET, Rust, Node,
+Python. Use Debian (glibc) images only: the Claude Code binary does not
+start on Alpine (musl). An image missing on the host is pulled before the
+run (`docker pull`, bounded by `OCR_SERVE_REVIEW_TIMEOUT`); the log line
+`sandbox image` names the image and whether it was pulled.
+
+Each run is:
+
+```text
+docker run --rm -i --name ocr-run-<id> --init --user <service uid>:<gid>
+  --cap-drop ALL --security-opt no-new-privileges --pids-limit 1024
+  --memory 6g --cpus 4 --network bridge -w <checkout>
+  --env-file <run dir>/sandbox.env --mount ... <image> <cli> <args>
+```
+
+The prompt goes to the container on stdin. Every mount has the same path in
+the container as on the host:
+
+| Mount | Mode |
+|---|---|
+| The PR checkout (`$OCR_SERVE_WORK_DIR/slot-N`) | read-write for `/fix`, read-only for a review |
+| The run directory (`$OCR_SERVE_CLI_HOME/run-<id>`: home, input, output) | read-write |
+| `$OCR_SERVE_SKILL_DIR` | read-only |
+| The CLI install (see above) | read-only |
+| Codex: the directory of `OCR_SERVE_CODEX_AUTH` (`~/.codex`) | read-write, so a token refresh reaches the host; only `auth.json`, linked from the run home, is used |
+| Claude: `OCR_SERVE_CLAUDE_SETTINGS` | read-only; the run home holds the copy with only `env` and `model` |
+| `$OCR_SERVE_DATA_DIR/cache/{go,npm,nuget,cargo,pip}` | read-write toolchain caches |
+| `<run dir>/passwd`, `<run dir>/group` at `/etc/passwd`, `/etc/group` | read-only; give the service uid a user name, which some tools look up |
+
+The container gets the CLI environment of a run without the sandbox
+(`HOME`, `CODEX_HOME` or `CLAUDE_CONFIG_DIR` in the run home, `TMPDIR`,
+locale, CA and proxy variables), a `PATH` that covers the image toolchains,
+and the caches: `GOMODCACHE`, `GOCACHE`, `GOFLAGS=-modcacherw` (the module
+cache stays deletable), `npm_config_cache`, `NUGET_PACKAGES`, `CARGO_HOME`
+and `PIP_CACHE_DIR`. The caches are plain directories owned by the service
+user, so repeated runs are fast and need no `chown`. The values go through
+an env file, not the command line.
+
+When the run limit ends or the service stops a run, it runs `docker kill
+ocr-run-<id>` and waits for the docker client; after every run it runs
+`docker rm -f ocr-run-<id>`, so no container stays behind even when the
+client died first. At startup it removes every `ocr-run-*` container and run
+directory a stopped service left.
+
+What the AI can reach in the sandbox: the PR checkout, its own run
+directory, the skill, the CLI install, the host `~/.codex` directory (for
+codex), the Claude settings file (for claude), the toolchain caches, and the
+network. What it cannot reach: any other host path (the service `.env`, the
+GitHub App key, the forge tokens, the docker socket, other checkouts), the
+host processes, and root in the container. Accepted risk: the network is
+open, because the CLI needs its API and `/fix` needs package registries, so
+a CLI tricked by the PR content could still send the mounted auth file (and
+the rest of `~/.codex`, or the Claude settings with their API token) out.
+Run the service only on repositories whose authors you trust.
+
 ### OCR settings
 
-- `config.json` (mounted at `/home/ocr/.opencodereview/config.json`) must set
-  `language`; the service refuses to start without it. Use `"Vietnamese"` for
+- `config.json` (mounted at `/home/ocr/.opencodereview/config.json`; on a
+  host `~/.opencodereview/config.json`, or the absolute path in
+  `OCR_CONFIG_FILE`) must set `language`; the service refuses to start
+  without it. Use `"Vietnamese"` for
   Vietnamese review comments. The summary and labels use the built-in
   Vietnamese texts.
 - `config.json` must not contain `mcp_servers`: their setup commands would run
