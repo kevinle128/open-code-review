@@ -95,14 +95,11 @@ func (s *Server) end(ref forge.PRRef, gen uint64) {
 	}
 }
 
-// forgetChain drops the state of a closed PR and stops its round.
+// forgetChain stops the chain of a closed PR. The entry stays with a new
+// generation, so a round of the old chain still queued cannot pass as a
+// round of a chain started after the PR is reopened.
 func (s *Server) forgetChain(ref forge.PRRef) {
-	s.chainMu.Lock()
-	defer s.chainMu.Unlock()
-	if c := s.chains[ref.Key()]; c != nil && c.cancel != nil {
-		c.cancel()
-	}
-	delete(s.chains, ref.Key())
+	s.restartChain(ref)
 }
 
 // evaluate handles an opened or ready PR: it starts round 1 on the whole PR

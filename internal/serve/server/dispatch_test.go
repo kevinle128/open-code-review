@@ -101,8 +101,8 @@ func TestDispatchClosedForgetsTheChain(t *testing.T) {
 	if got := h.srv.dispatch(forge.Event{Kind: forge.EventClosed, Ref: ref}, nil, "r"); got != "closed" {
 		t.Fatal(got)
 	}
-	if !cancelled || len(h.srv.chains) != 0 {
-		t.Fatalf("closed MR keeps its chain: cancelled=%v chains=%d", cancelled, len(h.srv.chains))
+	if !cancelled || h.srv.current(ref, gen) {
+		t.Fatalf("closed MR keeps its chain: cancelled=%v", cancelled)
 	}
 }
 
