@@ -169,6 +169,7 @@ func TestSandboxRunsCodexReviewInAContainer(t *testing.T) {
 	}
 	mounts := argsAfter(runArgs, "--mount")
 	wantMounts := []string{
+		"type=bind,source=" + filepath.Join(f.run.Dir, "profile") + ",target=/etc/profile,readonly",
 		"type=bind,source=" + filepath.Join(f.run.Dir, "passwd") + ",target=/etc/passwd,readonly",
 		"type=bind,source=" + filepath.Join(f.run.Dir, "group") + ",target=/etc/group,readonly",
 		"type=bind,source=" + f.repo + ",target=" + f.repo + ",readonly",
@@ -425,9 +426,17 @@ func TestDetectImage(t *testing.T) {
 
 func TestSandboxRootUserKeepsTheImageUsers(t *testing.T) {
 	sb := &Sandbox{}
-	users, err := sb.writeUserFiles(t.TempDir())
-	if err != nil || users != nil {
-		t.Fatalf("users %v err %v", users, err)
+	dir := t.TempDir()
+	users, err := sb.writeUserFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(dir, "profile")
+	if len(users) != 1 || users[0] != [2]string{profile, "/etc/profile"} {
+		t.Fatalf("users %v", users)
+	}
+	if body := readFile(t, profile); strings.Contains(body, "PATH=") {
+		t.Fatalf("profile sets PATH: %q", body)
 	}
 	sb.UID = 1000
 	if _, err := sb.writeUserFiles(filepath.Join(t.TempDir(), "missing")); err == nil {

@@ -287,15 +287,19 @@ func writeEnvFile(path string, env []string) error {
 // writeUserFiles gives the container user a passwd and group entry. The
 // service uid exists in no image, and tools that look the user up (Node's
 // os.userInfo, Python's getpass) fail without one. The files replace the
-// image's own, which only needs root besides.
+// image's own, which only needs root besides. Every user gets an empty
+// /etc/profile.
 func (s *Sandbox) writeUserFiles(dir string) ([][2]string, error) {
-	if s.UID == 0 {
-		return nil, nil
-	}
-	home := filepath.Join(dir, "home")
-	files := [][3]string{
-		{"passwd", "/etc/passwd", fmt.Sprintf("root:x:0:0:root:/root:/bin/sh\nocr:x:%d:%d:ocr:%s:/bin/sh\n", s.UID, s.GID, home)},
-		{"group", "/etc/group", fmt.Sprintf("root:x:0:\nocr:x:%d:\n", s.GID)},
+	// Codex runs its tools through a login shell (sh -lc). Debian's
+	// /etc/profile then resets PATH for a non-root user and drops the image
+	// toolchain (/usr/local/go/bin, /usr/local/cargo/bin), so `go test`
+	// fails with "not found". An empty profile keeps the container PATH.
+	files := [][3]string{{"profile", "/etc/profile", "# PATH comes from the container environment.\n"}}
+	if s.UID != 0 {
+		home := filepath.Join(dir, "home")
+		files = append(files,
+			[3]string{"passwd", "/etc/passwd", fmt.Sprintf("root:x:0:0:root:/root:/bin/sh\nocr:x:%d:%d:ocr:%s:/bin/sh\n", s.UID, s.GID, home)},
+			[3]string{"group", "/etc/group", fmt.Sprintf("root:x:0:\nocr:x:%d:\n", s.GID)})
 	}
 	var out [][2]string
 	for _, f := range files {
