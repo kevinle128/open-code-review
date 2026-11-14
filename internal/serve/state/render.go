@@ -14,90 +14,7 @@ import (
 	"github.com/alibaba/open-code-review/internal/serve/review"
 )
 
-const (
-	summaryRunsShown   = 5
-	coverageItemsShown = 20
-)
-
-// RenderFinding builds the root comment of a finding thread. A suggestion
-// block is kept only when the finding sits on its own lines, because applying
-// it anywhere else would rewrite the wrong code. A finding that does not sit
-// on its own lines names its original location instead.
-func RenderFinding(f forge.Finding, p forge.Placement, platform forge.Platform, loc Locale) string {
-	var b strings.Builder
-	if f.ID != "" {
-		b.WriteString(forge.FindingTag(f.ID))
-		b.WriteString("\n")
-	}
-	b.WriteString(findingHeader(f, loc))
-	if note := placementNote(f, p, loc); note != "" {
-		b.WriteString("\n_")
-		b.WriteString(note)
-		b.WriteString("_")
-	}
-	if content := neutralizeTags(strings.TrimSpace(f.Content)); content != "" {
-		b.WriteString("\n\n")
-		b.WriteString(content)
-	}
-	// Escaping a tag inside a suggestion would change the code an author
-	// applies, so a suggestion that carries one is left out instead.
-	if p.Kind == forge.Line && f.SuggestionCode != "" && f.ExistingCode != "" && !hasServiceTag(f.SuggestionCode) {
-		b.WriteString("\n\n**")
-		b.WriteString(loc.Text("finding.suggestion"))
-		b.WriteString("**\n")
-		b.WriteString(suggestionBlock(f.SuggestionCode, p, platform))
-	}
-	return b.String()
-}
-
-// placementNote says where a finding that is not on its own lines belongs.
-// A finding without a path is about the PR as a whole; GitHub still anchors
-// it on a file, because only a review thread can be resolved there.
-func placementNote(f forge.Finding, p forge.Placement, loc Locale) string {
-	switch {
-	case f.Path == "" && p.Kind == forge.FileLevel:
-		return loc.Text("finding.pr_level_anchored", "path", codePath(p.Path))
-	case f.Path == "":
-		return loc.Text("finding.pr_level")
-	case p.Kind != forge.Line:
-		return loc.Text("finding.original_location", "location", location(f))
-	}
-	return ""
-}
-
-func findingHeader(f forge.Finding, loc Locale) string {
-	category := strings.ToLower(strings.TrimSpace(f.Category))
-	if category == "" {
-		category = "other"
-	}
-	label := labelFor(loc, "category.", category)
-	if severity := strings.ToLower(strings.TrimSpace(f.Severity)); severity != "" {
-		label += " · " + labelFor(loc, "severity.", severity)
-	}
-	return "**[" + neutralizeTags(label) + "]**"
-}
-
-// labelFor falls back to the raw value for a category or severity the locale
-// does not know, so an unexpected LLM value is still shown.
-func labelFor(loc Locale, prefix, value string) string {
-	if s, ok := loc[prefix+value]; ok {
-		return s
-	}
-	return value
-}
-
-func location(f forge.Finding) string {
-	s := codePath(f.Path)
-	switch {
-	case f.StartLine > 0 && f.EndLine > f.StartLine:
-		s += fmt.Sprintf(" L%d-%d", f.StartLine, f.EndLine)
-	case f.StartLine > 0:
-		s += fmt.Sprintf(" L%d", f.StartLine)
-	case f.EndLine > 0:
-		s += fmt.Sprintf(" L%d", f.EndLine)
-	}
-	return s
-}
+const coverageItemsShown = 20
 
 // codePath puts a path from the PR in a code span that the path cannot close.
 func codePath(p string) string {
@@ -113,25 +30,8 @@ func neutralizeTags(s string) string {
 
 const serviceTagPrefix = "<!-- ocr-"
 
-func hasServiceTag(s string) bool {
-	return strings.Contains(s, serviceTagPrefix)
-}
-
-// suggestionBlock uses GitHub's plain suggestion fence, which replaces the
-// whole commented span, and GitLab's "suggestion:-N+0", which counts the
-// extra lines above the anchor line.
-func suggestionBlock(code string, p forge.Placement, platform forge.Platform) string {
-	fence := safeFence(code)
-	info := "suggestion"
-	if platform == forge.GitLab {
-		info = fmt.Sprintf("suggestion:-%d+0", max(0, p.EndLine-p.StartLine))
-	}
-	code = strings.TrimSuffix(code, "\n")
-	return fence + info + "\n" + code + "\n" + fence
-}
-
 // safeFence returns a backtick fence longer than any backtick run in s, so
-// code that contains a fence cannot close the block early.
+// text that contains a fence cannot close the block early.
 func safeFence(s string) string {
 	longest, run := 0, 0
 	for _, r := range s {
@@ -145,35 +45,62 @@ func safeFence(s string) string {
 	return strings.Repeat("`", max(3, longest+1))
 }
 
+// labelFor falls back to the raw value for a key the locale does not know,
+// so an unexpected value is still shown.
+func labelFor(loc Locale, prefix, value string) string {
+	if s, ok := loc[prefix+value]; ok {
+		return s
+	}
+	return value
+}
+
+func short(sha string) string {
+	return sha[:min(7, len(sha))]
+}
+
+func codeSpan(s string) string {
+	return "`" + strings.ReplaceAll(strings.Join(strings.Fields(s), " "), "`", "'") + "`"
+}
+
+// RoundLabel names round n of a chain with max fix rounds: "round n/max",
+// or for the report-only round after them, "round n (report only)".
+func RoundLabel(n, limit int, loc Locale) string {
+	if n > limit {
+		return loc.Text("round.label_report", "round", strconv.Itoa(n))
+	}
+	return loc.Text("round.label", "round", strconv.Itoa(n), "max", strconv.Itoa(limit))
+}
+
+// rangeText shows the reviewed range of a round.
+func rangeText(from, to string) string {
+	if from == "" {
+		return "`" + short(to) + "`"
+	}
+	return "`" + short(from) + "..." + short(to) + "`"
+}
+
 // RenderSummary builds the sticky summary. It starts with forge.SummaryTag,
 // so forges find it even when the marker is damaged, and ends with the
 // encoded marker. pending is an optional status line such as "reviewing".
 // bot is the name users tag the bot with; empty shows slash commands only.
-func RenderSummary(m Marker, openThreads int, loc Locale, pending, bot string) string {
+func RenderSummary(m Marker, loc Locale, pending, bot string) string {
 	var b strings.Builder
 	b.WriteString(forge.SummaryTag)
 	b.WriteString("\n### ")
 	b.WriteString(loc.Text("summary.title"))
-	b.WriteString("\n\n- ")
-	b.WriteString(loc.Text("summary.round", "round", strconv.Itoa(m.Auto), "max", strconv.Itoa(m.Max)))
-	b.WriteString("\n- ")
-	if m.Reviewed != "" {
-		b.WriteString(loc.Text("summary.reviewed", "sha", "`"+short(m.Reviewed)+"`"))
-	} else {
-		b.WriteString(loc.Text("summary.reviewed_none"))
-	}
-	b.WriteString("\n- ")
-	b.WriteString(loc.Text("summary.open", "count", strconv.Itoa(max(0, openThreads))))
+	b.WriteString("\n\n")
+	b.WriteString(loc.Text("summary.status." + m.Status))
 	b.WriteString("\n")
-
-	if len(m.Runs) > 0 {
-		b.WriteString("\n**")
-		b.WriteString(loc.Text("summary.runs_title"))
-		b.WriteString("**\n\n")
-		b.WriteString(loc.Text("summary.runs_header"))
-		b.WriteString("\n|---|---|---|---|\n")
-		for _, r := range m.Runs[max(0, len(m.Runs)-summaryRunsShown):] {
-			fmt.Fprintf(&b, "| %s | %s | %s | %d |\n", runLabel(r, loc), loc.Text("run.kind."+r.Kind), runRange(r), len(r.IDs))
+	if len(m.Rounds) > 0 {
+		b.WriteString("\n")
+		b.WriteString(loc.Text("summary.rounds_header"))
+		b.WriteString("\n|---|---|---|---|---|\n")
+		for _, r := range m.Rounds {
+			fix := "-"
+			if r.Fix != "" {
+				fix = "`" + short(r.Fix) + "`"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %d | %d | %s |\n", RoundLabel(r.N, m.Max, loc), rangeText(r.From, r.To), r.Real, r.Fixed, fix)
 		}
 	}
 	if pending = strings.TrimSpace(pending); pending != "" {
@@ -188,23 +115,19 @@ func RenderSummary(m Marker, openThreads int, loc Locale, pending, bot string) s
 	return b.String()
 }
 
-// RenderCoverage builds the summary status line for a finished run: the
-// file count, and for a run that could not review every file, the files it
-// missed and why. The reason is the failure class only; the error text can
-// name internal endpoints, so it goes to the service log instead.
+// RenderCoverage builds the line for a run that could not review every
+// file: the files it missed and why. A complete run gives an empty line.
+// The reason is the failure class only; the error text can name internal
+// endpoints, so it goes to the service log instead.
 func RenderCoverage(c review.Coverage, loc Locale) string {
-	if c.Total == 0 {
+	if c.Total == 0 || len(c.Failed) == 0 {
 		return ""
-	}
-	total, reviewed := strconv.Itoa(c.Total), strconv.Itoa(c.Reviewed)
-	if len(c.Failed) == 0 {
-		return loc.Text("coverage.complete", "reviewed", reviewed, "total", total)
 	}
 	failed := slices.SortedFunc(slices.Values(c.Failed), func(a, b review.FailedItem) int {
 		return cmp.Compare(a.Path, b.Path)
 	})
 	var b strings.Builder
-	b.WriteString(loc.Text("coverage.partial", "reviewed", reviewed, "total", total))
+	b.WriteString(loc.Text("coverage.partial", "reviewed", strconv.Itoa(c.Reviewed), "total", strconv.Itoa(c.Total)))
 	b.WriteString("\n")
 	for _, it := range failed[:min(len(failed), coverageItemsShown)] {
 		name := codePath(it.Path)
@@ -217,45 +140,150 @@ func RenderCoverage(c review.Coverage, loc Locale) string {
 		b.WriteString("\n- ")
 		b.WriteString(loc.Text("coverage.more", "count", strconv.Itoa(rest)))
 	}
-	b.WriteString("\n\n")
-	b.WriteString(loc.Text("coverage.retry"))
 	return b.String()
 }
 
-// RenderVerify builds the summary line of a verify pass: how many findings
-// it checked and posted, or that it failed. No pass gives an empty line.
-func RenderVerify(v review.Verification, loc Locale) string {
+// Reasons a round reports without fixing.
+const (
+	ReportLimit  = "limit"
+	ReportFork   = "fork"
+	ReportPush   = "push"
+	ReportEngine = "engine"
+	ReportNoEdit = "no-edit"
+)
+
+// RoundReport is what one round comment shows. From is empty for a commit
+// round. Report names why the round did not fix (one of the Report
+// constants), or is empty for a fix round. Branch and PushReason fill the
+// text of ReportFork and ReportPush. Next is the round that reviews the fix
+// commit, or 0 when the chain ends with this round.
+type RoundReport struct {
+	N, Max     int
+	From, To   string
+	Coverage   review.Coverage
+	Skipped    bool
+	Fixed      []review.Fixed
+	Reported   []review.Reported
+	Tests      review.Tests
+	FixCommit  string
+	Report     string
+	Branch     string
+	PushReason string
+	Next       int
+}
+
+// RenderRound builds the comment of one round. Agent text is shown as
+// markdown, with service tags neutralized; a test output tail goes into a
+// fence it cannot close.
+func RenderRound(r RoundReport, loc Locale) string {
+	var b strings.Builder
+	b.WriteString("### ")
+	b.WriteString(loc.Text("round.title", "round", RoundLabel(r.N, r.Max, loc)))
+	b.WriteString("\n\n")
+	b.WriteString(loc.Text("round.range", "range", rangeText(r.From, r.To)))
+	b.WriteString("\n")
+	if c := RenderCoverage(r.Coverage, loc); c != "" {
+		b.WriteString("\n")
+		b.WriteString(c)
+		b.WriteString("\n")
+	}
 	switch {
-	case v.Checked == 0:
-		return ""
-	case v.Failed:
-		return loc.Text("verify.failed")
+	case r.Skipped:
+		b.WriteString("\n")
+		b.WriteString(loc.Text("round.skipped"))
+		b.WriteString("\n")
+	case len(r.Fixed) == 0 && len(r.Reported) == 0:
+		b.WriteString("\n")
+		b.WriteString(loc.Text("round.clean"))
+		b.WriteString("\n")
 	}
-	return loc.Text("verify.checked", "checked", strconv.Itoa(v.Checked), "posted", strconv.Itoa(v.Posted))
-}
-
-func runLabel(r Run, loc Locale) string {
-	if r.N > 0 {
-		return loc.Text("run.auto", "n", strconv.Itoa(r.N))
+	if len(r.Fixed) > 0 {
+		b.WriteString("\n**")
+		b.WriteString(loc.Text("round.fixed_title", "count", strconv.Itoa(len(r.Fixed))))
+		b.WriteString("**\n")
+		for i, f := range r.Fixed {
+			fmt.Fprintf(&b, "\n%d. %s: %s\n", i+1, where(f.Path, f.Line, loc), neutralizeTags(f.Problem))
+			if fix := neutralizeTags(f.Fix); fix != "" {
+				b.WriteString("\n")
+				b.WriteString(loc.Text("round.how_fixed", "fix", fix))
+				b.WriteString("\n")
+			}
+		}
+		if r.FixCommit != "" {
+			b.WriteString("\n")
+			b.WriteString(loc.Text("round.fix_commit", "sha", "`"+short(r.FixCommit)+"`"))
+			b.WriteString("\n")
+		}
+		writeTests(&b, r.Tests, loc)
 	}
-	return loc.Text("run.manual")
-}
-
-func runRange(r Run) string {
-	if r.From == "" {
-		return "`" + short(r.To) + "`"
+	if len(r.Reported) > 0 {
+		b.WriteString("\n**")
+		b.WriteString(loc.Text("round.reported_title", "count", strconv.Itoa(len(r.Reported))))
+		b.WriteString("**\n")
+		for i, f := range r.Reported {
+			fmt.Fprintf(&b, "\n%d. %s: %s\n", i+1, where(f.Path, f.Line, loc), neutralizeTags(f.Problem))
+			if s := neutralizeTags(f.Scenario); s != "" {
+				b.WriteString("\n")
+				b.WriteString(loc.Text("round.scenario", "scenario", s))
+				b.WriteString("\n")
+			}
+			if p := neutralizeTags(f.ProposedFix); p != "" {
+				b.WriteString("\n")
+				b.WriteString(loc.Text("round.proposed_fix", "fix", p))
+				b.WriteString("\n")
+			}
+		}
+		if r.Report != "" {
+			b.WriteString("\n")
+			b.WriteString(loc.Text("round.report."+r.Report, "max", strconv.Itoa(r.Max),
+				"branch", codeSpan(r.Branch), "reason", codeSpan(r.PushReason)))
+			b.WriteString("\n")
+		}
 	}
-	return "`" + short(r.From) + "..." + short(r.To) + "`"
+	b.WriteString("\n")
+	if r.Next > 0 {
+		b.WriteString(loc.Text("round.next", "round", RoundLabel(r.Next, r.Max, loc)))
+	} else {
+		b.WriteString(loc.Text("round.end"))
+	}
+	return b.String()
 }
 
-func short(sha string) string {
-	return sha[:min(7, len(sha))]
+// where names the place of a finding, or the PR as a whole.
+func where(path string, line int, loc Locale) string {
+	if path == "" {
+		return loc.Text("round.pr_level")
+	}
+	if line > 0 {
+		return codePath(path) + " L" + strconv.Itoa(line)
+	}
+	return codePath(path)
 }
 
-// RenderLimitNote is the note posted once when the round limit stops
-// automatic review.
-func RenderLimitNote(limit int, loc Locale) string {
-	return loc.Text("limit.note", "max", strconv.Itoa(limit))
+func writeTests(b *strings.Builder, t review.Tests, loc Locale) {
+	b.WriteString("\n")
+	switch {
+	case t.Command == "":
+		b.WriteString(loc.Text("round.tests_none"))
+	case t.Passed:
+		b.WriteString(loc.Text("round.tests_passed", "command", codeSpan(t.Command)))
+	default:
+		b.WriteString(loc.Text("round.tests_failed", "command", codeSpan(t.Command)))
+	}
+	b.WriteString("\n")
+	if out := neutralizeTags(t.OutputTail); out != "" && !t.Passed {
+		fence := safeFence(out)
+		b.WriteString("\n" + fence + "\n" + out + "\n" + fence + "\n")
+	}
+}
+
+// StatusText is the one-line description of the commit status for the
+// chain state; round is the round that runs, used while the chain runs.
+func StatusText(m Marker, round int, loc Locale) string {
+	if m.Status == ChainRunning {
+		return loc.Text("status.running", "round", RoundLabel(round, m.Max, loc))
+	}
+	return loc.Text("status." + m.Status)
 }
 
 // RenderCommandError answers a rejected or failed command. reason may quote
