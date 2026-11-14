@@ -161,6 +161,9 @@ OCR_SERVE_GITHUB_WEBHOOK_SECRET=<secret>
 OCR_SERVE_GITLAB_URL=https://git.example.com
 OCR_SERVE_GITLAB_TOKEN=<bot token>
 OCR_SERVE_GITLAB_WEBHOOK_SECRET=<secret>
+# For OCR_SERVE_REVIEW_CLI=agy (review only):
+# OCR_SERVE_AGY_BIN=/home/<user>/.local/bin/agy
+# OCR_SERVE_AGY_TOKEN=/home/<user>/.gemini/antigravity-cli/antigravity-oauth-token
 # Optional, as on the stack: OCR_SERVE_REVIEW_CLI, OCR_SERVE_FIX_CLI,
 # OCR_SERVE_CODEX_EFFORT, OCR_SERVE_MAX_ROUNDS, OCR_SERVE_EXCLUDE, ...
 # OCR_LLM_* only for OCR_SERVE_ENGINE=ocr.
@@ -317,8 +320,8 @@ threads, the summary marker, rounds and the merge gate do not change.
 | Variable | Default | Notes |
 |---|---|---|
 | `OCR_SERVE_ENGINE` | `cli` | `cli` or `ocr`. |
-| `OCR_SERVE_REVIEW_CLI` | `codex` | CLI for reviews: `codex` or `claude`. |
-| `OCR_SERVE_FIX_CLI` | `claude` | CLI for `/fix` runs: `claude` or `codex`. Its credential file is required too. |
+| `OCR_SERVE_REVIEW_CLI` | `codex` | CLI for reviews: `codex`, `claude` or `agy` (see [Antigravity CLI](#antigravity-cli-agy)). |
+| `OCR_SERVE_FIX_CLI` | `claude` | CLI for `/fix` runs: `claude` or `codex`. Its credential file is required too. `agy` is refused at startup: it runs reviews only. |
 | `OCR_SERVE_CODEX_BIN` | `codex` | Name on `PATH` or absolute path. The Komodo stack sets the mounted binary. |
 | `OCR_SERVE_CLAUDE_BIN` | `claude` | Same. |
 | `OCR_SERVE_CODEX_MODEL` | empty | Codex `-m`; empty uses the account default. |
@@ -331,6 +334,10 @@ threads, the summary marker, rounds and the merge gate do not change.
 | `OCR_SERVE_BATCH_FILES` | `25` | Files per review batch, `1`..`500`. |
 | `OCR_SERVE_BATCH_CONCURRENCY` | `1` | Review batches of one PR that run at the same time, `1`..`4`. Each is a full CLI run (and a sandbox container), on top of `OCR_SERVE_WORKERS`. |
 | `OCR_SERVE_CLAUDE_SETTINGS` | | Required with `claude`. The host `~/.claude/settings.json`. Each run's `CLAUDE_CONFIG_DIR` gets a `settings.json` with only its `env` and `model` keys, never hooks or permissions. |
+| `OCR_SERVE_AGY_BIN` | `agy` | Name on `PATH` or absolute path of the Antigravity CLI. |
+| `OCR_SERVE_AGY_TOKEN` | | Required with `agy`. The host `~/.gemini/antigravity-cli/antigravity-oauth-token`. Each run home links to it; nothing else of the host `~/.gemini` is used. Mount it read-write so a token refresh reaches the host file. |
+| `OCR_SERVE_AGY_MODEL` | empty | agy `--model`, a slug from `agy models`, for example `gemini-4-hydrogen-high`; empty uses the account default. |
+| `OCR_SERVE_AGY_EFFORT` | empty | agy `--effort`: `low`, `medium`, `high`, `xhigh` or `max`. |
 
 At startup the service checks that the review and fix CLI binaries, the
 skill file and the CLI credential files can be read, and stops with the
@@ -354,6 +361,10 @@ variable name when one cannot. How each CLI runs:
   `Task`, plus `Bash` only with `OCR_SERVE_SANDBOX=docker`, where the shell
   runs in the run's container (see [Sandbox](#sandbox)). Without the sandbox
   it gets no shell.
+- agy: `agy -p <prompt> --output-format json --json-schema <schema file>
+  --dangerously-skip-permissions --disable-slash-commands --settings <json>`
+  in the run input directory, not in the checkout, with `--add-dir` for the
+  skill and run directories. See [Antigravity CLI](#antigravity-cli-agy).
 - The CLI gets `PATH`, locale, time zone, CA and proxy variables, and `HOME`
   and `TMPDIR` inside the run directory; none of the service secrets. It runs
   in its own process group: when the review limit ends it gets SIGTERM, then
@@ -370,7 +381,14 @@ The Komodo stack mounts these host paths (each one is a stack variable):
 | `/home/vtcm/.codex/packages/standalone` (`OCR_HOST_CODEX_DIR`) | `/opt/codex` | read-only |
 | `/home/vtcm/.codex` (`OCR_HOST_CODEX_HOME`) | `/opt/codex-home` | read-write; only `auth.json` is used |
 | `/home/vtcm/.claude` (`OCR_HOST_CLAUDE_HOME`) | `/opt/claude-home` | read-only; only the `env` and `model` keys of `settings.json` are used |
+| `/home/vtcm/.local/bin/agy` (`OCR_HOST_AGY_BIN`) | `/opt/agy/agy` | read-only; the binary file |
+| `/home/vtcm/.gemini/antigravity-cli/antigravity-oauth-token` (`OCR_HOST_AGY_TOKEN`) | `/opt/agy-token/antigravity-oauth-token` | read-write; the token file only |
 | `/home/vtcm/ocr-review/skills` (`OCR_HOST_SKILL_DIR`) | `/opt/ocr-skills` | read-only |
+
+The agy rows are file mounts: docker creates an empty directory at a host
+path that does not exist, so install agy and sign in on the host before the
+first deploy with this stack. `OCR_SERVE_AGY_BIN` defaults to `/opt/agy/agy`
+and `OCR_SERVE_AGY_TOKEN` is `/opt/agy-token/antigravity-oauth-token`.
 
 `OCR_SERVE_CLAUDE_BIN` defaults to `/opt/claude/versions/2.1.322` and
 `OCR_SERVE_CODEX_BIN` to
@@ -378,6 +396,81 @@ The Komodo stack mounts these host paths (each one is a stack variable):
 on the host updates and removes the old version, set the variable to the new
 path and redeploy. To switch the review CLI, set `OCR_SERVE_REVIEW_CLI` and
 redeploy.
+
+### Antigravity CLI (agy)
+
+`OCR_SERVE_REVIEW_CLI=agy` reviews with the Google Antigravity CLI. It is a
+review CLI only; `/fix` keeps `OCR_SERVE_FIX_CLI` (`claude` or `codex`).
+
+Install it and sign in once, as the service user on the host:
+
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash   # installs ~/.local/bin/agy
+agy        # prints a Google OAuth URL; open it, sign in, paste the code back
+agy models # lists the model slugs for OCR_SERVE_AGY_MODEL
+```
+
+On a host without a keyring (a server), agy keeps the OAuth token in the
+file `~/.gemini/antigravity-cli/antigravity-oauth-token` (mode 600). Point
+`OCR_SERVE_AGY_TOKEN` at that file. Each run gets
+`$HOME/.gemini/antigravity-cli/antigravity-oauth-token` in its run home as a
+link to it, so agy writes its conversations, logs and caches into the run
+home, and the host `~/.gemini` holds only the token. When agy replaces the
+link with a refreshed token, the service writes the new token back into the
+host file after the run (only when it is valid JSON).
+
+A run is:
+
+```text
+agy -p <prompt> --output-format json --json-schema <run out>/schema.json
+    --dangerously-skip-permissions --disable-slash-commands
+    --settings '{"allowNonWorkspaceAccess":true,"permissions":{"deny":["write_file(*)"]}}'
+    [--model <OCR_SERVE_AGY_MODEL>] [--effort <OCR_SERVE_AGY_EFFORT>]
+    --add-dir <skill dir> --add-dir <run input dir>
+```
+
+with stdin empty and the working directory set to the run input directory.
+The service takes `structured_output` from the JSON result, or `response`
+when it is missing, and fails the run when `status` is not `SUCCESS` or the
+result has an `error`. A prompt longer than 100 KiB (Linux allows 128 KiB
+for one argument) goes into `agy-prompt.md` in the run input directory, and
+`-p` tells agy to read that file first and follow it.
+
+Why agy does not run in the checkout. agy loads customizations from every
+workspace folder (its working directory and each `--add-dir`) and from each
+parent folder up to the repository root: `AGENTS.md`, `GEMINI.md`, the
+`.agents/` folder (also the legacy `.agent/`, `_agents/` and `_agent/`) with
+its `rules/`, `skills/`, `agents/`, `plugins/`, `mcp_config.json` and
+`hooks.json`, and a repo-root `.gemini/config.json`. The documentation
+([rules](https://antigravity.google/docs/rules/),
+[customization discovery](https://antigravity.google/docs/customization-discovery/),
+[CLI reference](https://antigravity.google/docs/cli/reference/)) names no
+flag or setting that turns this off, and in print mode agy asks nobody
+whether to trust the folder
+([google-antigravity/antigravity-cli#1400](https://github.com/google-antigravity/antigravity-cli/issues/1400)).
+A test with agy 1.5.9 confirmed it: with a test repository as the working
+directory, or added with `--add-dir`, its `AGENTS.md` and an `always_on`
+rule reached the answer, and the `SessionStart` and `PreInvocation`
+commands of its `.agents/hooks.json` ran. A hook is a shell command, and the
+checkout belongs to the PR author. So the checkout is never a workspace:
+agy starts in the run input directory, which the service writes, reads the
+checkout by absolute path through the session setting
+`allowNonWorkspaceAccess`, and the prompt starts with a note that names the
+checkout path. In the same test, run from a neutral directory with that
+setting, agy listed and read the repository, no hook ran, the rules did not
+load, and the `write_file(*)` deny rule refused a file write. Keep
+`OCR_SERVE_CLI_HOME` outside any git repository, or agy also loads the
+customizations of the repository that holds the run directory.
+
+Read-only intent. agy has no read-only mode. The prompt forbids edits, the
+deny rule blocks agy's file write tool, and with `OCR_SERVE_SANDBOX=docker`
+the checkout is mounted read-only. With `OCR_SERVE_SANDBOX=none` agy can
+still change the checkout through a shell command. The checkout slot is
+emptied when the review ends, but a change stays in place for the later
+batches of the same review, so run agy with the docker sandbox where you
+can.
+As with codex, agy has a shell (`--dangerously-skip-permissions`), so a PR
+that tricks it into a network command could send the token file out.
 
 ### Sandbox
 
@@ -404,6 +497,7 @@ any container.
 | `OCR_SERVE_SANDBOX_IMAGE_DEFAULT` | `buildpack-deps:bookworm` | None of the above. |
 | `OCR_SERVE_SANDBOX_CODEX_DIR` | directory of the codex binary | Codex install mounted read-only. The binary is resolved through its links first, so `~/.local/bin/codex` mounts the release directory it points to. |
 | `OCR_SERVE_SANDBOX_CLAUDE_DIR` | directory of the claude binary | Same for Claude, for example `~/.local/share/claude/versions`. |
+| `OCR_SERVE_SANDBOX_AGY_DIR` | directory of the agy binary | Same for agy. The installer puts the binary itself in `~/.local/bin`, so that directory is mounted unless this names another one that holds the binary. |
 
 Images. The service looks at the files in the checkout root and one
 directory level below it (monorepos), not in hidden directories. When
@@ -418,11 +512,12 @@ Each run is:
 ```text
 docker run --rm -i --name ocr-run-<id> --init --user <service uid>:<gid>
   --cap-drop ALL --security-opt no-new-privileges --pids-limit 1024
-  --memory 6g --cpus 4 --network bridge -w <checkout>
+  --memory 6g --cpus 4 --network bridge -w <checkout, or the run input dir for agy>
   --env-file <run dir>/sandbox.env --mount ... <image> <cli> <args>
 ```
 
-The prompt goes to the container on stdin. Every mount has the same path in
+The prompt goes to the container on stdin (for agy, in the arguments, with
+an empty stdin). Every mount has the same path in
 the container as on the host:
 
 | Mount | Mode |
@@ -433,6 +528,7 @@ the container as on the host:
 | The CLI install (see above) | read-only |
 | Codex: the directory of `OCR_SERVE_CODEX_AUTH` (`~/.codex`) | read-write, so a token refresh reaches the host; only `auth.json`, linked from the run home, is used |
 | Claude: `OCR_SERVE_CLAUDE_SETTINGS` | read-only; the run home holds the copy with only `env` and `model` |
+| agy: `OCR_SERVE_AGY_TOKEN` (the token file only) | read-write, so a token refresh reaches the host; linked from the run home |
 | `$OCR_SERVE_DATA_DIR/cache/{go,npm,nuget,cargo,pip}` | read-write toolchain caches |
 | `<run dir>/passwd`, `<run dir>/group` at `/etc/passwd`, `/etc/group` | read-only; give the service uid a user name, which some tools look up |
 
@@ -453,8 +549,8 @@ directory a stopped service left.
 
 What the AI can reach in the sandbox: the PR checkout, its own run
 directory, the skill, the CLI install, the host `~/.codex` directory (for
-codex), the Claude settings file (for claude), the toolchain caches, and the
-network. What it cannot reach: any other host path (the service `.env`, the
+codex), the Claude settings file (for claude), the agy token file (for agy),
+the toolchain caches, and the network. What it cannot reach: any other host path (the service `.env`, the
 GitHub App key, the forge tokens, the docker socket, other checkouts), the
 host processes, and root in the container. Accepted risk: the network is
 open, because the CLI needs its API and `/fix` needs package registries, so
