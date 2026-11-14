@@ -53,7 +53,7 @@ var (
 
 // CLIConfig holds the settings of the CLI review engine, which runs an
 // installed coding-agent CLI on the checkout. ReviewCLI runs reviews;
-// FixCLI is the one later fix runs use. Paths are absolute.
+// FixCLI runs /fix. Paths are absolute.
 type CLIConfig struct {
 	ReviewCLI      string
 	FixCLI         string
@@ -131,7 +131,7 @@ func (l *loader) absPath(key, def string) string {
 }
 
 // requireCLI checks what the CLI engine needs: the skill directory and the
-// credential file of the review CLI.
+// credential file of the review CLI and of the fix CLI.
 func (c *Config) requireCLI() error {
 	if c.Engine != EngineCLI {
 		return nil
@@ -140,14 +140,21 @@ func (c *Config) requireCLI() error {
 	if c.CLI.SkillDir == "" {
 		errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvSkillDir, EnvEngine, EngineCLI))
 	}
-	switch c.CLI.ReviewCLI {
-	case CLICodex:
-		if c.CLI.CodexAuth == "" {
-			errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvCodexAuth, EnvReviewCLI, CLICodex))
+	seen := map[string]bool{}
+	for _, use := range []struct{ env, name string }{{EnvReviewCLI, c.CLI.ReviewCLI}, {EnvFixCLI, c.CLI.FixCLI}} {
+		if seen[use.name] {
+			continue
 		}
-	case CLIClaude:
-		if c.CLI.ClaudeSettings == "" {
-			errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvClaudeSettings, EnvReviewCLI, CLIClaude))
+		seen[use.name] = true
+		switch use.name {
+		case CLICodex:
+			if c.CLI.CodexAuth == "" {
+				errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvCodexAuth, use.env, CLICodex))
+			}
+		case CLIClaude:
+			if c.CLI.ClaudeSettings == "" {
+				errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvClaudeSettings, use.env, CLIClaude))
+			}
 		}
 	}
 	return errors.Join(errs...)

@@ -85,53 +85,74 @@ func (s serveSelector) Select(ctx context.Context, req review.Request) (clirevie
 	return sel, nil
 }
 
-// buildServeReviewer returns the review engine the configuration selects.
-// For the CLI engine it checks the executable, the skill and the CLI
-// credential file, and removes run directories a stopped service left.
-func buildServeReviewer(cfg *serveconfig.Config, getenv func(string) string) (review.Reviewer, error) {
+// buildServeEngines returns the review engine the configuration selects
+// and, for the CLI engine, the fix engine; the OCR engine has none, so /fix
+// answers that it is not available. For the CLI engine it checks the
+// executables, the skill and the CLI credential files, and removes run
+// directories a stopped service left.
+func buildServeEngines(cfg *serveconfig.Config, getenv func(string) string) (review.Reviewer, review.Fixer, error) {
 	ocr := newServeReviewer(cfg)
 	if cfg.Engine == serveconfig.EngineOCR {
-		return ocr, nil
+		return ocr, nil, nil
 	}
 	c := cfg.CLI
+	if err := readable(filepath.Join(c.SkillDir, clireview.SkillFile)); err != nil {
+		return nil, nil, fmt.Errorf("%s: review skill: %w", serveconfig.EnvSkillDir, err)
+	}
+	reviewCLI, err := buildAgentCLI(c, c.ReviewCLI)
+	if err != nil {
+		return nil, nil, err
+	}
+	fixCLI, err := buildAgentCLI(c, c.FixCLI)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fix cli: %w", err)
+	}
+	homes, err := agentcli.NewHomes(c.Home)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", serveconfig.EnvCLIHome, err)
+	}
+	if err := homes.Sweep(); err != nil {
+		return nil, nil, fmt.Errorf("%s: remove stale run dirs: %w", serveconfig.EnvCLIHome, err)
+	}
+	lang, err := serveAppLanguage()
+	if err != nil {
+		return nil, nil, err
+	}
+	if lang == "" {
+		lang = defaultServeLanguage
+	}
+	rev := &clireview.Reviewer{
+		Selector: serveSelector{ocr: ocr}, CLI: reviewCLI, Homes: homes,
+		SkillDir: c.SkillDir, Getenv: getenv,
+	}
+	fix := &clireview.Fixer{CLI: fixCLI, Homes: homes, SkillDir: c.SkillDir, Language: lang, Getenv: getenv}
+	return rev, fix, nil
+}
+
+// buildAgentCLI resolves the executable and checks the credential file of
+// the named CLI.
+func buildAgentCLI(c serveconfig.CLIConfig, name string) (agentcli.CLI, error) {
 	binEnv := serveconfig.EnvCodexBin
-	if c.ReviewCLI == serveconfig.CLIClaude {
+	if name == serveconfig.CLIClaude {
 		binEnv = serveconfig.EnvClaudeBin
 	}
-	bin, err := exec.LookPath(c.Bin(c.ReviewCLI))
+	bin, err := exec.LookPath(c.Bin(name))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", binEnv, err)
 	}
 	if bin, err = filepath.Abs(bin); err != nil {
 		return nil, fmt.Errorf("%s: %w", binEnv, err)
 	}
-	if err := readable(filepath.Join(c.SkillDir, clireview.SkillFile)); err != nil {
-		return nil, fmt.Errorf("%s: review skill: %w", serveconfig.EnvSkillDir, err)
-	}
-	var cli agentcli.CLI
-	switch c.ReviewCLI {
-	case serveconfig.CLIClaude:
+	if name == serveconfig.CLIClaude {
 		if err := readable(c.ClaudeSettings); err != nil {
 			return nil, fmt.Errorf("%s: %w", serveconfig.EnvClaudeSettings, err)
 		}
-		cli = agentcli.Claude{Bin: bin, Model: c.ClaudeModel, SettingsFile: c.ClaudeSettings}
-	default:
-		if err := readable(c.CodexAuth); err != nil {
-			return nil, fmt.Errorf("%s: %w", serveconfig.EnvCodexAuth, err)
-		}
-		cli = agentcli.Codex{Bin: bin, Model: c.CodexModel, Effort: c.CodexEffort, AuthFile: c.CodexAuth}
+		return agentcli.Claude{Bin: bin, Model: c.ClaudeModel, SettingsFile: c.ClaudeSettings}, nil
 	}
-	homes, err := agentcli.NewHomes(c.Home)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", serveconfig.EnvCLIHome, err)
+	if err := readable(c.CodexAuth); err != nil {
+		return nil, fmt.Errorf("%s: %w", serveconfig.EnvCodexAuth, err)
 	}
-	if err := homes.Sweep(); err != nil {
-		return nil, fmt.Errorf("%s: remove stale run dirs: %w", serveconfig.EnvCLIHome, err)
-	}
-	return &clireview.Reviewer{
-		Selector: serveSelector{ocr: ocr}, CLI: cli, Homes: homes,
-		SkillDir: c.SkillDir, Getenv: getenv,
-	}, nil
+	return agentcli.Codex{Bin: bin, Model: c.CodexModel, Effort: c.CodexEffort, AuthFile: c.CodexAuth}, nil
 }
 
 // readable opens path for reading, so a missing file or a mount with the

@@ -90,6 +90,14 @@ func TestRequireServe_CLIEngine(t *testing.T) {
 			CLI: CLIConfig{ReviewCLI: CLICodex, SkillDir: "/s", CodexAuth: "/a"}}, nil},
 		{"claude complete", Config{GitHub: gh, Engine: EngineCLI,
 			CLI: CLIConfig{ReviewCLI: CLIClaude, SkillDir: "/s", ClaudeSettings: "/c"}}, nil},
+		{"claude fix needs settings", Config{GitHub: gh, Engine: EngineCLI,
+			CLI: CLIConfig{ReviewCLI: CLICodex, FixCLI: CLIClaude, SkillDir: "/s", CodexAuth: "/a"}},
+			[]string{EnvClaudeSettings + " is required when " + EnvFixCLI}},
+		{"codex fix needs auth", Config{GitHub: gh, Engine: EngineCLI,
+			CLI: CLIConfig{ReviewCLI: CLIClaude, FixCLI: CLICodex, SkillDir: "/s", ClaudeSettings: "/c"}},
+			[]string{EnvCodexAuth + " is required when " + EnvFixCLI}},
+		{"both complete", Config{GitHub: gh, Engine: EngineCLI,
+			CLI: CLIConfig{ReviewCLI: CLICodex, FixCLI: CLIClaude, SkillDir: "/s", CodexAuth: "/a", ClaudeSettings: "/c"}}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

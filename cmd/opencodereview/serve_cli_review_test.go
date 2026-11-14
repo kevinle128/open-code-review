@@ -171,7 +171,7 @@ func cliEngineConfig(t *testing.T, answer string) *serveconfig.Config {
 	return &serveconfig.Config{
 		Engine: serveconfig.EngineCLI, ReviewConcurrency: 1, BundleLines: 300,
 		CLI: serveconfig.CLIConfig{
-			ReviewCLI: serveconfig.CLICodex, CodexBin: bin, ClaudeBin: bin, SkillDir: skillDir,
+			ReviewCLI: serveconfig.CLICodex, FixCLI: serveconfig.CLIClaude, CodexBin: bin, ClaudeBin: bin, SkillDir: skillDir,
 			Home: filepath.Join(dir, "cli-home"), CodexAuth: auth, ClaudeSettings: settings,
 		},
 	}
@@ -189,9 +189,16 @@ func TestBuildServeReviewerRunsTheCLIEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rev, err := buildServeReviewer(cfg, os.Getenv)
+	rev, fixer, err := buildServeEngines(cfg, os.Getenv)
 	if err != nil {
 		t.Fatal(err)
+	}
+	fx, ok := fixer.(*clireview.Fixer)
+	if !ok || fx.Language != "Vietnamese" || fx.SkillDir != cfg.CLI.SkillDir {
+		t.Fatalf("fixer %+v", fixer)
+	}
+	if c, ok := fx.CLI.(agentcli.Claude); !ok || c.SettingsFile != cfg.CLI.ClaudeSettings {
+		t.Fatalf("fix cli %+v", fx.CLI)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatal("stale run dir not swept")
@@ -219,20 +226,25 @@ func TestBuildServeReviewerRunsTheCLIEngine(t *testing.T) {
 func TestBuildServeReviewerPicksTheEngine(t *testing.T) {
 	cfg := cliEngineConfig(t, "{}")
 	cfg.Engine = serveconfig.EngineOCR
-	rev, err := buildServeReviewer(cfg, os.Getenv)
+	rev, fixer, err := buildServeEngines(cfg, os.Getenv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := rev.(serveReviewer); !ok {
-		t.Fatalf("ocr engine built %T", rev)
+	if _, ok := rev.(serveReviewer); !ok || fixer != nil {
+		t.Fatalf("ocr engine built %T and fixer %v", rev, fixer)
 	}
 
 	cfg = cliEngineConfig(t, "{}")
 	cfg.CLI.ReviewCLI = serveconfig.CLIClaude
 	cfg.CLI.ClaudeModel = "sonnet"
-	rev, err = buildServeReviewer(cfg, os.Getenv)
+	cfg.CLI.FixCLI = serveconfig.CLICodex
+	cfg.CLI.CodexEffort = "high"
+	rev, fixer, err = buildServeEngines(cfg, os.Getenv)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if c, ok := fixer.(*clireview.Fixer).CLI.(agentcli.Codex); !ok || c.Effort != "high" || c.AuthFile != cfg.CLI.CodexAuth {
+		t.Fatalf("codex fix cli %+v", fixer.(*clireview.Fixer).CLI)
 	}
 	cr, ok := rev.(*clireview.Reviewer)
 	if !ok {
@@ -266,12 +278,14 @@ func TestBuildServeReviewerChecks(t *testing.T) {
 			c.CLI.ClaudeSettings = "/no/settings.json"
 		}, serveconfig.EnvClaudeSettings},
 		{"home unusable", func(c *serveconfig.Config) { c.CLI.Home = filepath.Join(notADir, "home") }, serveconfig.EnvCLIHome},
+		{"fix claude missing", func(c *serveconfig.Config) { c.CLI.ClaudeBin = "no-such-claude-binary" }, "fix cli: " + serveconfig.EnvClaudeBin},
+		{"fix claude settings missing", func(c *serveconfig.Config) { c.CLI.ClaudeSettings = "/no/settings.json" }, "fix cli: " + serveconfig.EnvClaudeSettings},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := cliEngineConfig(t, "{}")
 			tc.edit(cfg)
-			_, err := buildServeReviewer(cfg, os.Getenv)
+			_, _, err := buildServeEngines(cfg, os.Getenv)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err %v", err)
 			}
@@ -285,6 +299,13 @@ func TestEngineName(t *testing.T) {
 	}
 	cfg := &serveconfig.Config{Engine: serveconfig.EngineCLI, CLI: serveconfig.CLIConfig{ReviewCLI: serveconfig.CLIClaude}}
 	if got := engineName(cfg); got != "cli/claude" {
+		t.Fatal(got)
+	}
+	cfg.CLI.FixCLI = serveconfig.CLICodex
+	if got := fixCLIName(cfg); got != "codex" {
+		t.Fatal(got)
+	}
+	if got := fixCLIName(&serveconfig.Config{Engine: serveconfig.EngineOCR}); got != "none" {
 		t.Fatal(got)
 	}
 }

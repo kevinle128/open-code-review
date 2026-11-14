@@ -133,7 +133,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	}
 	log := server.NewLogger(env.logOut)
 
-	reviewer, err := buildServeReviewer(cfg, env.getenv)
+	reviewer, fixer, err := buildServeEngines(cfg, env.getenv)
 	if err != nil {
 		return fmt.Errorf("review engine %s: %w", cfg.Engine, err)
 	}
@@ -150,7 +150,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 		return err
 	}
 	srv, err := server.New(server.Deps{
-		Config: cfg, Forges: forges, Reviewer: reviewer, Workspaces: workspaces,
+		Config: cfg, Forges: forges, Reviewer: reviewer, Fixer: fixer, Workspaces: workspaces,
 		Locale: loc, Logger: log, Version: Version,
 	})
 	if err != nil {
@@ -176,7 +176,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpSrv.Serve(ln) }()
 	log.Info("listening", "addr", ln.Addr().String(), "version", Version, "platforms", platformNames(forges),
-		"engine", engineName(cfg))
+		"engine", engineName(cfg), "fix_cli", fixCLIName(cfg))
 	if env.ready != nil {
 		env.ready(ln.Addr().String())
 	}
@@ -257,6 +257,14 @@ func engineName(cfg *serveconfig.Config) string {
 		return cfg.Engine + "/" + cfg.CLI.ReviewCLI
 	}
 	return cfg.Engine
+}
+
+// fixCLIName names the CLI /fix runs, or "none" for the OCR engine.
+func fixCLIName(cfg *serveconfig.Config) string {
+	if cfg.Engine == serveconfig.EngineCLI {
+		return cfg.CLI.FixCLI
+	}
+	return "none"
 }
 
 // serveRoutes serves the handler at the root and under servePathPrefix, so

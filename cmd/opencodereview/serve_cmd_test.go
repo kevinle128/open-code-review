@@ -155,6 +155,7 @@ func TestServeMain_StartupErrors(t *testing.T) {
 			m[serveconfig.EnvEngine] = serveconfig.EngineCLI
 			m[serveconfig.EnvSkillDir] = t.TempDir()
 			m[serveconfig.EnvCodexAuth] = notADir
+			m[serveconfig.EnvClaudeSettings] = notADir
 			m[serveconfig.EnvCodexBin] = "/bin/sh"
 		}, "review engine cli: " + serveconfig.EnvSkillDir},
 		{"cli engine without settings", okConfig, func(m map[string]string) {
