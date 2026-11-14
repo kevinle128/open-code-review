@@ -17,6 +17,7 @@ const kongmingAgent = `---
 name: kongming
 description: >-
   Autonomous counsel.
+  model: in the description
 model: fable
 memory: project
 tools: Glob, Grep, Read, Bash, Write
@@ -58,6 +59,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"{}"}'
 name: kongming
 description: >-
   Autonomous counsel.
+  model: in the description
 model: inherit
 tools: Glob, Grep, Read
 ---

@@ -289,7 +289,8 @@ func rewriteAgent(b []byte) []byte {
 			end = i
 			break
 		}
-		switch key, _, _ := strings.Cut(l, ":"); strings.TrimSpace(key) {
+		// Only top-level keys: an indented line belongs to a block value.
+		switch key, _, _ := strings.Cut(l, ":"); key {
 		case "model":
 			out = append(out, "model: inherit")
 		case "tools":

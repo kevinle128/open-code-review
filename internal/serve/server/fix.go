@@ -137,15 +137,21 @@ func (s *Server) fix(ctx context.Context, f forge.Forge, ref forge.PRRef, j job,
 		return nil
 	}
 
-	sctx, scancel := s.sideContext()
-	defer scancel()
+	// Each call gets its own bounded context, so many threads cannot use up
+	// one shared budget and leave the last ones untouched.
+	side := func(call func(context.Context) error) error {
+		sctx, scancel := s.sideContext()
+		defer scancel()
+		return call(sctx)
+	}
 	for _, id := range res.Fixed {
-		if err := f.ResolveThread(sctx, ref, open[id].ID); err != nil {
+		if err := side(func(c context.Context) error { return f.ResolveThread(c, ref, open[id].ID) }); err != nil {
 			log.Warn("resolve fixed thread", "finding", id, "error", err.Error())
 		}
 	}
 	for _, sk := range res.Skipped {
-		if err := f.ReplyThread(sctx, ref, open[sk.ID].ID, state.RenderFixSkipReply(sk.Reason, s.loc)); err != nil {
+		reply := state.RenderFixSkipReply(sk.Reason, s.loc)
+		if err := side(func(c context.Context) error { return f.ReplyThread(c, ref, open[sk.ID].ID, reply) }); err != nil {
 			log.Warn("reply in skipped thread", "finding", sk.ID, "error", err.Error())
 		}
 	}
