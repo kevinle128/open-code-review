@@ -285,7 +285,7 @@ func TestWriteInputUsesProjectIDWithoutRepoPath(t *testing.T) {
 }
 
 func TestBuildPromptWithoutLanguageOrBackground(t *testing.T) {
-	p := buildPrompt("skill", "/s", "/in", Selection{})
+	p := buildPrompt("skill", "/s", "/in", Selection{}, false)
 	if strings.Contains(p, "Output language") || strings.Contains(p, "Review background") {
 		t.Fatalf("prompt\n%s", p)
 	}

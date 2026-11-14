@@ -24,6 +24,9 @@ import (
 // PR is the pull request as read from the forge. Engines that hand the
 // review to an external agent pass its identity and description on; the
 // in-process OCR engine ignores it.
+//
+// Dismissed are findings the author turned down in an earlier run; an
+// agent engine is told not to report them again. The OCR engine ignores it.
 type Request struct {
 	RepoDir     string
 	From        string
@@ -34,6 +37,17 @@ type Request struct {
 	Excludes    []string
 	ProjectRule *rules.ProjectRule
 	PR          forge.PR
+	Dismissed   []Dismissed
+}
+
+// Dismissed is a finding whose thread was resolved with a reply from a
+// person, which gives the reason it is not a problem.
+type Dismissed struct {
+	Path   string `json:"path"`
+	Line   int    `json:"line"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	Reason string `json:"reason"`
 }
 
 // Terminal states of a review run.
@@ -104,4 +118,53 @@ type Workspace interface {
 // must be called exactly once.
 type Workspaces interface {
 	Acquire(ctx context.Context) (Workspace, func(), error)
+}
+
+// FixFinding is an open finding thread a fix run works on. Replies are what
+// people answered in the thread; a fix skips a finding they disputed.
+type FixFinding struct {
+	ID       string     `json:"id"`
+	Path     string     `json:"path"`
+	Line     int        `json:"line"`
+	Severity string     `json:"severity"`
+	Title    string     `json:"title"`
+	Body     string     `json:"body"`
+	Replies  []FixReply `json:"replies"`
+}
+
+// FixReply is one reply in a finding thread.
+type FixReply struct {
+	Author string `json:"author"`
+	Body   string `json:"body"`
+}
+
+// FixRequest is one fix run on a checkout of the PR head branch. Files are
+// the files the PR changes.
+type FixRequest struct {
+	RepoDir  string
+	PR       forge.PR
+	Files    []string
+	Findings []FixFinding
+}
+
+// FixSkip is a finding a fix run left open, with the reason.
+type FixSkip struct {
+	ID     string
+	Reason string
+}
+
+// FixResult is what the agent reports after editing the checkout. Fixed
+// and Skipped hold only ids from the request. CommitMessage is one line.
+type FixResult struct {
+	Fixed         []string
+	Skipped       []FixSkip
+	Summary       string
+	CommitMessage string
+	Warnings      []string
+}
+
+// Fixer edits a checkout to fix review findings. It leaves committing and
+// pushing to the caller.
+type Fixer interface {
+	Fix(ctx context.Context, req FixRequest) (FixResult, error)
 }
