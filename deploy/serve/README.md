@@ -262,6 +262,7 @@ setting both forms is an error.
 | `OCR_SERVE_IGNORE_LABELS` | empty | Comma-separated, exact match. |
 | `OCR_SERVE_EXCLUDE` | empty | Comma-separated globs added to the serve file filter for every repository; see [File filter](#file-filter). |
 | `OCR_SERVE_BOT_INDICATORS` | `bot` | Substrings that mark a GitLab sender as a bot. |
+| `OCR_SERVE_MENTIONS` | empty | Comma-separated extra names users may tag the bot with to run a command (`@<name> fix`), on top of the GitHub App slug and the GitLab bot username. Letters, digits, `-`, `_` and `.` only, without `@`. |
 | `OCR_SERVE_GITHUB_APP_ID` | empty | Enables GitHub. |
 | `OCR_SERVE_GITHUB_PRIVATE_KEY` / `_FILE` | | Required with GitHub. The example compose sets `_FILE`. A one-line value with literal `\n` escapes is accepted. |
 | `OCR_SERVE_GITHUB_WEBHOOK_SECRET` / `_FILE` | | Required with GitHub. |
@@ -737,6 +738,22 @@ The summary's file count covers only the files left after filtering.
   comment gets a reaction on receipt (eyes) and on the result (GitHub: rocket
   or confused; GitLab: white_check_mark or x), plus a reply. On GitLab,
   assigning the bot as reviewer of a non-draft MR acts as `/review`.
+- A command can also tag the bot instead of starting with `/`:
+  `@<bot> review --effort=high`, `@<bot> review-commit`, `@<bot> fix`, or
+  `@<bot> /fix`, with an optional `:` or `,` after the name
+  (`@<bot>: fix`). `<bot>` is the GitHub App slug (the bot login without
+  `[bot]`) or the GitLab bot username (the user of `OCR_SERVE_GITLAB_TOKEN`,
+  and `OCR_SERVE_GITLAB_BOT_USERNAME` when set), plus any name in
+  `OCR_SERVE_MENTIONS`; the name matches without regard to case. Only the
+  first non-empty line counts, and only when the tag starts it: a tag later
+  in the line or a tag of another user is an ordinary comment. A tag with no
+  command or an unknown word gets the help reply. The help reply and the
+  summary show the tag form with the bot name of the platform. The service
+  reads the GitHub App slug at startup. When that fails it logs a warning
+  and, until a later API call reads the slug, accepts only the slash form
+  and the `OCR_SERVE_MENTIONS` names; the texts then show the first of those
+  names, or only the slash form when none is set. Editing a comment from
+  `@<bot> fix` to `/fix` does not run it again.
 
 ## Fixing findings (`/fix`)
 
