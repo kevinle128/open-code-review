@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -62,9 +63,12 @@ const (
 	DefaultWorkers       = 2
 	DefaultReviewTimeout = 2 * time.Hour
 	DefaultMaxBodyBytes  = 10 << 20
-	DefaultDataDir       = "/data"
-	DefaultWorkDir       = "/work"
-	DefaultGitHubAPIURL  = "https://api.github.com"
+	// DefaultDataDir and DefaultWorkDir apply only when HOME is not set;
+	// otherwise the directories default to ~/ocr-review/data and
+	// ~/ocr-review/work.
+	DefaultDataDir      = "/data"
+	DefaultWorkDir      = "/work"
+	DefaultGitHubAPIURL = "https://api.github.com"
 
 	// DefaultReviewConcurrency is lower than the `ocr review` default of 8:
 	// several reviews run at the same time against one LLM endpoint.
@@ -107,8 +111,9 @@ type Config struct {
 
 	// Engine picks the review engine: EngineCLI runs an agent CLI, EngineOCR
 	// the in-process OCR review.
-	Engine string
-	CLI    CLIConfig
+	Engine  string
+	CLI     CLIConfig
+	Sandbox SandboxConfig
 
 	GitHub *GitHubConfig // nil = disabled
 	GitLab *GitLabConfig // nil = disabled
@@ -216,8 +221,8 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		ReviewConcurrency: l.intIn(EnvReviewConcurrency, DefaultReviewConcurrency,
 			MinReviewConcurrency, MaxReviewConcurrency),
 		BundleLines: l.intIn(EnvBundleLines, DefaultBundleLines, MinBundleLines, MaxBundleLines),
-		DataDir:     l.str(EnvDataDir, DefaultDataDir),
-		WorkDir:     l.str(EnvWorkDir, DefaultWorkDir),
+		DataDir:     l.dir(EnvDataDir, "data", DefaultDataDir),
+		WorkDir:     l.dir(EnvWorkDir, "work", DefaultWorkDir),
 		Ignore: IgnoreRules{
 			Repos:          l.regexps(EnvIgnoreRepos),
 			Authors:        l.regexps(EnvIgnoreAuthors),
@@ -231,6 +236,7 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		Engine:        l.engine(),
 	}
 	c.CLI = l.cli(c.DataDir)
+	c.Sandbox = l.sandbox()
 	c.GitHub = l.github()
 	c.GitLab = l.gitlab()
 	if err := errors.Join(l.errs...); err != nil {
@@ -248,6 +254,9 @@ func (c *Config) RequireServe() error {
 	}
 	var errs []error
 	if err := c.requireCLI(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.requireSandbox(); err != nil {
 		errs = append(errs, err)
 	}
 	if c.GitLab != nil {
@@ -276,6 +285,27 @@ func (l *loader) str(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// dir returns the directory in key as an absolute path. Unset, it is
+// ~/ocr-review/<name> when HOME is set, so a service on a host keeps its
+// files under the service user's home, and fallback otherwise; the image
+// sets both directories explicitly.
+func (l *loader) dir(key, name, fallback string) string {
+	v := l.str(key, "")
+	if v == "" {
+		home := strings.TrimSpace(l.getenv("HOME"))
+		if home == "" || !filepath.IsAbs(home) {
+			return fallback
+		}
+		return filepath.Join(home, "ocr-review", name)
+	}
+	abs, err := filepath.Abs(v)
+	if err != nil {
+		l.fail("%s: %v", key, err)
+		return v
+	}
+	return abs
 }
 
 func (l *loader) intIn(key string, def, lo, hi int) int {

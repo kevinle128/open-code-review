@@ -1865,3 +1865,24 @@ func TestSetConfigValueTimeoutSecondsRejectsInvalidValues(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultConfigPathFollowsConfigFileEnv(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	file := filepath.Join(t.TempDir(), "svc", "config.json")
+	t.Setenv(envConfigFile, file+"/")
+	got, err := defaultConfigPath()
+	if err != nil || got != file {
+		t.Fatalf("got %q err %v", got, err)
+	}
+	if err := runConfigSet("language", "Vietnamese"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadAppConfig(file)
+	if err != nil || cfg == nil || cfg.Language != "Vietnamese" {
+		t.Fatalf("config %+v err %v", cfg, err)
+	}
+	t.Setenv(envConfigFile, "relative/config.json")
+	if _, err := defaultConfigPath(); err == nil || !strings.Contains(err.Error(), envConfigFile) {
+		t.Fatalf("relative path: %v", err)
+	}
+}

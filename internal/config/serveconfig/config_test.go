@@ -79,6 +79,10 @@ func TestLoad_Defaults(t *testing.T) {
 			ReviewCLI: CLICodex, FixCLI: CLIClaude, CodexBin: "codex", ClaudeBin: "claude",
 			Home: "/data/cli-home",
 		},
+		Sandbox: SandboxConfig{
+			Mode: SandboxNone, DockerBin: "docker", Memory: "6g", CPUs: "4",
+			Images: DefaultSandboxImages,
+		},
 	}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v\nwant %+v", c, want)

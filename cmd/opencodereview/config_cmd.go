@@ -89,8 +89,19 @@ func init() {
 	configCmd.AddCommand(configModelCmd)
 }
 
-// Default config file location: ~/.opencodereview/config.json
+// envConfigFile replaces the default config file location. A service run
+// by a user who also runs `ocr` by hand keeps its own settings this way.
+const envConfigFile = "OCR_CONFIG_FILE"
+
+// Default config file location: ~/.opencodereview/config.json, or the
+// absolute path in OCR_CONFIG_FILE.
 func defaultConfigPath() (string, error) {
+	if p := strings.TrimSpace(os.Getenv(envConfigFile)); p != "" {
+		if !filepath.IsAbs(p) {
+			return "", fmt.Errorf("%s must be an absolute path, got %q", envConfigFile, p)
+		}
+		return filepath.Clean(p), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
