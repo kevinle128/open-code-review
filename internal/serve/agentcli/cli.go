@@ -20,9 +20,11 @@ import (
 //
 // RepoDir is the working directory. ReadDirs are directories outside it
 // that the agent must be able to read. Schema, when set, is the JSON Schema
-// of the final answer. Edit lets the agent change files in RepoDir. Agents
-// are subagent definition files a CLI that supports subagents installs for
-// the run; a missing file is left out. Getenv supplies the process
+// of the final answer. Edit lets the agent change files in RepoDir. Shell
+// lets a run that does not edit use a shell for read commands such as
+// `git diff`; a CLI grants it only inside a sandbox, where the checkout is
+// mounted read-only. Agents are subagent definition files a CLI that
+// supports subagents installs for the run; a missing file is left out. Getenv supplies the process
 // variables BaseEnv passes on; nil means os.Getenv.
 type Invocation struct {
 	RepoDir  string
@@ -30,6 +32,7 @@ type Invocation struct {
 	Schema   []byte
 	ReadDirs []string
 	Edit     bool
+	Shell    bool
 	Agents   []string
 	Run      *RunDir
 	Grace    time.Duration
@@ -205,12 +208,14 @@ func codexStreamMessage(path string) (string, error) {
 }
 
 // Claude runs `claude -p` with only the read tools, or for an Edit run the
-// read and edit tools plus Task for the installed agents. An Edit run gets
-// the Bash tool only with Sandbox set, so it can build and test the
-// project inside the run's container; without one a shell would run where
-// the service runs. SettingsFile is the host settings.json; the run home
-// gets a copy of its env and model keys only, so the host's hooks, plugins
-// and permission rules do not apply.
+// read and edit tools plus Task for the installed agents. An Edit or Shell
+// run gets the Bash tool only with Sandbox set, so it can build, test or
+// run git inside the run's container; without one a shell would run where
+// the service runs. A Shell run keeps the read tools and the read-only
+// checkout mount, so its shell cannot change the checkout. SettingsFile is
+// the host settings.json; the run home gets a copy of its env and model
+// keys only, so the host's hooks, plugins and permission rules do not
+// apply.
 type Claude struct {
 	Bin          string
 	Model        string
@@ -231,12 +236,12 @@ func (c Claude) Exec(ctx context.Context, inv Invocation) (string, error) {
 	mode, tools := "default", claudeReadTools
 	if inv.Edit {
 		mode, tools = "acceptEdits", claudeEditTools
-		if c.Sandbox != nil {
-			tools += ",Bash"
-		}
 		if err := installAgents(inv.Agents, filepath.Join(inv.Run.Home, "agents")); err != nil {
 			return "", err
 		}
+	}
+	if (inv.Edit || inv.Shell) && c.Sandbox != nil {
+		tools += ",Bash"
 	}
 	args := []string{"-p", "--output-format", "json", "--no-session-persistence",
 		"--permission-mode", mode, "--allowedTools", tools,

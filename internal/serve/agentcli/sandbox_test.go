@@ -217,11 +217,14 @@ func TestSandboxClaudeFixGetsBashAndAWritableCheckout(t *testing.T) {
 		name    string
 		sandbox bool
 		edit    bool
+		shell   bool
 		tools   string
 	}{
-		{"fix with docker", true, true, claudeEditTools + ",Bash"},
-		{"fix without sandbox", false, true, claudeEditTools},
-		{"review with docker", true, false, claudeReadTools},
+		{"fix with docker", true, true, false, claudeEditTools + ",Bash"},
+		{"fix without sandbox", false, true, false, claudeEditTools},
+		{"review with docker", true, false, false, claudeReadTools},
+		{"shell run with docker", true, false, true, claudeReadTools + ",Bash"},
+		{"shell run without sandbox", false, false, true, claudeReadTools},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -235,7 +238,7 @@ func TestSandboxClaudeFixGetsBashAndAWritableCheckout(t *testing.T) {
 				c.Sandbox = f.sb
 			}
 			inv := f.inv("fix")
-			inv.Edit = tc.edit
+			inv.Edit, inv.Shell = tc.edit, tc.shell
 			if _, err := c.Exec(context.Background(), inv); err != nil {
 				t.Fatal(err)
 			}
