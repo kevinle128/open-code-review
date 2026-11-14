@@ -87,6 +87,17 @@ type Workspace interface {
 	// IsAncestor returns the exit code of `git merge-base --is-ancestor a b`:
 	// 0 yes, 1 no, 128 an object is missing, -1 any other failure.
 	IsAncestor(ctx context.Context, a, b string) int
+	// FetchBranch checks out the PR head branch itself (spec.HeadRef is
+	// refs/heads/<branch>) so a fix can be committed and pushed.
+	FetchBranch(ctx context.Context, spec forge.CloneSpec, headSHA, baseSHA string) error
+	// ChangedFiles lists the files the checked out branch changes since its
+	// merge base with base.
+	ChangedFiles(ctx context.Context, base string) ([]string, error)
+	// Commit commits every change as ident; changed is false when there is
+	// nothing to commit.
+	Commit(ctx context.Context, ident forge.Identity, message string) (sha string, changed bool, err error)
+	// Push pushes sha to the checked out branch without force.
+	Push(ctx context.Context, spec forge.CloneSpec, sha string) error
 }
 
 // Workspaces hands out checkout slots. The release func empties the slot and

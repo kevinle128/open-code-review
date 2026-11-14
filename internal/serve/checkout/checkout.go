@@ -8,6 +8,7 @@ package checkout
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/url"
@@ -118,6 +119,11 @@ func (m *Manager) reset(i int) error {
 
 type workspace struct {
 	dir string
+	// Set by FetchBranch: the branch a fix commits on, the commit it starts
+	// from and a digest of the repository config when the agent run starts.
+	branch    string
+	start     string
+	configSum [sha256.Size]byte
 }
 
 var _ review.Workspace = (*workspace)(nil)
@@ -131,6 +137,19 @@ func (w *workspace) Dir() string { return w.dir }
 // empty; a base commit that the fetch did not bring in is not an error,
 // because RangeStart falls back to BaseRef.
 func (w *workspace) Fetch(ctx context.Context, spec forge.CloneSpec, headSHA, baseSHA string) error {
+	if err := w.fetchRefs(ctx, spec, headSHA, baseSHA); err != nil {
+		return err
+	}
+	if _, err := runGit(ctx, w.dir, gitEnv(), "-c", "advice.detachedHead=false",
+		"checkout", "-q", "--detach", "--end-of-options", headSHA); err != nil {
+		return fmt.Errorf("git checkout: %w", err)
+	}
+	return nil
+}
+
+// fetchRefs initializes the slot, fetches the head and base refs and checks
+// that the head ref is at headSHA.
+func (w *workspace) fetchRefs(ctx context.Context, spec forge.CloneSpec, headSHA, baseSHA string) error {
 	if err := validateFetch(spec, headSHA, baseSHA); err != nil {
 		return err
 	}
@@ -160,10 +179,6 @@ func (w *workspace) Fetch(ctx context.Context, spec forge.CloneSpec, headSHA, ba
 	}
 	if got := strings.TrimSpace(string(out)); got != headSHA {
 		return fmt.Errorf("%w: %s is at %s, want %s", ErrHeadMoved, spec.HeadRef, got, headSHA)
-	}
-	if _, err := runGit(ctx, w.dir, env, "-c", "advice.detachedHead=false",
-		"checkout", "-q", "--detach", "--end-of-options", headSHA); err != nil {
-		return fmt.Errorf("git checkout: %w", err)
 	}
 	return nil
 }

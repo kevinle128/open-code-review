@@ -377,6 +377,50 @@ type fakeWorkspaces struct {
 	acquired   int
 	released   int
 	fetched    []string
+
+	branchFetched []string
+	branchErr     error
+	dirty         bool // Commit finds changes
+	commitErr     error
+	pushErr       error
+	commits       []string // identity name + ":" + message
+	pushed        []string // spec.HeadRef + "@" + sha
+}
+
+const fixSHA = "ffffffffffffffffffffffffffffffffffffffff"
+
+func (w fakeWorkspace) FetchBranch(_ context.Context, spec forge.CloneSpec, head, base string) error {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	w.w.branchFetched = append(w.w.branchFetched, spec.HeadRef+"@"+head+".."+base)
+	return w.w.branchErr
+}
+
+func (w fakeWorkspace) ChangedFiles(context.Context, string) ([]string, error) {
+	return []string{"a.go"}, nil
+}
+
+func (w fakeWorkspace) Commit(_ context.Context, ident forge.Identity, message string) (string, bool, error) {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	if w.w.commitErr != nil {
+		return "", false, w.w.commitErr
+	}
+	if !w.w.dirty {
+		return "", false, nil
+	}
+	w.w.commits = append(w.w.commits, ident.Name+":"+message)
+	return fixSHA, true, nil
+}
+
+func (w fakeWorkspace) Push(_ context.Context, spec forge.CloneSpec, sha string) error {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	if w.w.pushErr != nil {
+		return w.w.pushErr
+	}
+	w.w.pushed = append(w.w.pushed, spec.HeadRef+"@"+sha)
+	return nil
 }
 
 type fakeWorkspace struct{ w *fakeWorkspaces }
