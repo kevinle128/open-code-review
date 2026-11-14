@@ -279,10 +279,37 @@ threads, the summary marker, rounds and the merge gate do not change.
   per-repository and service excludes, the [file filter](#file-filter)) and
   writes `pr.json` and `diff.patch` (the diff of the selected files) into a
   run directory. The prompt is the review skill, read from
-  `$OCR_SERVE_SKILL_DIR/skills/ak-review-pr/SKILL.md` at run time, plus the
-  service instructions: read those two files, do not edit files or use the
-  network, and answer with findings as JSON. Findings on files outside the
-  selection are dropped. The skill is not part of this repository.
+  `$OCR_SERVE_SKILL_DIR/skills/ak-review-pr/SKILL.md` at run time, followed
+  by the full text of `review-workflow.md`, `review-checklist.md`,
+  `anti-ai-slop.md`, `pr-body-contract.md` and `writing-language.md` from its
+  `references/` (a missing reference is left out with a warning in the log),
+  plus the service instructions: read those two files, do not edit files or
+  use the network, and answer with findings as JSON. The skill's "Service
+  mode (ocr serve)" section overrides the `gh` steps of the references.
+  Findings on files outside the selection are dropped. A finding about the
+  PR as a whole, such as the PR description check (the agent reports it with
+  an empty path, or on `pr.json`), becomes a PR-level thread: on GitLab a
+  discussion without a position, on GitHub a file-level thread on the first
+  changed file, since only review threads can be resolved there; its body
+  says it is about the whole PR. Both block the merge until resolved. The
+  skill is not part of this repository.
+
+  A large PR is reviewed in batches, one CLI run each, in its own run
+  directory. Files of one directory stay in one batch where they fit. Each
+  batch holds at most `OCR_SERVE_BATCH_FILES` files and about
+  `OCR_SERVE_BATCH_LINES` changed lines (a larger single file is its own
+  batch); a PR within both limits is one run. In a batch, `pr.json` keeps
+  the whole PR and every selected file in `files`, and adds `batch`
+  (`index` from 1, `count`, and the batch `files`); `diff.patch` holds only
+  the batch files, and the dismissed findings go to every batch. Only the
+  first batch checks the PR description. Findings are merged, and a finding
+  with the same path, line and title as an earlier one is dropped. The run
+  timeout covers all batches. When a batch fails, the others still post
+  their findings and the review is partial: the summary lists the files of
+  the failed batch, and `/review` reviews again. Each batch logs one
+  `review batch` line with its files, changed lines, findings and duration.
+  Batching applies to every review (automatic rounds, `/review`,
+  `/review-commit` and the review after a `/fix` commit); `/fix` is one run.
 - `ocr` runs the in-process OCR review with the `OCR_LLM_*` settings. Use it
   to roll back: set `OCR_SERVE_ENGINE=ocr` and redeploy. The CLI settings and
   mounts are then not used.
@@ -300,6 +327,9 @@ threads, the summary marker, rounds and the merge gate do not change.
 | `OCR_SERVE_SKILL_DIR` | | Required with `cli`. Absolute path of the directory that holds `skills/ak-review-pr/SKILL.md` and its `references/`, and optionally `agents/kongming.md` for `/fix`. |
 | `OCR_SERVE_CLI_HOME` | `$OCR_SERVE_DATA_DIR/cli-home` | Directory the service owns. Each run gets `run-<id>/` in it, removed when the run ends; leftovers are removed at startup. |
 | `OCR_SERVE_CODEX_AUTH` | | Required with `codex`. The host `~/.codex/auth.json`. Each run's `CODEX_HOME` links `auth.json` to it; nothing else of the host `~/.codex` is used. Mount it read-write so a token refresh reaches the host file. |
+| `OCR_SERVE_BATCH_LINES` | `1500` | Changed lines (insertions plus deletions) per review batch, `100`..`50000`. |
+| `OCR_SERVE_BATCH_FILES` | `25` | Files per review batch, `1`..`500`. |
+| `OCR_SERVE_BATCH_CONCURRENCY` | `1` | Review batches of one PR that run at the same time, `1`..`4`. Each is a full CLI run (and a sandbox container), on top of `OCR_SERVE_WORKERS`. |
 | `OCR_SERVE_CLAUDE_SETTINGS` | | Required with `claude`. The host `~/.claude/settings.json`. Each run's `CLAUDE_CONFIG_DIR` gets a `settings.json` with only its `env` and `model` keys, never hooks or permissions. |
 
 At startup the service checks that the review and fix CLI binaries, the
@@ -557,7 +587,8 @@ that it is not available.
    they disputed.
 3. `OCR_SERVE_FIX_CLI` runs the skill as `/ak-review-pr <PR> --advice --fix
    --reply` in its "Service fix mode" section, read from
-   `$OCR_SERVE_SKILL_DIR/skills/ak-review-pr/references/mode-fix.md`. For
+   `$OCR_SERVE_SKILL_DIR/skills/ak-review-pr/references/mode-fix.md`; the
+   prompt holds the full text of `mode-fix.md` and `review-checklist.md`. For
    Claude, `$OCR_SERVE_SKILL_DIR/agents/kongming.md` is installed into the
    run's config dir with `model: inherit`, read-only tools and no project
    memory; without the file the run goes on without it. The agent answers
