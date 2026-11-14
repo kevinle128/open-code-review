@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 alibaba/open-code-review Contributors
 
-// Package agentcli runs an installed coding-agent CLI (Codex CLI or Claude
-// Code) as a child process of the service: each run gets a fresh home
+// Package agentcli runs an installed coding-agent CLI (Codex CLI, Claude
+// Code or the Antigravity CLI) as a child process of the service: each run gets a fresh home
 // directory that the service owns, an environment that holds none of the
 // service secrets, and a process group that a cancel stops as a whole.
 package agentcli

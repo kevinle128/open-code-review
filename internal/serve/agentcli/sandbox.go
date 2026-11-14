@@ -195,7 +195,7 @@ func (s *Sandbox) runArgs(inv Invocation, p Process, name, image string) ([]stri
 		"--user", strconv.Itoa(s.UID) + ":" + strconv.Itoa(s.GID),
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--pids-limit", "1024", "--memory", s.Memory, "--cpus", s.CPUs,
-		"--network", "bridge", "-w", inv.RepoDir, "--env-file", envFile}
+		"--network", "bridge", "-w", p.Dir, "--env-file", envFile}
 	for _, h := range s.AddHosts {
 		args = append(args, "--add-host", h)
 	}
