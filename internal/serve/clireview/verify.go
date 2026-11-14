@@ -44,9 +44,9 @@ const prBodyContract = "pr-body-contract.md"
 // nil appends nothing. Timeout bounds the run; zero means
 // DefaultVerifyTimeout.
 type Verifier struct {
-	CLI     agentcli.CLI
-	Post    []string
-	Note    func(reason string) string
+	CLI  agentcli.CLI
+	Post []string
+	Note func(reason string) string
 	// FixNote turns the verifier's proposed fix into the block appended
 	// after Note; nil or an empty fix appends nothing.
 	FixNote func(fix string) string
