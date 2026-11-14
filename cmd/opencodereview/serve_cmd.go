@@ -133,7 +133,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	}
 	log := server.NewLogger(env.logOut)
 
-	reviewer, fixer, err := buildServeEngines(cfg, env.getenv)
+	reviewer, fixer, err := buildServeEngines(ctx, cfg, env.getenv, log)
 	if err != nil {
 		return fmt.Errorf("review engine %s: %w", cfg.Engine, err)
 	}
@@ -176,7 +176,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpSrv.Serve(ln) }()
 	log.Info("listening", "addr", ln.Addr().String(), "version", Version, "platforms", platformNames(forges),
-		"engine", engineName(cfg), "fix_cli", fixCLIName(cfg))
+		"engine", engineName(cfg), "fix_cli", fixCLIName(cfg), "sandbox", sandboxName(cfg))
 	if env.ready != nil {
 		env.ready(ln.Addr().String())
 	}
@@ -265,6 +265,14 @@ func fixCLIName(cfg *serveconfig.Config) string {
 		return cfg.CLI.FixCLI
 	}
 	return "none"
+}
+
+// sandboxName names where a CLI run happens, or "none" for the OCR engine.
+func sandboxName(cfg *serveconfig.Config) string {
+	if cfg.Engine == serveconfig.EngineCLI && cfg.Sandbox.Mode != "" {
+		return cfg.Sandbox.Mode
+	}
+	return serveconfig.SandboxNone
 }
 
 // serveRoutes serves the handler at the root and under servePathPrefix, so

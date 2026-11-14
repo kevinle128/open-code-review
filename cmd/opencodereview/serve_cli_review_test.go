@@ -189,7 +189,7 @@ func TestBuildServeReviewerRunsTheCLIEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rev, fixer, err := buildServeEngines(cfg, os.Getenv)
+	rev, fixer, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestBuildServeReviewerRunsTheCLIEngine(t *testing.T) {
 func TestBuildServeReviewerPicksTheEngine(t *testing.T) {
 	cfg := cliEngineConfig(t, "{}")
 	cfg.Engine = serveconfig.EngineOCR
-	rev, fixer, err := buildServeEngines(cfg, os.Getenv)
+	rev, fixer, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestBuildServeReviewerPicksTheEngine(t *testing.T) {
 	cfg.CLI.ClaudeModel = "sonnet"
 	cfg.CLI.FixCLI = serveconfig.CLICodex
 	cfg.CLI.CodexEffort = "high"
-	rev, fixer, err = buildServeEngines(cfg, os.Getenv)
+	rev, fixer, err = buildServeEngines(context.Background(), cfg, os.Getenv, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestBuildServeReviewerChecks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := cliEngineConfig(t, "{}")
 			tc.edit(cfg)
-			_, _, err := buildServeEngines(cfg, os.Getenv)
+			_, _, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err %v", err)
 			}

@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/alibaba/open-code-review/internal/agent"
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
@@ -88,9 +90,9 @@ func (s serveSelector) Select(ctx context.Context, req review.Request) (clirevie
 // buildServeEngines returns the review engine the configuration selects
 // and, for the CLI engine, the fix engine; the OCR engine has none, so /fix
 // answers that it is not available. For the CLI engine it checks the
-// executables, the skill and the CLI credential files, and removes run
-// directories a stopped service left.
-func buildServeEngines(cfg *serveconfig.Config, getenv func(string) string) (review.Reviewer, review.Fixer, error) {
+// executables, the skill and the CLI credential files, and removes the
+// sandbox containers and run directories a stopped service left.
+func buildServeEngines(ctx context.Context, cfg *serveconfig.Config, getenv func(string) string, log *slog.Logger) (review.Reviewer, review.Fixer, error) {
 	ocr := newServeReviewer(cfg)
 	if cfg.Engine == serveconfig.EngineOCR {
 		return ocr, nil, nil
@@ -99,11 +101,18 @@ func buildServeEngines(cfg *serveconfig.Config, getenv func(string) string) (rev
 	if err := readable(filepath.Join(c.SkillDir, clireview.SkillFile)); err != nil {
 		return nil, nil, fmt.Errorf("%s: review skill: %w", serveconfig.EnvSkillDir, err)
 	}
-	reviewCLI, err := buildAgentCLI(c, c.ReviewCLI)
+	var sb *agentcli.Sandbox
+	if cfg.Sandbox.Mode == serveconfig.SandboxDocker {
+		var err error
+		if sb, err = buildSandbox(ctx, cfg, log); err != nil {
+			return nil, nil, err
+		}
+	}
+	reviewCLI, err := buildAgentCLI(c, cfg.Sandbox, sb, c.ReviewCLI)
 	if err != nil {
 		return nil, nil, err
 	}
-	fixCLI, err := buildAgentCLI(c, c.FixCLI)
+	fixCLI, err := buildAgentCLI(c, cfg.Sandbox, sb, c.FixCLI)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fix cli: %w", err)
 	}
@@ -129,12 +138,41 @@ func buildServeEngines(cfg *serveconfig.Config, getenv func(string) string) (rev
 	return rev, fix, nil
 }
 
+// buildSandbox checks the docker client, creates the toolchain caches under
+// the data dir and removes the containers a stopped service left. The
+// skill directory is mounted for every CLI.
+func buildSandbox(ctx context.Context, cfg *serveconfig.Config, log *slog.Logger) (*agentcli.Sandbox, error) {
+	docker, err := exec.LookPath(cfg.Sandbox.DockerBin)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", serveconfig.EnvDockerBin, err)
+	}
+	im := cfg.Sandbox.Images
+	sb := &agentcli.Sandbox{
+		Docker: docker, UID: os.Getuid(), GID: os.Getgid(),
+		Memory: cfg.Sandbox.Memory, CPUs: cfg.Sandbox.CPUs,
+		Images: agentcli.Images{
+			Go: im[serveconfig.ImageGo], Dotnet: im[serveconfig.ImageDotnet], Rust: im[serveconfig.ImageRust],
+			Node: im[serveconfig.ImageNode], Python: im[serveconfig.ImagePython], Default: im[serveconfig.ImageDefault],
+		},
+		CacheDir: filepath.Join(cfg.DataDir, "cache"),
+		Mounts:   []agentcli.Mount{{Path: cfg.CLI.SkillDir, ReadOnly: true}},
+		Log:      log,
+	}
+	initCtx, cancel := context.WithTimeout(ctx, serveStartupTimeout)
+	defer cancel()
+	if err := sb.Init(initCtx); err != nil {
+		return nil, fmt.Errorf("%s=%s: %w", serveconfig.EnvSandbox, serveconfig.SandboxDocker, err)
+	}
+	return sb, nil
+}
+
 // buildAgentCLI resolves the executable and checks the credential file of
-// the named CLI.
-func buildAgentCLI(c serveconfig.CLIConfig, name string) (agentcli.CLI, error) {
-	binEnv := serveconfig.EnvCodexBin
+// the named CLI. With a sandbox, the CLI gets a copy of it that also mounts
+// the CLI install and its credential file.
+func buildAgentCLI(c serveconfig.CLIConfig, sc serveconfig.SandboxConfig, sb *agentcli.Sandbox, name string) (agentcli.CLI, error) {
+	binEnv, dirEnv, installDir := serveconfig.EnvCodexBin, serveconfig.EnvSandboxCodexDir, sc.CodexDir
 	if name == serveconfig.CLIClaude {
-		binEnv = serveconfig.EnvClaudeBin
+		binEnv, dirEnv, installDir = serveconfig.EnvClaudeBin, serveconfig.EnvSandboxClaudeDir, sc.ClaudeDir
 	}
 	bin, err := exec.LookPath(c.Bin(name))
 	if err != nil {
@@ -143,16 +181,51 @@ func buildAgentCLI(c serveconfig.CLIConfig, name string) (agentcli.CLI, error) {
 	if bin, err = filepath.Abs(bin); err != nil {
 		return nil, fmt.Errorf("%s: %w", binEnv, err)
 	}
+	credEnv, cred := serveconfig.EnvCodexAuth, c.CodexAuth
 	if name == serveconfig.CLIClaude {
-		if err := readable(c.ClaudeSettings); err != nil {
-			return nil, fmt.Errorf("%s: %w", serveconfig.EnvClaudeSettings, err)
+		credEnv, cred = serveconfig.EnvClaudeSettings, c.ClaudeSettings
+	}
+	if err := readable(cred); err != nil {
+		return nil, fmt.Errorf("%s: %w", credEnv, err)
+	}
+	if sb != nil {
+		if bin, installDir, err = sandboxInstall(bin, installDir); err != nil {
+			return nil, fmt.Errorf("%s: %w", dirEnv, err)
 		}
-		return agentcli.Claude{Bin: bin, Model: c.ClaudeModel, SettingsFile: c.ClaudeSettings}, nil
+		// The codex run home links auth.json to the host file, so its
+		// directory is mounted writable for a token refresh; the Claude
+		// settings file is only read.
+		credMount := agentcli.Mount{Path: filepath.Dir(cred)}
+		if name == serveconfig.CLIClaude {
+			credMount = agentcli.Mount{Path: cred, ReadOnly: true}
+		}
+		sb = sb.WithMounts(agentcli.Mount{Path: installDir, ReadOnly: true}, credMount)
 	}
-	if err := readable(c.CodexAuth); err != nil {
-		return nil, fmt.Errorf("%s: %w", serveconfig.EnvCodexAuth, err)
+	if name == serveconfig.CLIClaude {
+		return agentcli.Claude{Bin: bin, Model: c.ClaudeModel, SettingsFile: cred, Sandbox: sb}, nil
 	}
-	return agentcli.Codex{Bin: bin, Model: c.CodexModel, Effort: c.CodexEffort, AuthFile: c.CodexAuth}, nil
+	return agentcli.Codex{Bin: bin, Model: c.CodexModel, Effort: c.CodexEffort, AuthFile: cred, Sandbox: sb}, nil
+}
+
+// sandboxInstall resolves the binary through its links, since a link on
+// the host (~/.local/bin/codex) points outside the mounted install, and
+// checks that the install directory, by default the binary's own
+// directory, holds it.
+func sandboxInstall(bin, dir string) (string, string, error) {
+	resolved, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		return "", "", err
+	}
+	if dir == "" {
+		return resolved, filepath.Dir(resolved), nil
+	}
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
+	if rel, err := filepath.Rel(dir, resolved); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("%s is not inside the install directory %s", resolved, dir)
+	}
+	return resolved, dir, nil
 }
 
 // readable opens path for reading, so a missing file or a mount with the
