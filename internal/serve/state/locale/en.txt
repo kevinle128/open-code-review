@@ -37,7 +37,7 @@ coverage.partial = ⚠️ The last review was partial: reviewed {reviewed}/{tota
 coverage.more = and {count} more (see the service log)
 coverage.retry = Comment `/review` to review again.
 
-verify.checked = Findings checked by a second reviewer: {checked} checked, {posted} posted.
+verify.checked = Second-reviewer check: {checked} finding(s) checked, {posted} posted.
 verify.failed = ⚠️ The second-reviewer check failed, so the findings are posted unverified.
 
 failure.provider = the LLM provider returned an error

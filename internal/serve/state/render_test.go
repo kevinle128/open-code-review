@@ -193,7 +193,7 @@ func TestRenderVerify(t *testing.T) {
 	if got := RenderVerify(review.Verification{}, loc); got != "" {
 		t.Errorf("no pass = %q", got)
 	}
-	if got := RenderVerify(review.Verification{Checked: 21, Posted: 5}, loc); got != "Findings checked by a second reviewer: 21 checked, 5 posted." {
+	if got := RenderVerify(review.Verification{Checked: 21, Posted: 5}, loc); got != "Second-reviewer check: 21 finding(s) checked, 5 posted." {
 		t.Errorf("checked = %q", got)
 	}
 	if got := RenderVerify(review.Verification{Checked: 3, Posted: 3, Failed: true}, loc); got != loc.Text("verify.failed") || got == "verify.failed" {
