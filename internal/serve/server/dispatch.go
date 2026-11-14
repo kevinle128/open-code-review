@@ -10,21 +10,16 @@ import (
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
-var eventTriggers = map[forge.EventKind]state.Trigger{
-	forge.EventOpened:         state.TriggerOpened,
-	forge.EventReady:          state.TriggerReady,
-	forge.EventReopened:       state.TriggerReopened,
-	forge.EventPush:           state.TriggerPush,
-	forge.EventThreadResolved: state.TriggerThreadResolved,
-	forge.EventNote:           state.TriggerNote,
-}
-
 // dispatch filters a verified event and queues its work. It runs inside the
-// webhook handler, so it makes no forge call; the eyes reaction runs in the
+// webhook handler, so it makes no forge call; forge calls run in the
 // background. The returned text is the outcome for the access log.
+//
+// Only an opened or ready PR starts a chain on its own. The bot's fix push
+// comes from the bot and is dropped here: the round that pushed queues the
+// next round itself. A person's push, or a reopened PR, starts no round; it
+// only copies the chain's status to the new head.
 func (s *Server) dispatch(ev forge.Event, body []byte, requestID string) string {
 	switch {
 	case ev.Kind == forge.EventIgnored:
@@ -32,19 +27,21 @@ func (s *Server) dispatch(ev forge.Event, body []byte, requestID string) string 
 	case ev.SenderIsBot:
 		return "bot sender"
 	case ev.Kind == forge.EventClosed:
-		s.unwait(ev.Ref, withPR(withRequest(s.log, requestID), ev.Ref))
+		s.forgetChain(ev.Ref)
 		return "closed"
 	}
 	if s.seen.Seen(deliveryKey(ev, body)) {
 		return "duplicate delivery"
 	}
-	if ev.Kind == forge.EventCommand || ev.Kind == forge.EventNote {
-		if outcome, handled := s.dispatchComment(ev, requestID); handled {
-			return outcome
-		}
-	}
-	trigger, ok := eventTriggers[ev.Kind]
-	if !ok {
+	switch ev.Kind {
+	case forge.EventCommand, forge.EventNote:
+		outcome, _ := s.dispatchComment(ev, requestID)
+		return outcome
+	case forge.EventPush, forge.EventReopened:
+		s.copyStatusAsync(ev.Ref, requestID)
+		return "status copy"
+	case forge.EventOpened, forge.EventReady:
+	default:
 		return "unsupported event"
 	}
 	if ev.PR != nil {
@@ -55,22 +52,23 @@ func (s *Server) dispatch(ev forge.Event, body []byte, requestID string) string 
 			return "ignore rule " + rule
 		}
 	}
-	s.queue.submit(ev.Ref, job{trigger: trigger, requestID: requestID})
-	return "queued " + string(trigger)
+	t := triggerOpened
+	if ev.Kind == forge.EventReady {
+		t = triggerReady
+	}
+	s.queue.submit(ev.Ref, job{trigger: t, requestID: requestID})
+	return "queued " + string(t)
 }
 
 // dispatchComment handles the comment part of a command or note event.
-// handled is false when the event should still go on as a note trigger.
+// handled is false when the comment holds no command.
 func (s *Server) dispatchComment(ev forge.Event, requestID string) (string, bool) {
 	names := s.commandNames(ev.Ref.Platform)
 	line, mentioned := forge.CommandLine(ev.CommentBody, names)
 	cmd, isCmd, perr := ParseCommand(line)
 	unknown, isUnknown := unknownCommand(line, mentioned)
 	if !isCmd && !isUnknown {
-		if ev.Kind == forge.EventCommand {
-			return "not a command", true
-		}
-		return "", false
+		return "not a command", false
 	}
 	if isUnknown && ev.CommentID == "" {
 		return "unknown platform command", true
@@ -94,14 +92,15 @@ func (s *Server) dispatchComment(ev forge.Event, requestID string) (string, bool
 		cj.reject = "unknown command " + unknown
 	case perr != nil:
 		cj.reject = perr.Error()
+	default:
+		// A new review restarts the chain at once: the running round is
+		// cancelled and the rounds it queued are skipped.
+		cj.gen = s.restartChain(ev.Ref)
 	}
 	if ev.CommentID != "" {
 		s.reactAsync(ev.Ref, ev.CommentID, forge.ReactionEyes, requestID)
 	}
 	s.queue.submit(ev.Ref, job{cmd: cj, requestID: requestID})
-	if ev.Kind == forge.EventNote {
-		s.queue.submit(ev.Ref, job{trigger: state.TriggerNote, requestID: requestID})
-	}
 	if cj.reject != "" {
 		return "queued command reply", true
 	}
@@ -133,7 +132,7 @@ func deliveryKey(ev forge.Event, body []byte) string {
 
 // commentKey also guards edits when a forge cannot report the old body: the
 // same command line on the same comment runs once within the TTL. line is in
-// slash form, so "@bot fix" and "/fix" share a key.
+// slash form, so "@bot review" and "/review" share a key.
 func commentKey(ev forge.Event, line string) string {
 	return "comment:" + ev.Ref.Key() + ":" + ev.CommentID + ":" + normalizeLine(line)
 }

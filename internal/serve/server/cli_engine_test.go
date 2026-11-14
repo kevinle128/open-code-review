@@ -40,10 +40,10 @@ func cliGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// TestCLIEngineFindingsBecomeThreads runs an automatic round through the
-// serve runner with the CLI engine and a fake codex executable that answers
-// with two findings.
-func TestCLIEngineFindingsBecomeThreads(t *testing.T) {
+// TestCLIEngineFindingsReachTheFixRun runs round 1 through the serve runner
+// with the CLI engine and a fake codex executable that answers with two
+// findings; the fix run judges none real, so the chain ends.
+func TestCLIEngineFindingsReachTheFixRun(t *testing.T) {
 	repo := t.TempDir()
 	cliGit(t, repo, "init", "-q", "-b", "main")
 	if err := os.WriteFile(filepath.Join(repo, "a.go"), []byte("package a\n"), 0o600); err != nil {
@@ -103,29 +103,33 @@ cp ` + answer + ` "$out"
 		req.RepoDir = repo
 		return engine.Review(ctx, req)
 	})
-	h.auto(ref, state.TriggerOpened)
+	h.fix.set(func(context.Context, review.FixRequest) (review.FixResult, error) { return review.FixResult{}, nil })
+	h.opened(ref)
+	h.drain()
 
-	posted := h.gh.postedList()
-	if len(posted) != 1 || len(posted[0]) != 2 {
-		t.Fatalf("posted %+v\nlogs:\n%s", posted, h.logs.String())
+	reqs := h.fix.requests()
+	if len(reqs) != 1 || len(reqs[0].Findings) != 2 {
+		t.Fatalf("fix requests %+v\nlogs:\n%s", reqs, h.logs.String())
 	}
-	if posted[0][0].Path != "a.go" || posted[0][0].StartLine != 3 || posted[0][0].Severity != "high" ||
-		posted[0][1].StartLine != 4 || !strings.Contains(posted[0][1].Content, "**B is unused**") {
-		t.Fatalf("findings %+v", posted[0])
+	fs := reqs[0].Findings
+	if fs[0].ID != "F1" || fs[0].Path != "a.go" || fs[0].Line != 3 || fs[0].Severity != "high" ||
+		fs[1].Line != 4 || !strings.Contains(fs[1].Content, "**B is unused**") {
+		t.Fatalf("findings %+v", fs)
 	}
 	m := h.gh.marker(t, ref)
-	if m.Auto != 1 || len(m.Runs) != 1 || len(m.Runs[0].IDs) != 2 {
+	if m.Status != state.ChainSuccess || len(m.Rounds) != 1 || m.Rounds[0].Real != 0 {
 		t.Fatalf("marker %+v", m)
 	}
-	mustContain(t, h.gh.summary(ref), h.loc.Text("summary.open", "count", "2"))
+	mustContain(t, strings.Join(h.gh.noteList(), "\n"), h.loc.Text("round.clean"))
 	if entries, _ := os.ReadDir(homeRoot); len(entries) != 0 {
 		t.Fatal("run dir left after the review")
 	}
 }
 
-// TestCLIFixTimeoutCleansUp runs /fix through the CLI fix engine with a fake
-// claude that never answers: past the limit the process group is stopped,
-// the run directory removed, the slot released and the command answered.
+// TestCLIFixTimeoutCleansUp runs the fix run of a round through the CLI fix
+// engine with a fake claude that never answers: past the limit the process
+// group is stopped, the run directory removed, the slot released, the
+// round failed and the command answered.
 func TestCLIFixTimeoutCleansUp(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	claude := filepath.Join(t.TempDir(), "claude")
@@ -154,22 +158,25 @@ func TestCLIFixTimeoutCleansUp(t *testing.T) {
 		Homes: homes, SkillDir: skillDir, Grace: 100 * time.Millisecond}
 	repo := t.TempDir()
 	// The fake workspace has no directory; the CLI runs in a real one.
-	h.fix.fn = func(ctx context.Context, req review.FixRequest) (review.FixResult, error) {
+	h.fix.set(func(ctx context.Context, req review.FixRequest) (review.FixResult, error) {
 		req.RepoDir = repo
 		return engine.Fix(ctx, req)
-	}
+	})
+	h.rev.set(findingsResult(comment("a.go", 3)))
 	ref := ghRef(1)
 	h.gh.setPR(openPR(ref, sha1))
-	h.setThreads(ref, h.findingThread("f1", "a.go", 3, "Missing return", false))
-	h.command(ref, "/fix", "c-1")
+	h.command(ref, "/review", "c-1")
 
 	if entries, _ := os.ReadDir(homeRoot); len(entries) != 0 {
 		t.Fatal("run dir left after the timeout")
 	}
-	if _, _, _, acquired, released := h.ws.fixLists(); acquired != 1 || released != 1 {
-		t.Fatalf("slot %d/%d", acquired, released)
+	if h.ws.acquired != 1 || h.ws.released != 1 {
+		t.Fatalf("slot %d/%d", h.ws.acquired, h.ws.released)
 	}
-	mustContain(t, strings.Join(h.gh.noteList(), "\n"), h.srv.fixFailureReason("fix", "req-cmd"))
+	mustContain(t, strings.Join(h.gh.noteList(), "\n"), h.srv.failureReason("fix", "req-cmd"))
+	if m := h.gh.marker(t, ref); m.Status != state.ChainFailure {
+		t.Fatalf("marker %+v", m)
+	}
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {
 		t.Fatal(err)

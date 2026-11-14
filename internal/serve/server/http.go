@@ -2,8 +2,9 @@
 // Copyright 2026 alibaba/open-code-review Contributors
 
 // Package server is the review service orchestrator: it receives webhooks,
-// serializes work per pull request, runs the round state machine, and drives
-// checkout, review and posting through the forge and review interfaces.
+// serializes work per pull request, runs the review chain of each PR round
+// by round, and drives checkout, review, fix, push and commit status through
+// the forge and review interfaces.
 package server
 
 import (
@@ -15,7 +16,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -26,8 +26,8 @@ import (
 )
 
 // Deps are the collaborators of the server. A nil entry in Forges disables
-// that platform, and its webhook route answers 404. A nil Fixer turns /fix
-// off: the command then answers that it is not available.
+// that platform, and its webhook route answers 404. A nil Fixer makes every
+// round report-only, with the review findings as they are.
 type Deps struct {
 	Config     *serveconfig.Config
 	Forges     map[forge.Platform]forge.Forge
@@ -52,10 +52,12 @@ type Server struct {
 	now        func() time.Time
 	version    string
 
-	store   *Store
 	seen    *dedupe
 	queue   *queue
 	workers chan struct{}
+
+	chainMu sync.Mutex
+	chains  map[string]*chainCtl
 
 	// mu orders intake against Shutdown: work is only added while holding
 	// the read lock and closing is false, so wg never grows after Shutdown
@@ -66,17 +68,14 @@ type Server struct {
 	wg        sync.WaitGroup
 	runCtx    context.Context
 	cancelRun context.CancelFunc
-	pollStop  context.CancelFunc
-	pollDone  chan struct{}
 }
 
 const (
-	waitingFile     = "waiting.json"
 	sideCallTimeout = 30 * time.Second
 	maxReruns       = 3
 )
 
-// New checks d and opens the waiting store under Config.DataDir.
+// New checks d.
 func New(d Deps) (*Server, error) {
 	switch {
 	case d.Config == nil:
@@ -103,17 +102,12 @@ func New(d Deps) (*Server, error) {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	store, err := OpenStore(filepath.Join(d.Config.DataDir, waitingFile))
-	if errors.Is(err, ErrStoreCorrupt) {
-		d.Logger.Error("waiting store reset", "error", err.Error())
-	} else if err != nil {
-		return nil, err
-	}
 	s := &Server{
 		cfg: d.Config, forges: forges, reviewer: d.Reviewer, fixer: d.Fixer, workspaces: d.Workspaces,
 		loc: d.Locale, log: d.Logger, now: d.Now, version: d.Version,
-		store: store, seen: newDedupe(d.Now, dedupeTTL, dedupeMaxKeys),
+		seen:    newDedupe(d.Now, dedupeTTL, dedupeMaxKeys),
 		workers: make(chan struct{}, d.Config.Workers),
+		chains:  map[string]*chainCtl{},
 	}
 	s.runCtx, s.cancelRun = context.WithCancel(context.Background())
 	s.queue = newQueue(&s.wg, s.process)
@@ -129,9 +123,9 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// Start starts the GitLab poller. Reviews run on demand, so there is no
-// worker pool to start.
-func (s *Server) Start(ctx context.Context) error {
+// Start marks the server started. Reviews run on demand, so there is no
+// worker pool or poller to start.
+func (s *Server) Start(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
@@ -141,15 +135,6 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("server: already started")
 	}
 	s.started = true
-	if s.forges[forge.GitLab] == nil {
-		return nil
-	}
-	pctx, stop := context.WithCancel(ctx)
-	s.pollStop, s.pollDone = stop, make(chan struct{})
-	go func() {
-		defer close(s.pollDone)
-		s.poll(pctx, s.cfg.PollInterval)
-	}()
 	return nil
 }
 
@@ -158,12 +143,7 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.closing = true
-	stop, pollDone := s.pollStop, s.pollDone
 	s.mu.Unlock()
-	if stop != nil {
-		stop()
-		<-pollDone
-	}
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()

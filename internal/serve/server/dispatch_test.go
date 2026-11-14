@@ -10,7 +10,6 @@ import (
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 func prEvent(kind forge.EventKind, ref forge.PRRef, id string) forge.Event {
@@ -54,8 +53,10 @@ func TestDispatchFilters(t *testing.T) {
 		{"command bypasses author rule", forge.Event{Kind: forge.EventCommand, Ref: ghRef(2), DeliveryID: "c1", CommentID: "2", CommentBody: "/review",
 			PR: &forge.PR{Author: "renovate"}}, "queued command review"},
 		{"not a command", forge.Event{Kind: forge.EventCommand, Ref: ghRef(2), DeliveryID: "c2", CommentID: "3", CommentBody: "looks good"}, "not a command"},
-		{"push queued", prEvent(forge.EventPush, ghRef(3), "p1"), "queued push"},
-		{"push without pr", forge.Event{Kind: forge.EventPush, Ref: ghRef(3), DeliveryID: "p2"}, "queued push"},
+		{"push copies status", prEvent(forge.EventPush, ghRef(3), "p1"), "status copy"},
+		{"reopened copies status", forge.Event{Kind: forge.EventReopened, Ref: ghRef(3), DeliveryID: "p2"}, "status copy"},
+		{"ready queued", prEvent(forge.EventReady, ghRef(4), "p3"), "queued ready"},
+		{"opened queued", prEvent(forge.EventOpened, ghRef(4), "p4"), "queued opened"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,36 +71,38 @@ func TestDispatchFilters(t *testing.T) {
 func TestDispatchDedupe(t *testing.T) {
 	h := newHarness(t)
 	ev := prEvent(forge.EventPush, ghRef(1), "same")
-	if got := h.srv.dispatch(ev, []byte("a"), "r"); got != "queued push" {
+	if got := h.srv.dispatch(ev, []byte("a"), "r"); got != "status copy" {
 		t.Fatal(got)
 	}
 	if got := h.srv.dispatch(ev, []byte("b"), "r"); got != "duplicate delivery" {
 		t.Fatalf("redelivery: %q", got)
 	}
 	noID := prEvent(forge.EventPush, glRef(1), "")
-	if got := h.srv.dispatch(noID, []byte("body"), "r"); got != "queued push" {
+	if got := h.srv.dispatch(noID, []byte("body"), "r"); got != "status copy" {
 		t.Fatal(got)
 	}
 	if got := h.srv.dispatch(noID, []byte("body"), "r"); got != "duplicate delivery" {
 		t.Fatalf("body hash: %q", got)
 	}
-	if got := h.srv.dispatch(noID, []byte("other"), "r"); got != "queued push" {
+	if got := h.srv.dispatch(noID, []byte("other"), "r"); got != "status copy" {
 		t.Fatalf("different body: %q", got)
 	}
 	h.drain()
 }
 
-func TestDispatchClosedRemovesWaiting(t *testing.T) {
+func TestDispatchClosedForgetsTheChain(t *testing.T) {
 	h := newHarness(t)
 	ref := glRef(1)
-	if err := h.srv.store.Put(Waiting{Ref: ref}); err != nil {
-		t.Fatal(err)
+	gen := h.srv.restartChain(ref)
+	cancelled := false
+	if !h.srv.begin(ref, gen, func() { cancelled = true }) {
+		t.Fatal("begin refused the current chain")
 	}
 	if got := h.srv.dispatch(forge.Event{Kind: forge.EventClosed, Ref: ref}, nil, "r"); got != "closed" {
 		t.Fatal(got)
 	}
-	if len(h.srv.store.List()) != 0 {
-		t.Fatal("closed MR must leave the store")
+	if !cancelled || len(h.srv.chains) != 0 {
+		t.Fatalf("closed MR keeps its chain: cancelled=%v chains=%d", cancelled, len(h.srv.chains))
 	}
 }
 
@@ -127,8 +130,8 @@ func TestDispatchCommands(t *testing.T) {
 		if got := h.srv.dispatch(s.ev, nil, "r"); got != s.want {
 			t.Fatalf("step %d: got %q want %q", i, got, s.want)
 		}
+		h.drain()
 	}
-	h.drain()
 
 	reqs := h.rev.requests()
 	if len(reqs) != 3 || reqs[0].Effort != "high" || reqs[1].Commit != sha1 || reqs[2].Commit != "" {
@@ -170,8 +173,8 @@ func TestDispatchMentionCommands(t *testing.T) {
 		if got := h.srv.dispatch(s.ev, nil, "r"); got != s.want {
 			t.Fatalf("step %d: got %q want %q", i, got, s.want)
 		}
+		h.drain()
 	}
-	h.drain()
 
 	reqs := h.rev.requests()
 	if len(reqs) != 2 || reqs[0].Effort != "high" || reqs[1].Commit != sha1 {
@@ -190,24 +193,25 @@ func TestDispatchMentionCommands(t *testing.T) {
 	}
 }
 
-func TestDispatchMentionFix(t *testing.T) {
+// TestDispatchFixIsUnknown answers the removed fix command with the help.
+func TestDispatchFixIsUnknown(t *testing.T) {
 	h := newHarness(t)
 	h.gh.names = []string{"kevinle128-ocr"}
 	ref := ghRef(7)
 	h.gh.setPR(openPR(ref, sha1))
 	ev := forge.Event{Kind: forge.EventCommand, Ref: ref, DeliveryID: "1", CommentID: "c1", CommentBody: "@kevinle128-ocr, fix"}
-	if got := h.srv.dispatch(ev, nil, "r"); got != "queued command fix" {
-		t.Fatal(got)
-	}
-	ev = forge.Event{Kind: forge.EventCommand, Ref: ref, DeliveryID: "2", CommentID: "c2", CommentBody: "@kevinle128-ocr fix please"}
 	if got := h.srv.dispatch(ev, nil, "r"); got != "queued command reply" {
 		t.Fatal(got)
 	}
 	h.drain()
-	mustContain(t, strings.Join(h.gh.noteList(), "\n"), "/fix takes no arguments")
+	notes := strings.Join(h.gh.noteList(), "\n")
+	mustContain(t, notes, "unknown command /fix")
+	if strings.Contains(notes, "@kevinle128-ocr fix") || len(h.rev.requests()) != 0 {
+		t.Fatalf("fix still offered or run:\n%s", notes)
+	}
 }
 
-func TestDispatchMentionNotes(t *testing.T) {
+func TestDispatchNotes(t *testing.T) {
 	h := newHarness(t)
 	h.gl.names = []string{"pr-review"}
 	ref := glRef(6)
@@ -215,14 +219,23 @@ func TestDispatchMentionNotes(t *testing.T) {
 	note := func(id, body string) forge.Event {
 		return forge.Event{Kind: forge.EventNote, Ref: ref, DeliveryID: id, CommentID: "n" + id, CommentBody: body}
 	}
-	if got := h.srv.dispatch(note("1", "@someone review"), nil, "r"); got != "queued note" {
-		t.Fatal(got)
+	steps := []struct {
+		ev   forge.Event
+		want string
+	}{
+		{note("1", "@someone review"), "not a command"},
+		{note("2", "please check /etc/hosts"), "not a command"},
+		{note("3", "/ask why"), "queued command reply"},
+		{note("4", "@pr-review review"), "queued command review"},
 	}
-	if got := h.srv.dispatch(note("2", "@pr-review review"), nil, "r"); got != "queued command review" {
-		t.Fatal(got)
+	for i, st := range steps {
+		if got := h.srv.dispatch(st.ev, nil, "r"); got != st.want {
+			t.Fatalf("step %d: got %q want %q", i, got, st.want)
+		}
+		h.drain()
 	}
-	edited := note("3", "/review")
-	edited.CommentID = "n2"
+	edited := note("5", "/review")
+	edited.CommentID = "n4"
 	if got := h.srv.dispatch(edited, nil, "r"); got != "duplicate command" {
 		t.Fatal(got)
 	}
@@ -230,36 +243,9 @@ func TestDispatchMentionNotes(t *testing.T) {
 	if reqs := h.rev.requests(); len(reqs) != 1 {
 		t.Fatalf("reviews %+v", reqs)
 	}
+	mustContain(t, strings.Join(h.gl.noteList(), "\n"), "/ask")
 	if h.srv.mention(forge.GitLab) != "pr-review" || h.srv.mention("other") != "" {
 		t.Fatal("mention per platform")
-	}
-}
-
-func TestDispatchNotes(t *testing.T) {
-	h := newHarness(t)
-	ref := glRef(6)
-	h.gl.setPR(openPR(ref, sha1))
-	note := func(id, body string) forge.Event {
-		return forge.Event{Kind: forge.EventNote, Ref: ref, DeliveryID: id, CommentID: "n" + id, CommentBody: body}
-	}
-	if got := h.srv.dispatch(note("1", "please check /etc/hosts"), nil, "r"); got != "queued note" {
-		t.Fatal(got)
-	}
-	if got := h.srv.dispatch(note("2", "/ask why"), nil, "r"); got != "queued command reply" {
-		t.Fatal(got)
-	}
-	h.drain()
-	if notes := h.gl.noteList(); len(notes) != 1 || !strings.Contains(notes[0], "/ask") {
-		t.Fatalf("help reply %q", notes)
-	}
-	decided := 0
-	for _, l := range h.logs.lines(t) {
-		if l["msg"] == "decided" && l["trigger"] == string(state.TriggerNote) {
-			decided++
-		}
-	}
-	if decided == 0 {
-		t.Fatal("a note with an unknown command must still re-check the MR")
 	}
 }
 

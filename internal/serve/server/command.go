@@ -10,28 +10,19 @@ import (
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 // Command kinds.
 const (
 	CommandReview       = "review"
 	CommandReviewCommit = "review-commit"
-	CommandFix          = "fix"
 )
 
-// Command is a parsed /review, /review-commit or /fix comment. A comment
-// that tags the bot ("@bot fix") is put in slash form before parsing.
+// Command is a parsed /review or /review-commit comment. A comment that
+// tags the bot ("@bot review") is put in slash form before parsing.
 type Command struct {
 	Kind   string
 	Effort string
-}
-
-func (c Command) trigger() state.Trigger {
-	if c.Kind == CommandReviewCommit {
-		return state.TriggerCmdReviewCommit
-	}
-	return state.TriggerCmdReview
 }
 
 var slashWordRE = regexp.MustCompile(`^/[A-Za-z][A-Za-z0-9_-]*$`)
@@ -39,8 +30,7 @@ var slashWordRE = regexp.MustCompile(`^/[A-Za-z][A-Za-z0-9_-]*$`)
 // ParseCommand reads the first non-empty line of a comment. Only that line
 // counts, so prose below a command cannot add arguments. The bool is false
 // when the line is not a known command; the error rejects an argument
-// outside the override allowlist and is safe to quote in a reply. /fix
-// takes no argument.
+// outside the override allowlist and is safe to quote in a reply.
 func ParseCommand(body string) (Command, bool, error) {
 	name, rest := firstWord(body)
 	var cmd Command
@@ -49,20 +39,12 @@ func ParseCommand(body string) (Command, bool, error) {
 		cmd.Kind = CommandReview
 	case "/review-commit":
 		cmd.Kind = CommandReviewCommit
-	case "/fix":
-		cmd.Kind = CommandFix
 	default:
 		return Command{}, false, nil
 	}
 	args, err := splitArgs(rest)
 	if err != nil {
 		return cmd, true, err
-	}
-	if cmd.Kind == CommandFix {
-		if len(args) > 0 {
-			return cmd, true, errors.New("/fix takes no arguments")
-		}
-		return cmd, true, nil
 	}
 	effort, err := serveconfig.ParseCommandOverrides(args)
 	if err != nil {
@@ -96,7 +78,7 @@ func unknownCommand(line string, mentioned bool) (string, bool) {
 // commandAdded reports whether line, the command line of an edited comment,
 // was not already a line of prev, so editing a comment does not run a
 // command again. Each line of prev is put in slash form with names first,
-// so an edit from "@bot fix" to "/fix" does not run the fix twice.
+// so an edit from "@bot review" to "/review" does not run the review twice.
 func commandAdded(line, prev string, names []string) bool {
 	if prev == "" {
 		return true

@@ -17,7 +17,6 @@ import (
 
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/review"
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 func post(h http.Handler, path string, body io.Reader, length int64) *httptest.ResponseRecorder {
@@ -124,7 +123,7 @@ func TestWebhookMakesNoForgeCall(t *testing.T) {
 		t.Fatalf("access log %v", access)
 	}
 	for _, l := range h.logs.lines(t) {
-		if l["msg"] == "decided" && l["request_id"] != "d-2" {
+		if l["msg"] == "round done" && l["request_id"] != "d-2" {
 			t.Fatalf("runner log lacks the request id: %v", l)
 		}
 	}
@@ -187,7 +186,7 @@ func TestShutdownDeadline(t *testing.T) {
 		<-ctx.Done()
 		return review.Result{}, ctx.Err()
 	})
-	h.srv.queue.submit(ref, job{trigger: state.TriggerOpened, requestID: "r"})
+	h.srv.queue.submit(ref, job{trigger: triggerOpened, requestID: "r"})
 	<-started
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -207,7 +206,6 @@ func TestNewValidation(t *testing.T) {
 		"no locale":    func(d *Deps) { d.Locale = nil },
 		"no forge":     func(d *Deps) { d.Forges = map[forge.Platform]forge.Forge{forge.GitHub: nil} },
 		"zero workers": func(d *Deps) { c := *h.cfg; c.Workers = 0; d.Config = &c },
-		"bad data dir": func(d *Deps) { c := *h.cfg; c.DataDir = "/dev/null/x"; d.Config = &c },
 	}
 	for name, mut := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -223,24 +221,6 @@ func TestNewValidation(t *testing.T) {
 		t.Fatalf("defaults: %v", err)
 	}
 	_ = srv.Shutdown(context.Background())
-}
-
-func TestNewResetsCorruptStore(t *testing.T) {
-	cfg := testConfig(t)
-	if err := writeFile(cfg.DataDir+"/"+waitingFile, "not json"); err != nil {
-		t.Fatal(err)
-	}
-	logs := &syncBuffer{}
-	loc, _ := state.LoadLocale("en")
-	srv, err := New(Deps{Config: cfg, Forges: map[forge.Platform]forge.Forge{forge.GitLab: newFakeForge(forge.GitLab)},
-		Reviewer: &fakeReviewer{}, Workspaces: &fakeWorkspaces{}, Locale: loc, Logger: NewLogger(logs)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = srv.Shutdown(context.Background()) }()
-	if !logs.has("waiting store reset") || len(srv.store.List()) != 0 {
-		t.Fatal("corrupt store must start empty and log")
-	}
 }
 
 type errReader struct{}

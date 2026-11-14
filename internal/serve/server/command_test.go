@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 func TestParseCommand(t *testing.T) {
@@ -31,6 +29,7 @@ func TestParseCommand(t *testing.T) {
 		{"please /review", Command{}, false, ""},
 		{"", Command{}, false, ""},
 		{"/review it's #1", Command{Kind: CommandReview}, true, `unsupported option "it's"`},
+		{"/fix", Command{}, false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.body, func(t *testing.T) {
@@ -42,9 +41,6 @@ func TestParseCommand(t *testing.T) {
 				t.Fatalf("err %v want %q", err, tc.wantErr)
 			}
 		})
-	}
-	if (Command{Kind: CommandReviewCommit}).trigger() != state.TriggerCmdReviewCommit || (Command{Kind: CommandReview}).trigger() != state.TriggerCmdReview {
-		t.Fatal("trigger mapping")
 	}
 }
 
@@ -69,8 +65,9 @@ func TestUnknownCommand(t *testing.T) {
 		{"/etc/hosts", false, "", false},
 		{"see /describe", false, "", false},
 		{"/", false, "", false},
-		{"/fix", true, "", false},
-		{"/fix now", true, "", false},
+		{"/fix", false, "/fix", true},
+		{"/fix now", true, "/fix", true},
+		{"/review-commit", true, "", false},
 		{"/hello there", true, "/hello", true},
 		{"/etc/hosts", true, "/etc/hosts", true},
 		{"", true, "", true},
@@ -94,10 +91,10 @@ func TestCommandAdded(t *testing.T) {
 		{"/review   --effort=high", "note\n/review --effort=high", false},
 		{"/review --effort=high", "/review", true},
 		{"/review-commit", "/review", true},
-		{"/fix", "@ocr-bot fix", false},
-		{"/fix", "@OCR-BOT: /fix", false},
-		{"/review", "@ocr-bot fix", true},
-		{"/fix", "@someone fix", true},
+		{"/review", "@ocr-bot review", false},
+		{"/review", "@OCR-BOT: /review", false},
+		{"/review", "@ocr-bot review-commit", true},
+		{"/review", "@someone review", true},
 		{"", "@ocr-bot", false},
 		{"", "text\n\n", true},
 	}
