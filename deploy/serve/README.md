@@ -182,20 +182,20 @@ threads, the summary marker, rounds and the merge gate do not change.
 |---|---|---|
 | `OCR_SERVE_ENGINE` | `cli` | `cli` or `ocr`. |
 | `OCR_SERVE_REVIEW_CLI` | `codex` | CLI for reviews: `codex` or `claude`. |
-| `OCR_SERVE_FIX_CLI` | `claude` | CLI for fix runs: `claude` or `codex`. Checked now, not used yet. |
+| `OCR_SERVE_FIX_CLI` | `claude` | CLI for `/fix` runs: `claude` or `codex`. Its credential file is required too. |
 | `OCR_SERVE_CODEX_BIN` | `codex` | Name on `PATH` or absolute path. The Komodo stack sets the mounted binary. |
 | `OCR_SERVE_CLAUDE_BIN` | `claude` | Same. |
 | `OCR_SERVE_CODEX_MODEL` | empty | Codex `-m`; empty uses the account default. |
 | `OCR_SERVE_CODEX_EFFORT` | empty | Codex `model_reasoning_effort`, for example `medium`. |
 | `OCR_SERVE_CLAUDE_MODEL` | empty | Claude `--model`; empty uses the `model` of the settings file. |
-| `OCR_SERVE_SKILL_DIR` | | Required with `cli`. Absolute path of the directory that holds `skills/ak-review-pr/SKILL.md` and its `references/`. |
+| `OCR_SERVE_SKILL_DIR` | | Required with `cli`. Absolute path of the directory that holds `skills/ak-review-pr/SKILL.md` and its `references/`, and optionally `agents/kongming.md` for `/fix`. |
 | `OCR_SERVE_CLI_HOME` | `$OCR_SERVE_DATA_DIR/cli-home` | Directory the service owns. Each run gets `run-<id>/` in it, removed when the run ends; leftovers are removed at startup. |
 | `OCR_SERVE_CODEX_AUTH` | | Required with `codex`. The host `~/.codex/auth.json`. Each run's `CODEX_HOME` links `auth.json` to it; nothing else of the host `~/.codex` is used. Mount it read-write so a token refresh reaches the host file. |
 | `OCR_SERVE_CLAUDE_SETTINGS` | | Required with `claude`. The host `~/.claude/settings.json`. Each run's `CLAUDE_CONFIG_DIR` gets a `settings.json` with only its `env` and `model` keys, never hooks or permissions. |
 
-At startup the service checks that the review CLI binary, the skill file and
-the CLI credential file can be read, and stops with the variable name when
-one cannot. How each CLI runs:
+At startup the service checks that the review and fix CLI binaries, the
+skill file and the CLI credential files can be read, and stops with the
+variable name when one cannot. How each CLI runs:
 
 - Codex: `codex exec --json --ephemeral --dangerously-bypass-approvals-and-sandbox`
   in the checkout. Codex's own sandbox (bubblewrap) needs unprivileged user
@@ -210,7 +210,9 @@ one cannot. How each CLI runs:
 - Claude: `claude -p --output-format json` with only the `Read`, `Grep` and
   `Glob` tools, `--setting-sources user` and `--strict-mcp-config` so the
   checkout's settings and MCP servers are not loaded, and `--add-dir` for the
-  skill and run directories.
+  skill and run directories. A `/fix` run uses `--permission-mode acceptEdits`
+  and the tools `Read`, `Edit`, `MultiEdit`, `Write`, `Glob`, `Grep` and
+  `Task`, never a shell.
 - The CLI gets `PATH`, locale, time zone, CA and proxy variables, and `HOME`
   and `TMPDIR` inside the run directory; none of the service secrets. It runs
   in its own process group: when the review limit ends it gets SIGTERM, then
@@ -333,16 +335,65 @@ The summary's file count covers only the files left after filtering.
 - Commands in a PR comment always run and never count toward the limit:
   `/review [--effort=low|medium|high]` reviews the whole PR and moves the
   reviewed SHA; `/review-commit` reviews the HEAD commit against its first
-  parent. Their findings are threads that must be resolved too. The command
+  parent; `/fix` fixes the open findings and pushes (see
+  [Fixing findings](#fixing-findings-fix)). Their findings are threads that must be resolved too. The command
   comment gets a reaction on receipt (eyes) and on the result (GitHub: rocket
   or confused; GitLab: white_check_mark or x), plus a reply. On GitLab,
   assigning the bot as reviewer of a non-draft MR acts as `/review`.
+
+## Fixing findings (`/fix`)
+
+A PR comment `/fix` (no arguments) asks the service to fix the open finding
+threads and push the fix to the PR branch. Like `/review` it always runs,
+never counts as a round, is queued with the other runs of the PR, and gets
+the same reactions. It needs `OCR_SERVE_ENGINE=cli`; with `ocr` it answers
+that it is not available.
+
+1. A PR whose head branch is in a fork gets a reply that the bot cannot push
+   there, and nothing runs. With no open finding thread it replies that there
+   is nothing to fix.
+2. The service checks out the head branch itself (not detached) with a token
+   that can push, and writes `pr.json` and `findings.json` into the run
+   directory. `findings.json` lists the open threads of the bot: `id` (the
+   finding tag), `path`, `line`, `severity`, `title`, `body`, and `replies`
+   (`author`, `body`) from people in the thread; the agent skips a finding
+   they disputed.
+3. `OCR_SERVE_FIX_CLI` runs the skill as `/ak-review-pr <PR> --advice --fix
+   --reply` in its "Service fix mode" section, read from
+   `$OCR_SERVE_SKILL_DIR/skills/ak-review-pr/references/mode-fix.md`. For
+   Claude, `$OCR_SERVE_SKILL_DIR/agents/kongming.md` is installed into the
+   run's config dir with `model: inherit`, read-only tools and no project
+   memory; without the file the run goes on without it. The agent answers
+   with `fixed`, `skipped` (id and reason), `summary` and `commit_message`.
+4. When the checkout changed, the service commits as the bot (GitHub:
+   `<app-slug>[bot]` with `<bot-user-id>+<app-slug>[bot]@users.noreply.github.com`;
+   GitLab: the bot user's name and commit email) with the agent's message cut
+   to one line (`fix: address review findings` when empty), and pushes without
+   force. Hooks do not run, and a run that changed `.git/config`, made its own
+   commit or left the branch is refused. A refused push (protected branch,
+   missing permission, branch moved) gets a reply with git's reason. Without
+   changes it posts the summary and the skipped findings and stops.
+5. After the push it resolves the fixed threads, replies in each skipped
+   thread with the reason (the thread stays open), posts one note with the
+   summary, the commit and the counts, and reviews the fix commit as
+   `/review-commit` does, without counting a round.
+
+The bot's own push does not start an automatic round: GitHub reports it with
+the App as sender, GitLab with the bot user, and both are filtered as bot
+events. `OCR_SERVE_REVIEW_TIMEOUT` limits a fix run as it limits a review; the
+run directory is removed and the CLI process group is stopped when it ends.
+
+Reviews remember dismissed findings: a resolved finding thread with at least
+one reply from a person is passed to the review CLI as `dismissed.json`
+(`path`, `line`, `title`, `body`, `reason` = the replies), and the agent is told
+not to report it again. A thread resolved without a reply counts as fixed.
 
 ## GitHub App
 
 Webhook URL `https://<host>/ocr/github/webhook` with the webhook secret.
 
-- Repository permissions: Contents read, Pull requests read and write, Issues
+- Repository permissions: Contents read and write (`/fix` pushes to the PR
+  branch; read is enough without it), Pull requests read and write, Issues
   read and write, Metadata read.
 - Events: Pull request, Issue comment, Pull request review thread.
 
@@ -374,6 +425,11 @@ Without `--project` the command manages a system hook for merge request
 events, a project hook on every project for note events, the bot as Developer
 in every top-level group, and turns on "All threads must be resolved" on every
 project. Run it again after new projects appear.
+
+`/fix` pushes to the merge request's source branch with the bot token, so the
+bot needs push rights there: Developer can push to unprotected branches; a
+protected source branch must allow Developers (or the bot) to push, otherwise
+`/fix` replies that the push was refused.
 
 ## Operations
 
