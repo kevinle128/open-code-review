@@ -17,7 +17,7 @@ func TestPollerSubmitsWaitingEachTick(t *testing.T) {
 	ref := glRef(1)
 	pr := openPR(ref, sha2)
 	h.gl.setPR(pr)
-	h.gl.summaries[ref.Key()] = state.RenderSummary(state.Marker{V: 1, Auto: 1, Max: 3, Reviewed: sha1, Base: shaBase}, 1, h.loc, "")
+	h.gl.summaries[ref.Key()] = state.RenderSummary(state.Marker{V: 1, Auto: 1, Max: 3, Reviewed: sha1, Base: shaBase}, 1, h.loc, "", "")
 	h.gl.threads[ref.Key()] = nil
 	if err := h.srv.store.Put(Waiting{Ref: ref}); err != nil {
 		t.Fatal(err)

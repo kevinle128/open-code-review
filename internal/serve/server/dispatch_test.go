@@ -145,6 +145,96 @@ func TestDispatchCommands(t *testing.T) {
 	}
 }
 
+func TestDispatchMentionCommands(t *testing.T) {
+	h := newHarness(t)
+	h.gh.names = []string{"kevinle128-ocr"}
+	ref := ghRef(5)
+	h.gh.setPR(openPR(ref, sha1))
+	cmd := func(id, commentID, body, prev string) forge.Event {
+		return forge.Event{Kind: forge.EventCommand, Ref: ref, DeliveryID: id, CommentID: commentID, CommentBody: body, PrevCommentBody: prev}
+	}
+	steps := []struct {
+		ev   forge.Event
+		want string
+	}{
+		{cmd("1", "c1", "@kevinle128-ocr review --effort=high", ""), "queued command review"},
+		{cmd("2", "c1", "/review --effort=high", "@kevinle128-ocr review --effort=high"), "edit added no command"},
+		{cmd("3", "c2", "@Kevinle128-OCR: review-commit", ""), "queued command review-commit"},
+		{cmd("4", "c2", "/review-commit", ""), "duplicate command"},
+		{cmd("5", "c3", "@kevinle128-ocr hello", ""), "queued command reply"},
+		{cmd("6", "c4", "@kevinle128-ocr", ""), "queued command reply"},
+		{cmd("7", "c5", "@someone review", ""), "not a command"},
+		{cmd("8", "c6", "thanks @kevinle128-ocr review", ""), "not a command"},
+	}
+	for i, s := range steps {
+		if got := h.srv.dispatch(s.ev, nil, "r"); got != s.want {
+			t.Fatalf("step %d: got %q want %q", i, got, s.want)
+		}
+	}
+	h.drain()
+
+	reqs := h.rev.requests()
+	if len(reqs) != 2 || reqs[0].Effort != "high" || reqs[1].Commit != sha1 {
+		t.Fatalf("command order or effort: %+v", reqs)
+	}
+	notes := strings.Join(h.gh.noteList(), "\n---\n")
+	mustContain(t, notes, "unknown command /hello")
+	mustContain(t, notes, "no command given")
+	mustContain(t, notes, h.loc.Text("command.help_mention", "bot", "kevinle128-ocr"))
+	mustContain(t, h.gh.summaries[ref.Key()], h.loc.Text("summary.hint_mention", "bot", "kevinle128-ocr"))
+	reactions := strings.Join(h.gh.reactionList(), ",")
+	for _, unwanted := range []string{"c5:", "c6:"} {
+		if strings.Contains(reactions, unwanted) {
+			t.Fatalf("reaction on a comment not meant for the bot: %s", reactions)
+		}
+	}
+}
+
+func TestDispatchMentionFix(t *testing.T) {
+	h := newHarness(t)
+	h.gh.names = []string{"kevinle128-ocr"}
+	ref := ghRef(7)
+	h.gh.setPR(openPR(ref, sha1))
+	ev := forge.Event{Kind: forge.EventCommand, Ref: ref, DeliveryID: "1", CommentID: "c1", CommentBody: "@kevinle128-ocr, fix"}
+	if got := h.srv.dispatch(ev, nil, "r"); got != "queued command fix" {
+		t.Fatal(got)
+	}
+	ev = forge.Event{Kind: forge.EventCommand, Ref: ref, DeliveryID: "2", CommentID: "c2", CommentBody: "@kevinle128-ocr fix please"}
+	if got := h.srv.dispatch(ev, nil, "r"); got != "queued command reply" {
+		t.Fatal(got)
+	}
+	h.drain()
+	mustContain(t, strings.Join(h.gh.noteList(), "\n"), "/fix takes no arguments")
+}
+
+func TestDispatchMentionNotes(t *testing.T) {
+	h := newHarness(t)
+	h.gl.names = []string{"pr-review"}
+	ref := glRef(6)
+	h.gl.setPR(openPR(ref, sha1))
+	note := func(id, body string) forge.Event {
+		return forge.Event{Kind: forge.EventNote, Ref: ref, DeliveryID: id, CommentID: "n" + id, CommentBody: body}
+	}
+	if got := h.srv.dispatch(note("1", "@someone review"), nil, "r"); got != "queued note" {
+		t.Fatal(got)
+	}
+	if got := h.srv.dispatch(note("2", "@pr-review review"), nil, "r"); got != "queued command review" {
+		t.Fatal(got)
+	}
+	edited := note("3", "/review")
+	edited.CommentID = "n2"
+	if got := h.srv.dispatch(edited, nil, "r"); got != "duplicate command" {
+		t.Fatal(got)
+	}
+	h.drain()
+	if reqs := h.rev.requests(); len(reqs) != 1 {
+		t.Fatalf("reviews %+v", reqs)
+	}
+	if h.srv.mention(forge.GitLab) != "pr-review" || h.srv.mention("other") != "" {
+		t.Fatal("mention per platform")
+	}
+}
+
 func TestDispatchNotes(t *testing.T) {
 	h := newHarness(t)
 	ref := glRef(6)

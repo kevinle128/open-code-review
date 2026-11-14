@@ -210,7 +210,7 @@ func TestReviewErrorKeepsMarkerAndAnswersCommand(t *testing.T) {
 			ref := ghRef(3)
 			h.gh.setPR(openPR(ref, sha2))
 			before := state.Marker{V: 1, Auto: 1, Max: 3, Reviewed: sha1, Base: shaBase}
-			h.gh.summaries[ref.Key()] = state.RenderSummary(before, 0, h.loc, "")
+			h.gh.summaries[ref.Key()] = state.RenderSummary(before, 0, h.loc, "", "")
 			h.rev.set(tc.fn)
 
 			h.auto(ref, state.TriggerPush)
@@ -515,7 +515,7 @@ func TestMarkerKeepsOnlyNeededFindingIDs(t *testing.T) {
 
 	h.gh.summaries[ref.Key()] = state.RenderSummary(state.Marker{V: 1, Max: 3, Runs: []state.Run{
 		{Kind: state.KindManualFull, From: shaBase, To: sha1, IDs: []string{firstRun[0], "gone"}},
-	}}, 1, h.loc, "")
+	}}, 1, h.loc, "", "")
 	h.command(ref, "/review", "c")
 	if ids := h.gh.marker(t, ref).Runs[0].IDs; len(ids) != 2 {
 		t.Fatalf("runs within the newest five keep every id: %v", ids)
@@ -596,7 +596,7 @@ func TestSkippedReviewConsumesNoRound(t *testing.T) {
 		h.gh.setPR(openPR(ref, sha2))
 		before := state.Marker{V: 1, Auto: 2, Max: 3, Reviewed: sha1, Base: shaBase,
 			Runs: []state.Run{{N: 2, Kind: state.KindFull, From: shaBase, To: sha1, IDs: []string{}}}}
-		h.gh.summaries[ref.Key()] = state.RenderSummary(before, 0, h.loc, "")
+		h.gh.summaries[ref.Key()] = state.RenderSummary(before, 0, h.loc, "", "")
 		h.rev.set(skipped)
 		h.auto(ref, state.TriggerPush)
 		m := h.gh.marker(t, ref)
@@ -867,7 +867,7 @@ func TestNoteLimitFailures(t *testing.T) {
 		h := newHarness(t)
 		ref := ghRef(16)
 		h.gh.setPR(openPR(ref, sha2))
-		h.gh.summaries[ref.Key()] = state.RenderSummary(state.Marker{V: 1, Auto: 3, Max: 3, Reviewed: sha1, Base: shaBase}, 0, h.loc, "")
+		h.gh.summaries[ref.Key()] = state.RenderSummary(state.Marker{V: 1, Auto: 3, Max: 3, Reviewed: sha1, Base: shaBase}, 0, h.loc, "", "")
 		return h, ref
 	}
 	t.Run("post note", func(t *testing.T) {

@@ -137,7 +137,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	if err != nil {
 		return fmt.Errorf("review engine %s: %w", cfg.Engine, err)
 	}
-	forges, err := buildServeForges(ctx, cfg, env.httpc)
+	forges, err := buildServeForges(ctx, cfg, env.httpc, log)
 	if err != nil {
 		return err
 	}
@@ -224,12 +224,23 @@ func checkServeAppConfig() error {
 	return nil
 }
 
-func buildServeForges(ctx context.Context, cfg *serveconfig.Config, httpc *http.Client) (map[forge.Platform]forge.Forge, error) {
+func buildServeForges(ctx context.Context, cfg *serveconfig.Config, httpc *http.Client, log *slog.Logger) (map[forge.Platform]forge.Forge, error) {
 	forges := map[forge.Platform]forge.Forge{}
 	if cfg.GitHub != nil {
 		gh, err := github.New(*cfg.GitHub, httpc, nil, nil)
 		if err != nil {
 			return nil, err
+		}
+		gh.SetMentions(cfg.Mentions)
+		// Webhook parsing knows the App slug users tag only once it is
+		// cached. A failure here does not stop the service: the next API
+		// call that reads the slug fills the cache, and the extra mention
+		// names work until then.
+		slugCtx, cancel := context.WithTimeout(ctx, serveStartupTimeout)
+		_, err = gh.BotLogin(slugCtx)
+		cancel()
+		if err != nil {
+			log.Warn("github: could not read the app slug; tagging the app works after a later call reads it", "error", err.Error())
 		}
 		forges[forge.GitHub] = gh
 	}
@@ -239,6 +250,7 @@ func buildServeForges(ctx context.Context, cfg *serveconfig.Config, httpc *http.
 			return nil, err
 		}
 		gl.SetBotIndicators(cfg.BotIndicators)
+		gl.SetMentions(cfg.Mentions)
 		// The bot identity filters the service's own events. Reading it now
 		// also proves the token works before any webhook is accepted.
 		idCtx, cancel := context.WithTimeout(ctx, serveStartupTimeout)

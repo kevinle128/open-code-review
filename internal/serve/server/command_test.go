@@ -55,27 +55,38 @@ func TestSplitArgs(t *testing.T) {
 	}
 }
 
-func TestUnknownSlashCommand(t *testing.T) {
-	cases := map[string]string{
-		"/describe":        "/describe",
-		"/ask what is #1":  "/ask",
-		"/reviewer please": "/reviewer",
-		"/review":          "",
-		"/etc/hosts":       "",
-		"see /describe":    "",
-		"/":                "",
+func TestUnknownCommand(t *testing.T) {
+	cases := []struct {
+		line      string
+		mentioned bool
+		want      string
+		unknown   bool
+	}{
+		{"/describe", false, "/describe", true},
+		{"/ask what is #1", false, "/ask", true},
+		{"/reviewer please", false, "/reviewer", true},
+		{"/review", false, "", false},
+		{"/etc/hosts", false, "", false},
+		{"see /describe", false, "", false},
+		{"/", false, "", false},
+		{"/fix", true, "", false},
+		{"/fix now", true, "", false},
+		{"/hello there", true, "/hello", true},
+		{"/etc/hosts", true, "/etc/hosts", true},
+		{"", true, "", true},
 	}
-	for body, want := range cases {
-		got, ok := unknownSlashCommand(body)
-		if got != want || ok != (want != "") {
-			t.Fatalf("%q: got %q %v", body, got, ok)
+	for _, tc := range cases {
+		got, ok := unknownCommand(tc.line, tc.mentioned)
+		if got != tc.want || ok != tc.unknown {
+			t.Fatalf("%q mentioned=%v: got %q %v", tc.line, tc.mentioned, got, ok)
 		}
 	}
 }
 
 func TestCommandAdded(t *testing.T) {
+	names := []string{"ocr-bot"}
 	cases := []struct {
-		body, prev string
+		line, prev string
 		want       bool
 	}{
 		{"/review", "", true},
@@ -83,10 +94,16 @@ func TestCommandAdded(t *testing.T) {
 		{"/review   --effort=high", "note\n/review --effort=high", false},
 		{"/review --effort=high", "/review", true},
 		{"/review-commit", "/review", true},
+		{"/fix", "@ocr-bot fix", false},
+		{"/fix", "@OCR-BOT: /fix", false},
+		{"/review", "@ocr-bot fix", true},
+		{"/fix", "@someone fix", true},
+		{"", "@ocr-bot", false},
+		{"", "text\n\n", true},
 	}
 	for _, tc := range cases {
-		if got := commandAdded(tc.body, tc.prev); got != tc.want {
-			t.Fatalf("%q after %q: %v", tc.body, tc.prev, got)
+		if got := commandAdded(tc.line, tc.prev, names); got != tc.want {
+			t.Fatalf("%q after %q: %v", tc.line, tc.prev, got)
 		}
 	}
 }

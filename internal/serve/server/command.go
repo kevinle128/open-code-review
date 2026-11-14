@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
+	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
@@ -19,7 +20,8 @@ const (
 	CommandFix          = "fix"
 )
 
-// Command is a parsed /review, /review-commit or /fix comment.
+// Command is a parsed /review, /review-commit or /fix comment. A comment
+// that tags the bot ("@bot fix") is put in slash form before parsing.
 type Command struct {
 	Kind   string
 	Effort string
@@ -70,30 +72,41 @@ func ParseCommand(body string) (Command, bool, error) {
 	return cmd, true, nil
 }
 
-// unknownSlashCommand returns the first word of a comment that looks like a
-// slash command but is not one the service knows. GitLab removes its own
-// quick-action lines before a note is stored, so a word left here was meant
-// for a bot. A path such as /etc/hosts does not match.
-func unknownSlashCommand(body string) (string, bool) {
-	word, _ := firstWord(body)
-	if !slashWordRE.MatchString(word) {
+// unknownCommand returns the first word of a command line (from
+// forge.CommandLine) that is meant for the bot but is not a command the
+// service knows. A line that tags the bot is always meant for it; a bare tag
+// gives an empty word. An untagged line counts only when it looks like a
+// slash command: GitLab removes its own quick-action lines before a note is
+// stored, so a word left there was meant for a bot, while a path such as
+// /etc/hosts does not match.
+func unknownCommand(line string, mentioned bool) (string, bool) {
+	if _, ok, _ := ParseCommand(line); ok {
 		return "", false
 	}
-	if _, ok, _ := ParseCommand(body); ok {
+	word, _ := firstWord(line)
+	if mentioned {
+		return word, true
+	}
+	if !slashWordRE.MatchString(word) {
 		return "", false
 	}
 	return word, true
 }
 
-// commandAdded reports whether the command line of body was not already a
-// line of prev, so editing a comment does not run a command again.
-func commandAdded(body, prev string) bool {
+// commandAdded reports whether line, the command line of an edited comment,
+// was not already a line of prev, so editing a comment does not run a
+// command again. Each line of prev is put in slash form with names first,
+// so an edit from "@bot fix" to "/fix" does not run the fix twice.
+func commandAdded(line, prev string, names []string) bool {
 	if prev == "" {
 		return true
 	}
-	line := normalizeLine(firstLine(body))
+	want := normalizeLine(line)
 	for l := range strings.SplitSeq(prev, "\n") {
-		if normalizeLine(l) == line {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		if p, _ := forge.CommandLine(l, names); normalizeLine(p) == want {
 			return false
 		}
 	}

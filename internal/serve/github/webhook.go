@@ -105,7 +105,7 @@ func (f *Forge) ParseEvent(h http.Header, body []byte) (forge.Event, error) {
 		}
 		return withPull(ev, forge.EventThreadResolved, p)
 	case "issue_comment":
-		return commentEvent(ev, p)
+		return f.commentEvent(ev, p)
 	default:
 		return ev, nil
 	}
@@ -124,10 +124,10 @@ func withPull(ev forge.Event, kind forge.EventKind, p webhookPayload) (forge.Eve
 	return ev, nil
 }
 
-// commentEvent passes every slash command on a PR to the orchestrator, which
-// answers unknown commands with help. An edit carries the old body so only
-// command lines the edit added run.
-func commentEvent(ev forge.Event, p webhookPayload) (forge.Event, error) {
+// commentEvent passes every comment that starts with a slash command or tags
+// the bot to the orchestrator, which answers unknown commands with help. An
+// edit carries the old body so only command lines the edit added run.
+func (f *Forge) commentEvent(ev forge.Event, p webhookPayload) (forge.Event, error) {
 	if p.Issue == nil || p.Comment == nil || !present(p.Issue.PullRequest) {
 		return ev, nil
 	}
@@ -141,7 +141,7 @@ func commentEvent(ev forge.Event, p webhookPayload) (forge.Event, error) {
 	default:
 		return ev, nil
 	}
-	if !isCommand(p.Comment.Body) {
+	if !forge.IsCommand(p.Comment.Body, f.CommandNames()) {
 		return ev, nil
 	}
 	ref, err := eventRef(p, p.Issue.Number)
@@ -158,15 +158,6 @@ func commentEvent(ev forge.Event, p webhookPayload) (forge.Event, error) {
 // mark a PR conversation by a non-null issue.pull_request.
 func present(raw json.RawMessage) bool {
 	return len(raw) > 0 && string(raw) != "null"
-}
-
-func isCommand(body string) bool {
-	for _, line := range strings.Split(body, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			return strings.HasPrefix(line, "/")
-		}
-	}
-	return false
 }
 
 func eventRef(p webhookPayload, number int) (forge.PRRef, error) {

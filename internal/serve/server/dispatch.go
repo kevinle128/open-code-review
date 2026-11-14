@@ -62,8 +62,10 @@ func (s *Server) dispatch(ev forge.Event, body []byte, requestID string) string 
 // dispatchComment handles the comment part of a command or note event.
 // handled is false when the event should still go on as a note trigger.
 func (s *Server) dispatchComment(ev forge.Event, requestID string) (string, bool) {
-	cmd, isCmd, perr := ParseCommand(ev.CommentBody)
-	unknown, isUnknown := unknownSlashCommand(ev.CommentBody)
+	names := s.commandNames(ev.Ref.Platform)
+	line, mentioned := forge.CommandLine(ev.CommentBody, names)
+	cmd, isCmd, perr := ParseCommand(line)
+	unknown, isUnknown := unknownCommand(line, mentioned)
 	if !isCmd && !isUnknown {
 		if ev.Kind == forge.EventCommand {
 			return "not a command", true
@@ -73,7 +75,7 @@ func (s *Server) dispatchComment(ev forge.Event, requestID string) (string, bool
 	if isUnknown && ev.CommentID == "" {
 		return "unknown platform command", true
 	}
-	if ev.PrevCommentBody != "" && !commandAdded(ev.CommentBody, ev.PrevCommentBody) {
+	if ev.PrevCommentBody != "" && !commandAdded(line, ev.PrevCommentBody, names) {
 		return "edit added no command", true
 	}
 	// Commands bypass every ignore rule except the repository one: a person
@@ -81,11 +83,13 @@ func (s *Server) dispatchComment(ev forge.Event, requestID string) (string, bool
 	if matched, rule := s.cfg.Ignore.Match(serveconfig.IgnoreSubject{Repo: ev.Ref.Repo}); matched {
 		return "ignore rule " + rule, true
 	}
-	if ev.CommentID != "" && s.seen.Seen(commentKey(ev)) {
+	if ev.CommentID != "" && s.seen.Seen(commentKey(ev, line)) {
 		return "duplicate command", true
 	}
 	cj := &cmdJob{Command: cmd, commentID: ev.CommentID}
 	switch {
+	case isUnknown && unknown == "":
+		cj.reject = "no command given"
 	case isUnknown:
 		cj.reject = "unknown command " + unknown
 	case perr != nil:
@@ -128,9 +132,27 @@ func deliveryKey(ev forge.Event, body []byte) string {
 }
 
 // commentKey also guards edits when a forge cannot report the old body: the
-// same command line on the same comment runs once within the TTL.
-func commentKey(ev forge.Event) string {
-	return "comment:" + ev.Ref.Key() + ":" + ev.CommentID + ":" + normalizeLine(firstLine(ev.CommentBody))
+// same command line on the same comment runs once within the TTL. line is in
+// slash form, so "@bot fix" and "/fix" share a key.
+func commentKey(ev forge.Event, line string) string {
+	return "comment:" + ev.Ref.Key() + ":" + ev.CommentID + ":" + normalizeLine(line)
+}
+
+// commandNames are the names users tag the bot with on a platform.
+func (s *Server) commandNames(p forge.Platform) []string {
+	if f := s.forges[p]; f != nil {
+		return f.CommandNames()
+	}
+	return nil
+}
+
+// mention is the name shown in help texts for a platform, or "" when the bot
+// name is not known yet and the texts show only slash commands.
+func (s *Server) mention(p forge.Platform) string {
+	if names := s.commandNames(p); len(names) > 0 {
+		return names[0]
+	}
+	return ""
 }
 
 func ignoreSubject(ref forge.PRRef, pr forge.PR) serveconfig.IgnoreSubject {

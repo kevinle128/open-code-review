@@ -60,7 +60,7 @@ func TestShutdownDuringRunKeepsWaiting(t *testing.T) {
 	ref := glRef(41)
 	h.gl.setPR(openPR(ref, sha2))
 	before := state.Marker{V: 1, Auto: 1, Max: 3, Reviewed: sha1, Base: shaBase}
-	h.gl.summaries[ref.Key()] = state.RenderSummary(before, 0, h.loc, "")
+	h.gl.summaries[ref.Key()] = state.RenderSummary(before, 0, h.loc, "", "")
 	if err := h.srv.store.Put(Waiting{Ref: ref}); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestStoppedMergeRequestLeavesWaiting(t *testing.T) {
 			ref := glRef(42)
 			h.gl.setPR(openPR(ref, sha2))
 			before := state.Marker{V: 1, Auto: 1, Max: 3, Reviewed: sha1, Base: shaBase}
-			h.gl.summaries[ref.Key()] = state.RenderSummary(before, 1, h.loc, "")
+			h.gl.summaries[ref.Key()] = state.RenderSummary(before, 1, h.loc, "", "")
 			h.gl.threads[ref.Key()] = []forge.Thread{{ID: "t1", FindingID: "r1-11111111-abcd"}}
 			if err := h.srv.store.Put(Waiting{Ref: ref}); err != nil {
 				t.Fatal(err)
@@ -134,7 +134,7 @@ func TestWaitingKeptWhileThreadsOpen(t *testing.T) {
 	ref := glRef(43)
 	h.gl.setPR(openPR(ref, sha1))
 	before := state.Marker{V: 1, Auto: 1, Max: 3, Reviewed: sha1, Base: shaBase}
-	h.gl.summaries[ref.Key()] = state.RenderSummary(before, 1, h.loc, "")
+	h.gl.summaries[ref.Key()] = state.RenderSummary(before, 1, h.loc, "", "")
 	h.gl.threads[ref.Key()] = []forge.Thread{{ID: "t1", FindingID: "r1-11111111-abcd"}}
 	if err := h.srv.store.Put(Waiting{Ref: ref}); err != nil {
 		t.Fatal(err)

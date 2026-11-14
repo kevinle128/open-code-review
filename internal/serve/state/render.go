@@ -148,7 +148,8 @@ func safeFence(s string) string {
 // RenderSummary builds the sticky summary. It starts with forge.SummaryTag,
 // so forges find it even when the marker is damaged, and ends with the
 // encoded marker. pending is an optional status line such as "reviewing".
-func RenderSummary(m Marker, openThreads int, loc Locale, pending string) string {
+// bot is the name users tag the bot with; empty shows slash commands only.
+func RenderSummary(m Marker, openThreads int, loc Locale, pending, bot string) string {
 	var b strings.Builder
 	b.WriteString(forge.SummaryTag)
 	b.WriteString("\n### ")
@@ -181,7 +182,7 @@ func RenderSummary(m Marker, openThreads int, loc Locale, pending string) string
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(loc.Text("summary.hint"))
+	b.WriteString(mentionText(loc, "summary.hint", bot))
 	b.WriteString("\n\n")
 	b.WriteString(Encode(m))
 	return b.String()
@@ -259,7 +260,16 @@ func RenderLimitNote(limit int, loc Locale) string {
 
 // RenderCommandError answers a rejected or failed command. reason may quote
 // user input, so it is put in a code span on one line to keep mentions and
-// markdown inert.
-func RenderCommandError(reason string, loc Locale) string {
-	return "❌ " + loc.Text("command.error", "reason", codeSpan(reason)) + "\n\n" + loc.Text("command.help")
+// markdown inert. bot is as in RenderSummary.
+func RenderCommandError(reason, bot string, loc Locale) string {
+	return "❌ " + loc.Text("command.error", "reason", codeSpan(reason)) + "\n\n" + mentionText(loc, "command.help", bot)
+}
+
+// mentionText picks the "<key>_mention" text that shows the tag form of the
+// commands, or the slash-only text when the bot name is not known.
+func mentionText(loc Locale, key, bot string) string {
+	if bot == "" {
+		return loc.Text(key)
+	}
+	return loc.Text(key+"_mention", "bot", bot)
 }

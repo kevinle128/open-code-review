@@ -132,7 +132,7 @@ func TestRenderSummary(t *testing.T) {
 		loc := mustLocale(t, name)
 		m := sampleMarker()
 		m.Runs = append(m.Runs, Run{Kind: KindManualCommit, To: shaD, IDs: []string{"m-1", "m-2"}})
-		got := RenderSummary(m, 3, loc, "  "+loc.Text("pending.round", "round", "3", "max", "3")+" ")
+		got := RenderSummary(m, 3, loc, "  "+loc.Text("pending.round", "round", "3", "max", "3")+" ", "")
 
 		want := forge.SummaryTag + "\n### " + loc["summary.title"] + "\n\n" +
 			"- " + loc.Text("summary.round", "round", "2", "max", "3") + "\n" +
@@ -156,7 +156,7 @@ func TestRenderSummary(t *testing.T) {
 
 func TestRenderSummary_InitialAndRunCap(t *testing.T) {
 	loc := mustLocale(t, "en")
-	got := RenderSummary(Initial(3), -1, loc, "")
+	got := RenderSummary(Initial(3), -1, loc, "", "")
 	for _, part := range []string{loc["summary.reviewed_none"], loc.Text("summary.open", "count", "0"), loc.Text("summary.round", "round", "0", "max", "3")} {
 		if !strings.Contains(got, part) {
 			t.Fatalf("missing %q:\n%s", part, got)
@@ -170,7 +170,7 @@ func TestRenderSummary_InitialAndRunCap(t *testing.T) {
 	for i := 1; i <= 8; i++ {
 		m.Runs = append(m.Runs, Run{N: i, Kind: KindFull, From: shaA, To: shaB})
 	}
-	got = RenderSummary(m, 0, loc, "")
+	got = RenderSummary(m, 0, loc, "", "")
 	if strings.Count(got, "| "+loc.Text("run.auto", "n", "")) != summaryRunsShown || strings.Contains(got, loc.Text("run.auto", "n", "3")+" |") {
 		t.Fatalf("expected the last %d runs:\n%s", summaryRunsShown, got)
 	}
@@ -181,10 +181,38 @@ func TestRenderLimitNoteAndCommandError(t *testing.T) {
 	if got := RenderLimitNote(3, loc); got != loc.Text("limit.note", "max", "3") || strings.Contains(got, "{max}") {
 		t.Fatalf("limit note %q", got)
 	}
-	got := RenderCommandError("unsupported option \"`@team`\"\nline two", loc)
+	got := RenderCommandError("unsupported option \"`@team`\"\nline two", "", loc)
 	want := "❌ " + loc.Text("command.error", "reason", "`unsupported option \"'@team'\" line two`") + "\n\n" + loc["command.help"]
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenderMentionTexts(t *testing.T) {
+	en := mustLocale(t, "en")
+	hint := RenderSummary(Initial(3), 0, en, "", "kevinle128-ocr")
+	want := "Commands: `@kevinle128-ocr review` (full review), `@kevinle128-ocr review-commit` (latest commit only), " +
+		"`@kevinle128-ocr fix` (fix the open findings and push); `/review`, `/review-commit` and `/fix` also work."
+	if !strings.Contains(hint, want) || strings.Contains(hint, en["summary.hint"]) {
+		t.Fatalf("en summary:\n%s", hint)
+	}
+
+	vi := mustLocale(t, "vi")
+	hint = RenderSummary(Initial(3), 0, vi, "", "kevinle128-ocr")
+	if !strings.Contains(hint, vi.Text("summary.hint_mention", "bot", "kevinle128-ocr")) || strings.Contains(hint, "{bot}") {
+		t.Fatalf("vi summary:\n%s", hint)
+	}
+	for _, part := range []string{"`@kevinle128-ocr review`", "`@kevinle128-ocr review-commit`", "`@kevinle128-ocr fix`", "`/review`, `/review-commit`, `/fix`"} {
+		if !strings.Contains(hint, part) {
+			t.Fatalf("vi summary misses %q:\n%s", part, hint)
+		}
+	}
+
+	got := RenderCommandError("unknown command /hello", "pr-review", vi)
+	help := vi.Text("command.help_mention", "bot", "pr-review")
+	if got != "❌ "+vi.Text("command.error", "reason", "`unknown command /hello`")+"\n\n"+help ||
+		!strings.Contains(help, "`@pr-review fix`") || strings.Contains(help, "{bot}") {
+		t.Fatalf("vi help:\n%s", got)
 	}
 }
 

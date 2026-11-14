@@ -84,7 +84,7 @@ func TestParseFixCommand(t *testing.T) {
 	if _, ok, err := ParseCommand(`/fix "x`); !ok || err == nil {
 		t.Fatalf("bad quote accepted: ok %v err %v", ok, err)
 	}
-	if _, unknown := unknownSlashCommand("/fix"); unknown {
+	if _, unknown := unknownCommand("/fix", false); unknown {
 		t.Fatal("/fix reported as unknown")
 	}
 }
@@ -290,7 +290,7 @@ func TestFixUnavailableWithoutFixer(t *testing.T) {
 	ref := ghRef(1)
 	h.gh.setPR(openPR(ref, sha1))
 	h.command(ref, "/fix", "c-1")
-	if notes := h.gh.noteList(); len(notes) != 1 || notes[0] != state.RenderCommandError(reasonFixUnavailable, h.loc) {
+	if notes := h.gh.noteList(); len(notes) != 1 || notes[0] != state.RenderCommandError(reasonFixUnavailable, "", h.loc) {
 		t.Fatalf("notes %q", notes)
 	}
 }
@@ -330,7 +330,7 @@ func TestFixFailures(t *testing.T) {
 			tc.setup(h)
 			h.command(ref, "/fix", "c-1")
 			h.drain()
-			want := state.RenderCommandError(h.srv.fixFailureReason(tc.stage, "req-cmd"), h.loc)
+			want := state.RenderCommandError(h.srv.fixFailureReason(tc.stage, "req-cmd"), "", h.loc)
 			if notes := h.gh.noteList(); len(notes) != 1 || notes[0] != want {
 				t.Fatalf("notes %q\nwant %q", notes, want)
 			}
@@ -348,7 +348,7 @@ func TestFixClosedPR(t *testing.T) {
 	pr.State = forge.StateMerged
 	h.gh.setPR(pr)
 	h.command(ref, "/fix", "c-1")
-	if notes := h.gh.noteList(); len(notes) != 1 || notes[0] != state.RenderCommandError("pr not open", h.loc) {
+	if notes := h.gh.noteList(); len(notes) != 1 || notes[0] != state.RenderCommandError("pr not open", "", h.loc) {
 		t.Fatalf("notes %q", notes)
 	}
 }

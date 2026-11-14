@@ -37,6 +37,7 @@ var (
 // calls; Verify and ParseEvent are pure and do not.
 type fakeForge struct {
 	platform forge.Platform
+	names    []string
 
 	mu        sync.Mutex
 	prs       map[string]forge.PR
@@ -82,6 +83,8 @@ func (f *fakeForge) api(method string) error {
 }
 
 func (f *fakeForge) Platform() forge.Platform { return f.platform }
+
+func (f *fakeForge) CommandNames() []string { return f.names }
 
 func (f *fakeForge) Verify(_ http.Header, _ []byte) error { return f.verifyErr }
 

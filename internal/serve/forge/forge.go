@@ -203,6 +203,10 @@ type Forge interface {
 	Platform() Platform
 	Verify(h http.Header, body []byte) error
 	ParseEvent(h http.Header, body []byte) (Event, error)
+	// CommandNames are the names users tag the bot with to run a command,
+	// without the "@". The first one is shown in help texts. It makes no API
+	// call, so it may be empty until the bot identity is known.
+	CommandNames() []string
 	GetPR(ctx context.Context, ref PRRef) (PR, error)
 	// GetSummary returns the bot-authored comment that starts with SummaryTag, or nil.
 	GetSummary(ctx context.Context, ref PRRef) (*Comment, error)

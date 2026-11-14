@@ -189,7 +189,7 @@ func (s *Server) noteLimit(ctx context.Context, f forge.Forge, ref forge.PRRef, 
 		return err
 	}
 	next := state.Apply(st.marker, a, "", "", "", nil, limit)
-	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, st.open, s.loc, "")); err != nil {
+	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, st.open, s.loc, "", s.mention(ref.Platform))); err != nil {
 		log.Error("record limit note", "error", err.Error())
 		return err
 	}
@@ -222,7 +222,7 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 	if a.Kind == state.RunAuto {
 		pending = s.loc.Text("pending.round", "round", strconv.Itoa(a.Round), "max", strconv.Itoa(limit))
 	}
-	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(before, st.open, s.loc, pending)); err != nil {
+	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(before, st.open, s.loc, pending, s.mention(ref.Platform))); err != nil {
 		return s.runFailed(f, ref, st, a, j, "summary", err, false, log)
 	}
 
@@ -310,7 +310,7 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 		}
 	}
 	next = state.PruneIDs(next, openIDs)
-	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, open, s.loc, line)); err != nil {
+	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(next, open, s.loc, line, s.mention(ref.Platform))); err != nil {
 		return s.runFailed(f, ref, st, a, j, stageCommit, err, true, log)
 	}
 	if open > 0 {
@@ -452,7 +452,7 @@ func (s *Server) runFailed(f forge.Forge, ref forge.PRRef, st prState, a state.A
 		}
 		ctx, cancel := s.sideContext()
 		defer cancel()
-		if uerr := f.UpsertSummary(ctx, ref, state.RenderSummary(before, st.open, s.loc, line)); uerr != nil {
+		if uerr := f.UpsertSummary(ctx, ref, state.RenderSummary(before, st.open, s.loc, line, s.mention(ref.Platform))); uerr != nil {
 			log.Error("replace pending summary line", "error", uerr.Error())
 		}
 	}
@@ -485,7 +485,7 @@ func (s *Server) settleFailedAuto(f forge.Forge, ref forge.PRRef, stage string, 
 func (s *Server) clearPending(f forge.Forge, ref forge.PRRef, m state.Marker, open int, log *slog.Logger) {
 	ctx, cancel := s.sideContext()
 	defer cancel()
-	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(m, open, s.loc, "")); err != nil {
+	if err := f.UpsertSummary(ctx, ref, state.RenderSummary(m, open, s.loc, "", s.mention(ref.Platform))); err != nil {
 		log.Error("clear pending summary line", "error", err.Error())
 	}
 }
@@ -519,7 +519,7 @@ func (s *Server) commandFailed(f forge.Forge, ref forge.PRRef, cmd *cmdJob, reas
 	if err := f.React(ctx, ref, cmd.commentID, forge.ReactionFailure); err != nil {
 		log.Warn("reaction failed", "reaction", string(forge.ReactionFailure), "error", err.Error())
 	}
-	if err := f.PostNote(ctx, ref, state.RenderCommandError(reason, s.loc)); err != nil {
+	if err := f.PostNote(ctx, ref, state.RenderCommandError(reason, s.mention(ref.Platform), s.loc)); err != nil {
 		log.Error("post command reply", "error", err.Error())
 	}
 }

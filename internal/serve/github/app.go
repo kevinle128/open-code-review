@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
@@ -61,6 +62,10 @@ type Forge struct {
 	botMu    sync.Mutex
 	botLogin string
 	botID    int64
+	// slug is the App slug once BotLogin has read it. ParseEvent reads it
+	// without botMu, which BotLogin holds across the API call.
+	slug     atomic.Pointer[string]
+	mentions []string
 }
 
 // tokenSlot caches one installation's token. Its own lock is held across a
@@ -262,5 +267,22 @@ func (f *Forge) BotLogin(ctx context.Context) (string, error) {
 		return "", errors.New("github: get app: response has no slug")
 	}
 	f.botLogin = app.Slug + "[bot]"
+	f.slug.Store(&app.Slug)
 	return f.botLogin, nil
+}
+
+// SetMentions sets extra names users may tag the bot with. Call it before
+// the forge serves events.
+func (f *Forge) SetMentions(names []string) {
+	f.mentions = forge.MergeNames(names)
+}
+
+// CommandNames returns the App slug, once BotLogin has read it, and then the
+// extra names from SetMentions.
+func (f *Forge) CommandNames() []string {
+	var slug []string
+	if s := f.slug.Load(); s != nil {
+		slug = []string{*s}
+	}
+	return forge.MergeNames(slug, f.mentions)
 }

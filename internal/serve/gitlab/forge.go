@@ -27,6 +27,7 @@ type Forge struct {
 	cfg        serveconfig.GitLabConfig
 	c          *client
 	indicators []string
+	mentions   []string
 
 	mu       sync.Mutex
 	botID    int64
@@ -47,6 +48,19 @@ func New(cfg serveconfig.GitLabConfig, httpc *http.Client, sleep forge.Sleeper) 
 		return nil, err
 	}
 	return &Forge{cfg: cfg, c: c, indicators: []string{"bot"}}, nil
+}
+
+// SetMentions sets extra names users may tag the bot with. Call it before
+// the forge serves events.
+func (f *Forge) SetMentions(names []string) {
+	f.mentions = forge.MergeNames(names)
+}
+
+// CommandNames returns the bot username read by BotUserID, the configured
+// bot username and then the extra names from SetMentions.
+func (f *Forge) CommandNames() []string {
+	_, name := f.cachedBot()
+	return forge.MergeNames([]string{name, f.cfg.BotUsername}, f.mentions)
 }
 
 // SetBotIndicators replaces the substrings that mark a sender username as a

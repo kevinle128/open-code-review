@@ -30,6 +30,7 @@ summary.open = Vấn đề chưa xử lý: {count}
 summary.runs_title = Các lần chạy gần đây
 summary.runs_header = | Lần chạy | Loại | Phạm vi | Vấn đề |
 summary.hint = Hãy resolve mọi thread trước khi merge. Lệnh: `/review` (review toàn bộ), `/review-commit` (chỉ commit mới nhất), `/fix` (sửa các vấn đề đang mở rồi push).
+summary.hint_mention = Hãy resolve mọi thread trước khi merge. Lệnh: `@{bot} review` (review toàn bộ), `@{bot} review-commit` (chỉ commit mới nhất), `@{bot} fix` (sửa các vấn đề đang mở); `/review`, `/review-commit`, `/fix` cũng dùng được.
 summary.skipped = Lần review gần nhất không có thay đổi nào cần review (ví dụ mọi file thay đổi đều bị loại trừ) và không tính là một vòng.
 
 coverage.complete = Số file đã review: {reviewed}/{total}.
@@ -65,6 +66,7 @@ limit.note = Đã dừng review tự động sau {max} vòng. Bình luận `/rev
 command.done = Review xong: {count} vấn đề mới.
 command.error = Lệnh thất bại: {reason}
 command.help = Lệnh hỗ trợ: `/review [--effort=low|medium|high]` (review toàn bộ), `/review-commit` (chỉ commit mới nhất) và `/fix` (sửa các vấn đề đang mở rồi push lên nhánh).
+command.help_mention = Lệnh hỗ trợ: `@{bot} review [--effort=low|medium|high]` (review toàn bộ), `@{bot} review-commit` (chỉ commit mới nhất) và `@{bot} fix` (sửa các vấn đề đang mở rồi push lên nhánh); `/review`, `/review-commit`, `/fix` cũng dùng được.
 
 fix.nothing = Không có gì để sửa: không còn vấn đề review nào đang mở.
 fix.cannot_push = Bot không thể push lên nhánh {branch}: {reason}
