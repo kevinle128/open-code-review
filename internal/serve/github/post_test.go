@@ -50,12 +50,13 @@ func TestPostFindingsPlacement(t *testing.T) {
 		finding("f5", "big.bin", 3, 3),
 		finding("f6", "clipped.go", 1, 1),
 		finding("f7", "other.go", 4, 5),
+		finding("f8", "", 0, 0),
 	}
 	res, err := f.PostFindings(context.Background(), testPR(), fs, render)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := forge.PostResult{Posted: 7, Relocated: 2, FileLevel: 4}
+	want := forge.PostResult{Posted: 8, Relocated: 3, FileLevel: 5}
 	if res != want {
 		t.Fatalf("result = %+v, want %+v", res, want)
 	}
@@ -97,11 +98,15 @@ func TestPostFindingsPlacement(t *testing.T) {
 		}
 		files = append(files, p["path"].(string))
 	}
-	if strings.Join(files, ",") != "gone.go,big.bin,clipped.go,a.go" {
+	// A PR-level finding has no path; GitHub resolves only review threads,
+	// which need a file, so it goes file-level on the first changed file.
+	if strings.Join(files, ",") != "gone.go,big.bin,clipped.go,a.go,a.go" {
 		t.Fatalf("file-level paths = %v", files)
 	}
-	if !strings.Contains(fa.singlePosts[3]["body"].(string), "relocated=true") {
-		t.Fatal("finding outside the diff not marked relocated")
+	for _, i := range []int{3, 4} {
+		if !strings.Contains(fa.singlePosts[i]["body"].(string), "relocated=true") {
+			t.Fatalf("file comment %d not marked relocated", i)
+		}
 	}
 }
 

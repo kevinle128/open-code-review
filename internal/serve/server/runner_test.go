@@ -27,7 +27,8 @@ func TestRoundScenarioGitLab(t *testing.T) {
 	h.rev.set(findingsResult(comment("a.go", 3)))
 	h.auto(ref, state.TriggerOpened)
 	reqs := h.rev.requests()
-	if len(reqs) != 1 || reqs[0].From != shaBase || reqs[0].To != sha1 || reqs[0].RepoDir != "/work/slot-0" {
+	if len(reqs) != 1 || reqs[0].From != shaBase || reqs[0].To != sha1 || reqs[0].RepoDir != "/work/slot-0" ||
+		reqs[0].PR.Ref.Key() != ref.Key() || reqs[0].PR.HeadSHA != sha1 {
 		t.Fatalf("round one request %+v", reqs)
 	}
 	m := f.marker(t, ref)

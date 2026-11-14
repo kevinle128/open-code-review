@@ -14,8 +14,10 @@ import (
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 )
 
-// Only the root comment is fetched: the service creates threads and never
-// replies in them, so ownership and the finding id are both read off the root.
+// Ownership and the finding id are read off the first comment, the root.
+// The later comments are the replies; a thread with more than 100 comments
+// lists only the first 100, which is enough to read why a finding was
+// disputed.
 const reviewThreadsQuery = `
 query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
@@ -25,12 +27,23 @@ query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
         nodes {
           id
           isResolved
-          root: comments(first: 1) { nodes { body author { login __typename } } }
+          path
+          line
+          originalLine
+          comments(first: 100) { nodes { body author { login __typename } } }
         }
       }
     }
   }
 }`
+
+type threadComment struct {
+	Body   string `json:"body"`
+	Author *struct {
+		Login    string `json:"login"`
+		Typename string `json:"__typename"`
+	} `json:"author"`
+}
 
 type threadsResponse struct {
 	Data struct {
@@ -42,17 +55,14 @@ type threadsResponse struct {
 						EndCursor   string `json:"endCursor"`
 					} `json:"pageInfo"`
 					Nodes []struct {
-						ID         string `json:"id"`
-						IsResolved bool   `json:"isResolved"`
-						Root       struct {
-							Nodes []struct {
-								Body   string `json:"body"`
-								Author *struct {
-									Login    string `json:"login"`
-									Typename string `json:"__typename"`
-								} `json:"author"`
-							} `json:"nodes"`
-						} `json:"root"`
+						ID           string `json:"id"`
+						IsResolved   bool   `json:"isResolved"`
+						Path         string `json:"path"`
+						Line         *int   `json:"line"`
+						OriginalLine *int   `json:"originalLine"`
+						Comments     struct {
+							Nodes []threadComment `json:"nodes"`
+						} `json:"comments"`
 					} `json:"nodes"`
 				} `json:"reviewThreads"`
 			} `json:"pullRequest"`
@@ -99,18 +109,36 @@ func (f *Forge) ListOCRThreads(ctx context.Context, ref forge.PRRef) ([]forge.Th
 		}
 		rt := resp.Data.Repository.PullRequest.ReviewThreads
 		for _, n := range rt.Nodes {
-			if len(n.Root.Nodes) == 0 {
+			if len(n.Comments.Nodes) == 0 {
 				continue
 			}
-			root := n.Root.Nodes[0]
-			if root.Author == nil || !ownedBy(graphqlUser(root.Author.Login, root.Author.Typename), bot) {
+			root := n.Comments.Nodes[0]
+			if !byBot(root, bot) {
 				continue
 			}
 			id, ok := forge.ParseFindingID(root.Body)
 			if !ok {
 				continue
 			}
-			threads = append(threads, forge.Thread{ID: n.ID, FindingID: id, Resolved: n.IsResolved})
+			t := forge.Thread{ID: n.ID, FindingID: id, Resolved: n.IsResolved, Path: n.Path, Body: root.Body}
+			// line is null once the thread is outdated by a later push.
+			switch {
+			case n.Line != nil:
+				t.Line = *n.Line
+			case n.OriginalLine != nil:
+				t.Line = *n.OriginalLine
+			}
+			for _, c := range n.Comments.Nodes[1:] {
+				if byBot(c, bot) {
+					continue
+				}
+				author := ""
+				if c.Author != nil {
+					author = c.Author.Login
+				}
+				t.Replies = append(t.Replies, forge.Reply{Author: author, Body: c.Body})
+			}
+			threads = append(threads, t)
 		}
 		if !rt.PageInfo.HasNextPage {
 			return threads, nil
@@ -118,6 +146,10 @@ func (f *Forge) ListOCRThreads(ctx context.Context, ref forge.PRRef) ([]forge.Th
 		end := rt.PageInfo.EndCursor
 		cursor = &end
 	}
+}
+
+func byBot(c threadComment, bot string) bool {
+	return c.Author != nil && ownedBy(graphqlUser(c.Author.Login, c.Author.Typename), bot)
 }
 
 // graphqlUser converts a GraphQL author to the REST shape: GraphQL reports a

@@ -30,9 +30,9 @@ func RenderFinding(f forge.Finding, p forge.Placement, platform forge.Platform, 
 		b.WriteString("\n")
 	}
 	b.WriteString(findingHeader(f, loc))
-	if p.Kind != forge.Line {
+	if note := placementNote(f, p, loc); note != "" {
 		b.WriteString("\n_")
-		b.WriteString(loc.Text("finding.original_location", "location", location(f)))
+		b.WriteString(note)
 		b.WriteString("_")
 	}
 	if content := neutralizeTags(strings.TrimSpace(f.Content)); content != "" {
@@ -48,6 +48,21 @@ func RenderFinding(f forge.Finding, p forge.Placement, platform forge.Platform, 
 		b.WriteString(suggestionBlock(f.SuggestionCode, p, platform))
 	}
 	return b.String()
+}
+
+// placementNote says where a finding that is not on its own lines belongs.
+// A finding without a path is about the PR as a whole; GitHub still anchors
+// it on a file, because only a review thread can be resolved there.
+func placementNote(f forge.Finding, p forge.Placement, loc Locale) string {
+	switch {
+	case f.Path == "" && p.Kind == forge.FileLevel:
+		return loc.Text("finding.pr_level_anchored", "path", codePath(p.Path))
+	case f.Path == "":
+		return loc.Text("finding.pr_level")
+	case p.Kind != forge.Line:
+		return loc.Text("finding.original_location", "location", location(f))
+	}
+	return ""
 }
 
 func findingHeader(f forge.Finding, loc Locale) string {
@@ -234,7 +249,5 @@ func RenderLimitNote(limit int, loc Locale) string {
 // user input, so it is put in a code span on one line to keep mentions and
 // markdown inert.
 func RenderCommandError(reason string, loc Locale) string {
-	reason = strings.Join(strings.Fields(reason), " ")
-	reason = "`" + strings.ReplaceAll(reason, "`", "'") + "`"
-	return "❌ " + loc.Text("command.error", "reason", reason) + "\n\n" + loc.Text("command.help")
+	return "❌ " + loc.Text("command.error", "reason", codeSpan(reason)) + "\n\n" + loc.Text("command.help")
 }

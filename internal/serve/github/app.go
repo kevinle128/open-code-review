@@ -60,6 +60,7 @@ type Forge struct {
 
 	botMu    sync.Mutex
 	botLogin string
+	botID    int64
 }
 
 // tokenSlot caches one installation's token. Its own lock is held across a

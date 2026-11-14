@@ -50,6 +50,9 @@ type fakeForge struct {
 	errs      map[string]error // method name -> error to return
 	errOnce   map[string]error // method name -> error for the next call only
 	headAfter map[string]string
+	replies   []string // threadID + ":" + body
+	resolved  []string
+	pushSpecs int
 
 	calls     atomic.Int64
 	gate      chan struct{} // when set, API calls wait for it to close
@@ -207,6 +210,51 @@ func (f *fakeForge) ReadFile(_ context.Context, _ forge.PRRef, sha, path string,
 	return raw, ok, nil
 }
 
+func (f *fakeForge) PushSpec(_ context.Context, pr forge.PR) (forge.CloneSpec, error) {
+	if err := f.api("PushSpec"); err != nil {
+		return forge.CloneSpec{}, err
+	}
+	if pr.Fork {
+		return forge.CloneSpec{}, forge.ErrFork
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pushSpecs++
+	return forge.CloneSpec{URL: "file:///" + pr.Ref.Repo, HeadRef: "refs/heads/" + pr.SourceBranch, BaseRef: "refs/heads/" + pr.TargetBranch}, nil
+}
+
+func (f *fakeForge) CommitIdentity(context.Context, forge.PRRef) (forge.Identity, error) {
+	if err := f.api("CommitIdentity"); err != nil {
+		return forge.Identity{}, err
+	}
+	return forge.Identity{Name: "ocr[bot]", Email: "1+ocr[bot]@users.noreply.github.com"}, nil
+}
+
+func (f *fakeForge) ReplyThread(_ context.Context, _ forge.PRRef, threadID, body string) error {
+	if err := f.api("ReplyThread"); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.replies = append(f.replies, threadID+":"+body)
+	return nil
+}
+
+func (f *fakeForge) ResolveThread(_ context.Context, ref forge.PRRef, threadID string) error {
+	if err := f.api("ResolveThread"); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolved = append(f.resolved, threadID)
+	for i := range f.threads[ref.Key()] {
+		if f.threads[ref.Key()][i].ID == threadID {
+			f.threads[ref.Key()][i].Resolved = true
+		}
+	}
+	return nil
+}
+
 // Test helpers on the fake.
 
 func (f *fakeForge) setPR(pr forge.PR) {
@@ -329,6 +377,50 @@ type fakeWorkspaces struct {
 	acquired   int
 	released   int
 	fetched    []string
+
+	branchFetched []string
+	branchErr     error
+	dirty         bool // Commit finds changes
+	commitErr     error
+	pushErr       error
+	commits       []string // identity name + ":" + message
+	pushed        []string // spec.HeadRef + "@" + sha
+}
+
+const fixSHA = "ffffffffffffffffffffffffffffffffffffffff"
+
+func (w fakeWorkspace) FetchBranch(_ context.Context, spec forge.CloneSpec, head, base string) error {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	w.w.branchFetched = append(w.w.branchFetched, spec.HeadRef+"@"+head+".."+base)
+	return w.w.branchErr
+}
+
+func (w fakeWorkspace) ChangedFiles(context.Context, string) ([]string, error) {
+	return []string{"a.go"}, nil
+}
+
+func (w fakeWorkspace) Commit(_ context.Context, ident forge.Identity, message string) (string, bool, error) {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	if w.w.commitErr != nil {
+		return "", false, w.w.commitErr
+	}
+	if !w.w.dirty {
+		return "", false, nil
+	}
+	w.w.commits = append(w.w.commits, ident.Name+":"+message)
+	return fixSHA, true, nil
+}
+
+func (w fakeWorkspace) Push(_ context.Context, spec forge.CloneSpec, sha string) error {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	if w.w.pushErr != nil {
+		return w.w.pushErr
+	}
+	w.w.pushed = append(w.w.pushed, spec.HeadRef+"@"+sha)
+	return nil
 }
 
 type fakeWorkspace struct{ w *fakeWorkspaces }
@@ -413,6 +505,7 @@ type harness struct {
 	gh    *fakeForge
 	gl    *fakeForge
 	rev   *fakeReviewer
+	fix   *fakeFixer
 	ws    *fakeWorkspaces
 	logs  *syncBuffer
 	cfg   *serveconfig.Config
@@ -439,12 +532,12 @@ func newHarness(t *testing.T, tweak ...func(*serveconfig.Config)) *harness {
 	}
 	h := &harness{
 		t: t, gh: newFakeForge(forge.GitHub), gl: newFakeForge(forge.GitLab),
-		rev: &fakeReviewer{}, ws: &fakeWorkspaces{}, logs: &syncBuffer{}, cfg: cfg, loc: loc,
+		rev: &fakeReviewer{}, fix: &fakeFixer{}, ws: &fakeWorkspaces{}, logs: &syncBuffer{}, cfg: cfg, loc: loc,
 		clock: time.Unix(1_800_000_000, 0),
 	}
 	srv, err := New(Deps{
 		Config: cfg, Forges: map[forge.Platform]forge.Forge{forge.GitHub: h.gh, forge.GitLab: h.gl},
-		Reviewer: h.rev, Workspaces: h.ws, Locale: loc, Logger: NewLogger(h.logs),
+		Reviewer: h.rev, Fixer: h.fix, Workspaces: h.ws, Locale: loc, Logger: NewLogger(h.logs),
 		Now: func() time.Time { return h.clock }, Version: "test",
 	})
 	if err != nil {

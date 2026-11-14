@@ -16,6 +16,8 @@ severity.medium = Trung bình
 severity.low = Thấp
 
 finding.original_location = Vị trí gốc: {location}; bình luận được chuyển chỗ vì các dòng đó không nằm trong diff.
+finding.pr_level = Phát hiện này nói về toàn bộ pull request.
+finding.pr_level_anchored = Phát hiện này nói về toàn bộ pull request; nó được đặt ở {path} vì một thread có thể resolve cần gắn với một file.
 finding.suggestion = Đề xuất:
 
 summary.title = Review code bằng OCR
@@ -25,7 +27,7 @@ summary.reviewed_none = Commit đã review: chưa có
 summary.open = Vấn đề chưa xử lý: {count}
 summary.runs_title = Các lần chạy gần đây
 summary.runs_header = | Lần chạy | Loại | Phạm vi | Vấn đề |
-summary.hint = Hãy resolve mọi thread trước khi merge. Lệnh: `/review` (review toàn bộ), `/review-commit` (chỉ commit mới nhất).
+summary.hint = Hãy resolve mọi thread trước khi merge. Lệnh: `/review` (review toàn bộ), `/review-commit` (chỉ commit mới nhất), `/fix` (sửa các vấn đề đang mở rồi push).
 summary.skipped = Lần review gần nhất không có thay đổi nào cần review (ví dụ mọi file thay đổi đều bị loại trừ) và không tính là một vòng.
 
 coverage.complete = Số file đã review: {reviewed}/{total}.
@@ -57,4 +59,12 @@ limit.note = Đã dừng review tự động sau {max} vòng. Bình luận `/rev
 
 command.done = Review xong: {count} vấn đề mới.
 command.error = Lệnh thất bại: {reason}
-command.help = Lệnh hỗ trợ: `/review [--effort=low|medium|high]` (review toàn bộ) và `/review-commit` (chỉ commit mới nhất).
+command.help = Lệnh hỗ trợ: `/review [--effort=low|medium|high]` (review toàn bộ), `/review-commit` (chỉ commit mới nhất) và `/fix` (sửa các vấn đề đang mở rồi push lên nhánh).
+
+fix.nothing = Không có gì để sửa: không còn vấn đề review nào đang mở.
+fix.cannot_push = Bot không thể push lên nhánh {branch}: {reason}
+fix.no_changes = Lần sửa không thay đổi file nào nên không có gì được push.
+fix.done = Đã push bản sửa trong commit {sha}: sửa {fixed} vấn đề, bỏ qua {skipped}. Các thread đã sửa được đóng; commit sửa sẽ được review tiếp.
+fix.skipped_title = Chưa sửa:
+fix.skip_reply = `/fix` chưa sửa vấn đề này: {reason}
+fix.no_reason = không có lý do

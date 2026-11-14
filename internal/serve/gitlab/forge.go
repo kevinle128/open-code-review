@@ -4,6 +4,7 @@
 package gitlab
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -27,9 +28,10 @@ type Forge struct {
 	c          *client
 	indicators []string
 
-	mu      sync.Mutex
-	botID   int64
-	botName string
+	mu       sync.Mutex
+	botID    int64
+	botName  string
+	identity forge.Identity
 }
 
 var _ forge.Forge = (*Forge)(nil)
@@ -63,9 +65,13 @@ func (f *Forge) SetBotIndicators(indicators []string) {
 func (f *Forge) Platform() forge.Platform { return forge.GitLab }
 
 type apiUser struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Bot      bool   `json:"bot"`
+	ID          int64  `json:"id"`
+	Username    string `json:"username"`
+	Name        string `json:"name"`
+	Bot         bool   `json:"bot"`
+	Email       string `json:"email"`
+	CommitEmail string `json:"commit_email"`
+	PublicEmail string `json:"public_email"`
 }
 
 // BotUserID returns the id of the token's user and caches it with the
@@ -83,8 +89,34 @@ func (f *Forge) BotUserID(ctx context.Context) (int64, error) {
 	}
 	f.mu.Lock()
 	f.botID, f.botName = u.ID, u.Username
+	f.identity = commitIdentity(u, f.cfg.URL)
 	f.mu.Unlock()
 	return u.ID, nil
+}
+
+// commitIdentity prefers the commit email GitLab links to the user, so the
+// commit shows the bot's avatar; a user without any email gets a noreply
+// address on the instance host.
+func commitIdentity(u apiUser, baseURL string) forge.Identity {
+	name := strings.TrimSpace(u.Name)
+	if name == "" {
+		name = u.Username
+	}
+	email := ""
+	for _, e := range []string{u.CommitEmail, u.Email, u.PublicEmail} {
+		if e = strings.TrimSpace(e); e != "" {
+			email = e
+			break
+		}
+	}
+	if email == "" {
+		host := "gitlab.invalid"
+		if b, err := url.Parse(baseURL); err == nil && b.Hostname() != "" {
+			host = b.Hostname()
+		}
+		email = u.Username + "@noreply." + host
+	}
+	return forge.Identity{Name: name, Email: email}
 }
 
 func (f *Forge) cachedBot() (int64, string) {
@@ -102,6 +134,7 @@ type apiDiffRefs struct {
 type apiMR struct {
 	IID            int          `json:"iid"`
 	Title          string       `json:"title"`
+	Description    string       `json:"description"`
 	Author         apiUser      `json:"author"`
 	Labels         []string     `json:"labels"`
 	SourceBranch   string       `json:"source_branch"`
@@ -111,6 +144,8 @@ type apiMR struct {
 	Draft          *bool        `json:"draft"`
 	WorkInProgress *bool        `json:"work_in_progress"`
 	State          string       `json:"state"`
+	SourceProject  int64        `json:"source_project_id"`
+	TargetProject  int64        `json:"target_project_id"`
 }
 
 // GetPR reads the merge request, retrying while a new MR is not readable yet.
@@ -150,6 +185,7 @@ func (f *Forge) toPR(ref forge.PRRef, mr apiMR) forge.PR {
 	return forge.PR{
 		Ref:          ref,
 		Title:        mr.Title,
+		Description:  mr.Description,
 		Author:       mr.Author.Username,
 		AuthorIsBot:  mr.Author.Bot || f.isBotSender(hookUser{ID: mr.Author.ID, Username: mr.Author.Username}),
 		Labels:       mr.Labels,
@@ -159,16 +195,25 @@ func (f *Forge) toPR(ref forge.PRRef, mr apiMR) forge.PR {
 		BaseSHA:      base,
 		Draft:        isDraft(hookMR{Title: mr.Title, Draft: mr.Draft, WorkInProgress: mr.WorkInProgress}),
 		State:        prState(mr.State),
+		Fork:         mr.SourceProject != 0 && mr.TargetProject != 0 && mr.SourceProject != mr.TargetProject,
 	}
 }
 
 type apiNote struct {
-	ID         int64   `json:"id"`
-	Body       string  `json:"body"`
-	Author     apiUser `json:"author"`
-	System     bool    `json:"system"`
-	Resolvable bool    `json:"resolvable"`
-	Resolved   bool    `json:"resolved"`
+	ID         int64         `json:"id"`
+	Body       string        `json:"body"`
+	Author     apiUser       `json:"author"`
+	System     bool          `json:"system"`
+	Resolvable bool          `json:"resolvable"`
+	Resolved   bool          `json:"resolved"`
+	Position   *notePosition `json:"position"`
+}
+
+type notePosition struct {
+	NewPath string `json:"new_path"`
+	OldPath string `json:"old_path"`
+	NewLine *int   `json:"new_line"`
+	OldLine *int   `json:"old_line"`
 }
 
 type apiDiscussion struct {
@@ -277,7 +322,24 @@ func (f *Forge) ListOCRThreads(ctx context.Context, ref forge.PRRef) ([]forge.Th
 		if !ok || !root.Resolvable {
 			continue
 		}
-		out = append(out, forge.Thread{ID: d.ID, FindingID: id, Resolved: root.Resolved})
+		t := forge.Thread{ID: d.ID, FindingID: id, Resolved: root.Resolved, Body: root.Body}
+		if p := root.Position; p != nil {
+			t.Path = cmp.Or(p.NewPath, p.OldPath)
+			switch {
+			case p.NewLine != nil:
+				t.Line = *p.NewLine
+			case p.OldLine != nil:
+				t.Line = *p.OldLine
+			}
+		}
+		botID, _ := f.cachedBot()
+		for _, n := range d.Notes[1:] {
+			if n.System || n.Author.ID == botID {
+				continue
+			}
+			t.Replies = append(t.Replies, forge.Reply{Author: n.Author.Username, Body: n.Body})
+		}
+		out = append(out, t)
 	}
 	return out, nil
 }
@@ -325,6 +387,10 @@ type apiProject struct {
 // Clone implements forge.Forge. The token goes in a Basic header, never in
 // the URL, so it cannot leak through git's remote configuration or errors.
 func (f *Forge) Clone(ctx context.Context, pr forge.PR) (forge.CloneSpec, error) {
+	return f.cloneSpec(ctx, pr, "refs/merge-requests/"+strconv.Itoa(pr.Ref.Number)+"/head")
+}
+
+func (f *Forge) cloneSpec(ctx context.Context, pr forge.PR, headRef string) (forge.CloneSpec, error) {
 	if pr.Ref.Number <= 0 {
 		return forge.CloneSpec{}, fmt.Errorf("gitlab: invalid merge request iid %d", pr.Ref.Number)
 	}
@@ -350,7 +416,7 @@ func (f *Forge) Clone(ctx context.Context, pr forge.PR) (forge.CloneSpec, error)
 	return forge.CloneSpec{
 		URL:        p.HTTPURLToRepo,
 		AuthHeader: "Authorization: Basic " + cred,
-		HeadRef:    "refs/merge-requests/" + strconv.Itoa(pr.Ref.Number) + "/head",
+		HeadRef:    headRef,
 		BaseRef:    "refs/heads/" + pr.TargetBranch,
 	}, nil
 }

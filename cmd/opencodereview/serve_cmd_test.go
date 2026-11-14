@@ -77,6 +77,7 @@ func serveTestEnv(t *testing.T) map[string]string {
 		serveconfig.EnvGitHubAppID:                "42",
 		serveconfig.EnvGitHubPrivateKey + "_FILE": keyPath,
 		serveconfig.EnvGitHubWebhookSecret:        "gh-secret",
+		serveconfig.EnvEngine:                     serveconfig.EngineOCR,
 	}
 }
 
@@ -150,6 +151,16 @@ func TestServeMain_StartupErrors(t *testing.T) {
 		{"data dir unusable", okConfig, func(m map[string]string) {
 			m[serveconfig.EnvDataDir] = filepath.Join(notADir, "data")
 		}, "store directory"},
+		{"cli engine without its skill", okConfig, func(m map[string]string) {
+			m[serveconfig.EnvEngine] = serveconfig.EngineCLI
+			m[serveconfig.EnvSkillDir] = t.TempDir()
+			m[serveconfig.EnvCodexAuth] = notADir
+			m[serveconfig.EnvClaudeSettings] = notADir
+			m[serveconfig.EnvCodexBin] = "/bin/sh"
+		}, "review engine cli: " + serveconfig.EnvSkillDir},
+		{"cli engine without settings", okConfig, func(m map[string]string) {
+			m[serveconfig.EnvEngine] = serveconfig.EngineCLI
+		}, serveconfig.EnvSkillDir + " is required"},
 		{"address in use", okConfig, func(m map[string]string) {
 			m[serveconfig.EnvAddr] = busy.Addr().String()
 		}, "listen on"},
@@ -259,7 +270,7 @@ func TestServeMain_ServesAndShutsDown(t *testing.T) {
 	logMu.Lock()
 	out := logs.String()
 	logMu.Unlock()
-	for _, want := range []string{`"msg":"listening"`, `"platforms":["github","gitlab"]`, `"msg":"stopped"`} {
+	for _, want := range []string{`"msg":"listening"`, `"platforms":["github","gitlab"]`, `"engine":"ocr"`, `"msg":"stopped"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("logs miss %s:\n%s", want, out)
 		}

@@ -76,6 +76,23 @@ func TestRenderFinding_Fallbacks(t *testing.T) {
 	}
 }
 
+func TestRenderFinding_PRLevel(t *testing.T) {
+	for _, name := range []string{"en", "vi"} {
+		loc := mustLocale(t, name)
+		f := forge.Finding{ID: "r1-cccccccc-01020304", Category: "documentation", Severity: "medium",
+			Content: "The PR body lacks a test plan.", ExistingCode: "x", SuggestionCode: "y"}
+		general := RenderFinding(f, forge.Placement{Kind: forge.General, Relocated: true}, forge.GitLab, loc)
+		if !strings.Contains(general, "_"+loc["finding.pr_level"]+"_") || strings.Contains(general, "``") ||
+			strings.Contains(general, "suggestion") {
+			t.Fatalf("%s general:\n%s", name, general)
+		}
+		anchored := RenderFinding(f, forge.Placement{Kind: forge.FileLevel, Path: "cmd/main.go", Relocated: true}, forge.GitHub, loc)
+		if !strings.Contains(anchored, loc.Text("finding.pr_level_anchored", "path", "`cmd/main.go`")) {
+			t.Fatalf("%s anchored:\n%s", name, anchored)
+		}
+	}
+}
+
 func TestRenderFinding_NeutralizesServiceTags(t *testing.T) {
 	loc := mustLocale(t, "en")
 	tag := forge.SummaryTag

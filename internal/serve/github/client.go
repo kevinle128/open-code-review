@@ -250,6 +250,7 @@ type ghUser struct {
 type ghPull struct {
 	Number   int     `json:"number"`
 	Title    string  `json:"title"`
+	Body     string  `json:"body"`
 	State    string  `json:"state"`
 	Draft    bool    `json:"draft"`
 	Merged   bool    `json:"merged"`
@@ -259,13 +260,28 @@ type ghPull struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 	Head struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
+		Ref  string  `json:"ref"`
+		SHA  string  `json:"sha"`
+		Repo *ghRepo `json:"repo"`
 	} `json:"head"`
 	Base struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
+		Ref  string  `json:"ref"`
+		SHA  string  `json:"sha"`
+		Repo *ghRepo `json:"repo"`
 	} `json:"base"`
+}
+
+type ghRepo struct {
+	FullName string `json:"full_name"`
+}
+
+// fork reports a head branch outside the base repository. A null head repo
+// means the fork was deleted, which no push can reach either.
+func (p ghPull) fork() bool {
+	if p.Base.Repo == nil {
+		return false
+	}
+	return p.Head.Repo == nil || !strings.EqualFold(p.Head.Repo.FullName, p.Base.Repo.FullName)
 }
 
 func (p ghPull) toPR(ref forge.PRRef) forge.PR {
@@ -283,6 +299,7 @@ func (p ghPull) toPR(ref forge.PRRef) forge.PR {
 	return forge.PR{
 		Ref:          ref,
 		Title:        p.Title,
+		Description:  p.Body,
 		Author:       p.User.Login,
 		AuthorIsBot:  p.User.Type == "Bot",
 		Labels:       labels,
@@ -292,6 +309,7 @@ func (p ghPull) toPR(ref forge.PRRef) forge.PR {
 		BaseSHA:      p.Base.SHA,
 		Draft:        p.Draft,
 		State:        state,
+		Fork:         p.fork(),
 	}
 }
 
@@ -379,6 +397,10 @@ func escapePath(path string) (string, error) {
 // Clone returns the fetch settings for the PR. Fork PRs need no access to the
 // fork: GitHub mirrors every PR head as refs/pull/N/head on the base repo.
 func (f *Forge) Clone(ctx context.Context, pr forge.PR) (forge.CloneSpec, error) {
+	return f.cloneSpec(ctx, pr, "refs/pull/"+strconv.Itoa(pr.Ref.Number)+"/head")
+}
+
+func (f *Forge) cloneSpec(ctx context.Context, pr forge.PR, headRef string) (forge.CloneSpec, error) {
 	base, err := repoPath(pr.Ref)
 	if err != nil {
 		return forge.CloneSpec{}, err
@@ -394,7 +416,7 @@ func (f *Forge) Clone(ctx context.Context, pr forge.PR) (forge.CloneSpec, error)
 	return forge.CloneSpec{
 		URL:        f.webURL + strings.TrimPrefix(base, "/repos") + ".git",
 		AuthHeader: "Authorization: Basic " + creds,
-		HeadRef:    "refs/pull/" + strconv.Itoa(pr.Ref.Number) + "/head",
+		HeadRef:    headRef,
 		BaseRef:    "refs/heads/" + pr.TargetBranch,
 	}, nil
 }

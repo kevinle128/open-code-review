@@ -156,7 +156,7 @@ func TestBotUserIDCaches(t *testing.T) {
 
 func mrJSON(state string, refs bool) map[string]any {
 	mr := map[string]any{
-		"iid": 5, "title": "Draft: Add", "author": map[string]any{"id": 7, "username": "dev1"},
+		"iid": 5, "title": "Draft: Add", "description": "Adds it.", "author": map[string]any{"id": 7, "username": "dev1"},
 		"labels": []string{"backend"}, "source_branch": "feat/x", "target_branch": "main",
 		"sha": headSHA, "draft": true, "state": state,
 	}
@@ -190,7 +190,7 @@ func TestGetPR(t *testing.T) {
 		Ref: forge.PRRef{Platform: forge.GitLab, ProjectID: 42, Number: 5}, Title: "Draft: Add", Author: "dev1",
 		SourceBranch: "feat/x", TargetBranch: "main", HeadSHA: headSHA, BaseSHA: baseSHA, Draft: true, State: forge.StateOpen,
 	}
-	if pr.Ref != want.Ref || pr.Title != want.Title || pr.Author != want.Author || pr.HeadSHA != want.HeadSHA ||
+	if pr.Ref != want.Ref || pr.Title != want.Title || pr.Description != "Adds it." || pr.Author != want.Author || pr.HeadSHA != want.HeadSHA ||
 		pr.BaseSHA != want.BaseSHA || !pr.Draft || pr.State != want.State || pr.AuthorIsBot || len(pr.Labels) != 1 {
 		t.Fatalf("pr %+v", pr)
 	}
