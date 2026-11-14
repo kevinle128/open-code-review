@@ -27,7 +27,7 @@ type storedHook map[string]any
 type fakeProject struct {
 	ID       int64
 	Path     string
-	Resolved bool
+	Pipeline bool
 	Hooks    []storedHook
 }
 
@@ -57,7 +57,7 @@ func newAdminFake(t *testing.T) *adminFake {
 		groupHooks: map[int64][]storedHook{1: {{"id": float64(77), "url": hookURL}, {"id": float64(78), "url": otherURL}}},
 		projects: []*fakeProject{
 			{ID: 42, Path: "team/svc", Hooks: []storedHook{{"id": float64(5), "url": otherURL}}},
-			{ID: 43, Path: "ops/infra", Resolved: true},
+			{ID: 43, Path: "ops/infra", Pipeline: true},
 		},
 		users:  map[string]int64{"pr-review": testBotID},
 		system: []storedHook{{"id": float64(1), "url": otherURL}},
@@ -136,7 +136,7 @@ func newAdminFake(t *testing.T) *adminFake {
 		var p map[string]bool
 		_ = json.NewDecoder(r.Body).Decode(&p)
 		proj := a.project(r)
-		proj.Resolved = p["only_allow_merge_if_all_discussions_are_resolved"]
+		proj.Pipeline = p["only_allow_merge_if_pipeline_succeeds"]
 		writeJSON(w, 200, a.projectJSON(proj))
 	}))
 	h("GET /projects/{pid}/hooks", a.lock(func(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +186,7 @@ func (a *adminFake) project(r *http.Request) *fakeProject {
 }
 
 func (a *adminFake) projectJSON(p *fakeProject) map[string]any {
-	return map[string]any{"id": p.ID, "path_with_namespace": p.Path, "only_allow_merge_if_all_discussions_are_resolved": p.Resolved}
+	return map[string]any{"id": p.ID, "path_with_namespace": p.Path, "only_allow_merge_if_pipeline_succeeds": p.Pipeline}
 }
 
 func (a *adminFake) create(w http.ResponseWriter, r *http.Request, hooks []storedHook) []storedHook {
@@ -258,7 +258,7 @@ func TestHookDryRunWritesNothing(t *testing.T) {
 		"add-member group team (bot pr-review as Developer)",
 		"delete group team hook (77, not sent on Free tier)",
 		"create project team/svc hook",
-		"enable project team/svc (all threads must be resolved)",
+		"enable project team/svc (pipelines must succeed)",
 		"create project ops/infra hook",
 	}
 	if got := changeLines(changes); strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -292,8 +292,8 @@ func TestHookApplyTwice(t *testing.T) {
 	}
 	for _, p := range a.projects {
 		ph := a.ours(p.Hooks)
-		if len(ph) != 1 || ph[0]["note_events"] != true || ph[0]["merge_requests_events"] != false || ph[0]["token"] != hookToken || !p.Resolved {
-			t.Fatalf("project %s: %+v resolved=%v", p.Path, ph, p.Resolved)
+		if len(ph) != 1 || ph[0]["note_events"] != true || ph[0]["merge_requests_events"] != false || ph[0]["token"] != hookToken || !p.Pipeline {
+			t.Fatalf("project %s: %+v pipeline=%v", p.Path, ph, p.Pipeline)
 		}
 	}
 	if !a.members[1][testBotID] || len(a.ours(a.groupHooks[1])) != 0 || len(a.groupHooks[1]) != 1 {
@@ -334,7 +334,7 @@ func TestHookRemove(t *testing.T) {
 	if len(changes) != 4 || len(a.ours(a.system)) != 0 || len(a.ours(a.projects[0].Hooks)) != 0 || len(a.ours(a.groupHooks[2])) != 0 {
 		t.Fatalf("remove: %v", changeLines(changes))
 	}
-	if len(a.system) != 1 || len(a.projects[0].Hooks) != 1 || !a.members[1][testBotID] || !a.projects[0].Resolved {
+	if len(a.system) != 1 || len(a.projects[0].Hooks) != 1 || !a.members[1][testBotID] || !a.projects[0].Pipeline {
 		t.Fatal("remove touched hooks of other URLs, membership or the merge setting")
 	}
 	for _, r := range a.requests("")[before:] {
@@ -352,7 +352,7 @@ func TestHookSingleProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "create project team/svc hook\nenable project team/svc (all threads must be resolved)"
+	want := "create project team/svc hook\nenable project team/svc (pipelines must succeed)"
 	if strings.Join(changeLines(changes), "\n") != want {
 		t.Fatalf("changes %v", changeLines(changes))
 	}
@@ -370,7 +370,7 @@ func TestHookSingleProject(t *testing.T) {
 	}
 
 	changes, err = a.registrar("").Run(ctx, HookOptions{Mode: HookRemove, Project: "team/svc"}, nil)
-	if err != nil || len(changes) != 1 || len(a.ours(a.projects[0].Hooks)) != 0 || !a.projects[0].Resolved {
+	if err != nil || len(changes) != 1 || len(a.ours(a.projects[0].Hooks)) != 0 || !a.projects[0].Pipeline {
 		t.Fatalf("single-project remove: %v %v", changeLines(changes), err)
 	}
 
