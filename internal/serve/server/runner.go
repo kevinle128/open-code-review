@@ -298,6 +298,11 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 	}
 	next := state.Apply(st.marker, a, from, to, st.pr.BaseSHA, ids, limit)
 	line := state.RenderCoverage(res.Coverage, s.loc)
+	if v := state.RenderVerify(res.Verify, s.loc); v != "" && line != "" {
+		line += "\n\n" + v
+	} else if v != "" {
+		line = v
+	}
 	if res.Terminal == review.TerminalSkipped {
 		line = s.loc.Text("summary.skipped")
 		if a.Kind == state.RunAuto {

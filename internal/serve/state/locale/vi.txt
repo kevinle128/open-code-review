@@ -19,6 +19,7 @@ finding.original_location = Vị trí gốc: {location}; bình luận được c
 finding.pr_level = Phát hiện này nói về toàn bộ pull request.
 finding.pr_level_anchored = Phát hiện này nói về toàn bộ pull request; nó được đặt ở {path} vì một thread có thể resolve cần gắn với một file.
 finding.suggestion = Đề xuất:
+finding.verified = **Đã kiểm chứng:** {reason}
 
 summary.title = Review code bằng OCR
 summary.round = Vòng tự động: {round}/{max}
@@ -34,6 +35,9 @@ coverage.complete = Số file đã review: {reviewed}/{total}.
 coverage.partial = ⚠️ Lần review gần nhất chưa đầy đủ: đã review {reviewed}/{total} file. Các file sau chưa được review:
 coverage.more = và {count} file khác (xem log của dịch vụ)
 coverage.retry = Bình luận `/review` để review lại.
+
+verify.checked = Kiểm chứng lại bởi reviewer thứ hai: {checked} vấn đề đã kiểm, {posted} vấn đề được đăng.
+verify.failed = ⚠️ Bước kiểm chứng lại bị lỗi, nên các vấn đề được đăng mà chưa kiểm chứng.
 
 failure.provider = nhà cung cấp LLM trả về lỗi
 failure.timeout = review file này bị quá thời gian

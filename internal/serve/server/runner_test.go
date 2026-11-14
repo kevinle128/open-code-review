@@ -962,6 +962,31 @@ func TestPartialRunReportsCoverage(t *testing.T) {
 	mustContain(t, sum, h.loc.Text("coverage.complete", "reviewed", "3", "total", "3"))
 }
 
+func TestSummaryShowsTheVerifyPass(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(31)
+	h.gh.setPR(openPR(ref, sha1))
+	cov := review.Coverage{Total: 2, Reviewed: 2}
+	h.rev.set(func(context.Context, review.Request) (review.Result, error) {
+		return review.Result{Findings: []model.LlmComment{comment("a.go", 1)}, Terminal: review.TerminalComplete,
+			Coverage: cov, Verify: review.Verification{Checked: 4, Posted: 1}}, nil
+	})
+	h.command(ref, "/review", "c1")
+	mustContain(t, h.gh.summary(ref), state.RenderCoverage(cov, h.loc)+"\n\n"+h.loc.Text("verify.checked", "checked", "4", "posted", "1"))
+
+	h.gh.push(ref, sha2)
+	h.rev.set(func(context.Context, review.Request) (review.Result, error) {
+		return review.Result{Findings: []model.LlmComment{comment("b.go", 1)}, Terminal: review.TerminalComplete,
+			Verify: review.Verification{Checked: 1, Posted: 1, Failed: true}}, nil
+	})
+	h.command(ref, "/review", "c2")
+	sum := h.gh.summary(ref)
+	mustContain(t, sum, h.loc.Text("verify.failed"))
+	if strings.Contains(sum, h.loc.Text("verify.checked", "checked", "4", "posted", "1")) {
+		t.Fatalf("the earlier verify line stayed:\n%s", sum)
+	}
+}
+
 func TestFailedRunLogsCoverageAndWarnings(t *testing.T) {
 	h := newHarness(t)
 	ref := ghRef(31)

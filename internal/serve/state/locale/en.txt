@@ -20,6 +20,7 @@ finding.original_location = Originally at {location}; the comment was moved beca
 finding.pr_level = This finding is about the pull request as a whole.
 finding.pr_level_anchored = This finding is about the pull request as a whole; it is posted on {path} because a resolvable thread needs a file.
 finding.suggestion = Suggestion:
+finding.verified = **Verified:** {reason}
 
 summary.title = OCR code review
 summary.round = Automatic round: {round}/{max}
@@ -35,6 +36,9 @@ coverage.complete = Files reviewed: {reviewed}/{total}.
 coverage.partial = ⚠️ The last review was partial: reviewed {reviewed}/{total} files. These files were not reviewed:
 coverage.more = and {count} more (see the service log)
 coverage.retry = Comment `/review` to review again.
+
+verify.checked = Findings checked by a second reviewer: {checked} checked, {posted} posted.
+verify.failed = ⚠️ The second-reviewer check failed, so the findings are posted unverified.
 
 failure.provider = the LLM provider returned an error
 failure.timeout = the review of this file timed out

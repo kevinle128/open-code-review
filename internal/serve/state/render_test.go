@@ -188,6 +188,23 @@ func TestRenderLimitNoteAndCommandError(t *testing.T) {
 	}
 }
 
+func TestRenderVerify(t *testing.T) {
+	loc := mustLocale(t, "en")
+	if got := RenderVerify(review.Verification{}, loc); got != "" {
+		t.Errorf("no pass = %q", got)
+	}
+	if got := RenderVerify(review.Verification{Checked: 21, Posted: 5}, loc); got != "Findings checked by a second reviewer: 21 checked, 5 posted." {
+		t.Errorf("checked = %q", got)
+	}
+	if got := RenderVerify(review.Verification{Checked: 3, Posted: 3, Failed: true}, loc); got != loc.Text("verify.failed") || got == "verify.failed" {
+		t.Errorf("failed = %q", got)
+	}
+	vi := mustLocale(t, "vi")
+	if got := vi.Text("finding.verified", "reason", "{posted} x"); !strings.HasSuffix(got, " {posted} x") || got == loc.Text("finding.verified", "reason", "{posted} x") {
+		t.Errorf("vi note = %q", got)
+	}
+}
+
 func TestRenderCoverage(t *testing.T) {
 	loc := mustLocale(t, "en")
 	if got := RenderCoverage(review.Coverage{}, loc); got != "" {

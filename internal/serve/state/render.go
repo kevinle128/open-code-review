@@ -221,6 +221,18 @@ func RenderCoverage(c review.Coverage, loc Locale) string {
 	return b.String()
 }
 
+// RenderVerify builds the summary line of a verify pass: how many findings
+// it checked and posted, or that it failed. No pass gives an empty line.
+func RenderVerify(v review.Verification, loc Locale) string {
+	switch {
+	case v.Checked == 0:
+		return ""
+	case v.Failed:
+		return loc.Text("verify.failed")
+	}
+	return loc.Text("verify.checked", "checked", strconv.Itoa(v.Checked), "posted", strconv.Itoa(v.Posted))
+}
+
 func runLabel(r Run, loc Locale) string {
 	if r.N > 0 {
 		return loc.Text("run.auto", "n", strconv.Itoa(r.N))
