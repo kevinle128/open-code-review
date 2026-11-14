@@ -78,3 +78,21 @@ func TestHomesErrors(t *testing.T) {
 		t.Fatal("run dir in a missing root created")
 	}
 }
+
+func TestRunDirRemoveKeepsTheRunWhenAsked(t *testing.T) {
+	t.Setenv(KeepRunsEnv, "1")
+	root := t.TempDir()
+	dir := filepath.Join(root, "run-1")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&RunDir{Dir: dir}).Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "kept-run-1")); err != nil {
+		t.Fatalf("run dir not kept: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("run dir still at its old path: %v", err)
+	}
+}

@@ -85,8 +85,20 @@ func (h *Homes) New() (*RunDir, error) {
 	return r, nil
 }
 
+// KeepRunsEnv, set to 1, keeps each finished run directory as
+// kept-<name> next to it instead of deleting it, so the prompt, inputs and
+// CLI transcript of a run can be read when a result looks wrong. The kept
+// directories hold the PR diff; remove them after the check.
+const KeepRunsEnv = "OCR_SERVE_KEEP_RUN_DIRS"
+
 // Remove deletes the run directory and everything the CLI wrote into it.
 func (r *RunDir) Remove() error {
+	if os.Getenv(KeepRunsEnv) == "1" {
+		kept := filepath.Join(filepath.Dir(r.Dir), "kept-"+filepath.Base(r.Dir))
+		if err := os.Rename(r.Dir, kept); err == nil {
+			return nil
+		}
+	}
 	if err := removeTree(r.Dir); err != nil {
 		return fmt.Errorf("remove run dir: %w", err)
 	}
