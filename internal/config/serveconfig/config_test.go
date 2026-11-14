@@ -80,6 +80,7 @@ func TestLoad_Defaults(t *testing.T) {
 			Home:       "/data/cli-home",
 			BatchLines: 1500, BatchFiles: 25, BatchConcurrency: 1,
 		},
+		Verify: VerifyConfig{CLI: VerifyNone, Post: []string{VerdictReal}},
 		Sandbox: SandboxConfig{
 			Mode: SandboxNone, DockerBin: "docker", Memory: "6g", CPUs: "4",
 			Images: DefaultSandboxImages,

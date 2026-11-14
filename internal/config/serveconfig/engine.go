@@ -199,7 +199,7 @@ func (l *loader) absPath(key, def string) string {
 }
 
 // requireCLI checks what the CLI engine needs: the skill directory and the
-// credential file of the review CLI and of the fix CLI.
+// credential file of the review CLI, the fix CLI and the verify CLI.
 func (c *Config) requireCLI() error {
 	if c.Engine != EngineCLI {
 		return nil
@@ -209,7 +209,11 @@ func (c *Config) requireCLI() error {
 		errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvSkillDir, EnvEngine, EngineCLI))
 	}
 	seen := map[string]bool{}
-	for _, use := range []struct{ env, name string }{{EnvReviewCLI, c.CLI.ReviewCLI}, {EnvFixCLI, c.CLI.FixCLI}} {
+	uses := []struct{ env, name string }{{EnvReviewCLI, c.CLI.ReviewCLI}, {EnvFixCLI, c.CLI.FixCLI}}
+	if c.Verify.Enabled() {
+		uses = append(uses, struct{ env, name string }{EnvVerifyCLI, c.Verify.CLI})
+	}
+	for _, use := range uses {
 		if seen[use.name] {
 			continue
 		}

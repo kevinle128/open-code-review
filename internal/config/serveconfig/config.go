@@ -113,6 +113,7 @@ type Config struct {
 	// the in-process OCR review.
 	Engine  string
 	CLI     CLIConfig
+	Verify  VerifyConfig
 	Sandbox SandboxConfig
 
 	GitHub *GitHubConfig // nil = disabled
@@ -236,6 +237,7 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		Engine:        l.engine(),
 	}
 	c.CLI = l.cli(c.DataDir)
+	c.Verify = l.verify()
 	c.Sandbox = l.sandbox()
 	c.GitHub = l.github()
 	c.GitLab = l.gitlab()
