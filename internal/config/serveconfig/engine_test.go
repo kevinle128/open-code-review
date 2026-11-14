@@ -12,7 +12,7 @@ func TestLoad_CLIEngineSettings(t *testing.T) {
 	c, err := Load(env(map[string]string{
 		EnvEngine:           "OCR",
 		EnvReviewCLI:        "claude",
-		EnvFixCLI:           "codex",
+		EnvVerifyCLI:        "codex",
 		EnvCodexBin:         "/opt/codex/bin/codex",
 		EnvClaudeBin:        "/opt/claude/versions/2.1.322",
 		EnvCodexModel:       "gpt-6.1-sol",
@@ -30,14 +30,14 @@ func TestLoad_CLIEngineSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := CLIConfig{
-		ReviewCLI: CLIClaude, FixCLI: CLICodex,
-		CodexBin: "/opt/codex/bin/codex", ClaudeBin: "/opt/claude/versions/2.1.322",
+		ReviewCLI: CLIClaude,
+		CodexBin:  "/opt/codex/bin/codex", ClaudeBin: "/opt/claude/versions/2.1.322",
 		CodexModel: "gpt-6.1-sol", ClaudeModel: "claude-sonnet-5-5[1m]", CodexEffort: "medium",
 		SkillDir: "/opt/ocr-skills", Home: "/state/cli",
 		CodexAuth: "/run/codex/auth.json", ClaudeSettings: "/run/claude/settings.json", AgyBin: DefaultAgyBin,
 		BatchLines: 800, BatchFiles: 10, BatchConcurrency: 4,
 	}
-	if c.Engine != EngineOCR || c.CLI != want {
+	if c.Engine != EngineOCR || c.CLI != want || c.Verify.CLI != CLICodex {
 		t.Fatalf("engine %q cli %+v", c.Engine, c.CLI)
 	}
 	if c.CLI.Bin(CLIClaude) != want.ClaudeBin || c.CLI.Bin(CLICodex) != want.CodexBin {
@@ -56,7 +56,7 @@ func TestLoad_AgySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.CLI.ReviewCLI != CLIAgy || c.CLI.FixCLI != DefaultFixCLI || c.CLI.AgyBin != "/home/svc/.local/bin/agy" ||
+	if c.CLI.ReviewCLI != CLIAgy || c.Verify.CLI != DefaultVerifyCLI || c.CLI.AgyBin != "/home/svc/.local/bin/agy" ||
 		c.CLI.AgyToken != "/home/svc/.gemini/antigravity-cli/antigravity-oauth-token" ||
 		c.CLI.AgyModel != "gemini-4-hydrogen-high" || c.CLI.AgyEffort != "xhigh" {
 		t.Fatalf("cli %+v", c.CLI)
@@ -71,8 +71,8 @@ func TestLoad_AgySettings(t *testing.T) {
 }
 
 func TestLoad_AgyIsReviewOnly(t *testing.T) {
-	_, err := Load(env(map[string]string{EnvFixCLI: "agy"}), files(nil))
-	if err == nil || !strings.Contains(err.Error(), EnvFixCLI+"=agy is not supported: agy runs reviews only") {
+	_, err := Load(env(map[string]string{EnvVerifyCLI: "agy"}), files(nil))
+	if err == nil || !strings.Contains(err.Error(), EnvVerifyCLI+"=agy is not supported: agy runs reviews only") {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestLoad_InvalidCLIEngineSettings(t *testing.T) {
 	cases := map[string]string{
 		EnvEngine:           "claude",
 		EnvReviewCLI:        "gemini",
-		EnvFixCLI:           "aider",
+		EnvVerifyCLI:        "aider",
 		EnvCodexModel:       `gpt"; rm -rf`,
 		EnvClaudeModel:      "--dangerously-skip-permissions",
 		EnvCodexEffort:      "Medium high",
@@ -136,18 +136,18 @@ func TestRequireServe_CLIEngine(t *testing.T) {
 		{"claude complete", Config{GitHub: gh, Engine: EngineCLI,
 			CLI: CLIConfig{ReviewCLI: CLIClaude, SkillDir: "/s", ClaudeSettings: "/c"}}, nil},
 		{"claude fix needs settings", Config{GitHub: gh, Engine: EngineCLI,
-			CLI: CLIConfig{ReviewCLI: CLICodex, FixCLI: CLIClaude, SkillDir: "/s", CodexAuth: "/a"}},
-			[]string{EnvClaudeSettings + " is required when " + EnvFixCLI}},
+			CLI: CLIConfig{ReviewCLI: CLICodex, SkillDir: "/s", CodexAuth: "/a"}, Verify: VerifyConfig{CLI: CLIClaude}},
+			[]string{EnvClaudeSettings + " is required when " + EnvVerifyCLI}},
 		{"codex fix needs auth", Config{GitHub: gh, Engine: EngineCLI,
-			CLI: CLIConfig{ReviewCLI: CLIClaude, FixCLI: CLICodex, SkillDir: "/s", ClaudeSettings: "/c"}},
-			[]string{EnvCodexAuth + " is required when " + EnvFixCLI}},
+			CLI: CLIConfig{ReviewCLI: CLIClaude, SkillDir: "/s", ClaudeSettings: "/c"}, Verify: VerifyConfig{CLI: CLICodex}},
+			[]string{EnvCodexAuth + " is required when " + EnvVerifyCLI}},
 		{"agy needs the token", Config{GitHub: gh, Engine: EngineCLI,
-			CLI: CLIConfig{ReviewCLI: CLIAgy, FixCLI: CLIClaude, SkillDir: "/s", ClaudeSettings: "/c"}},
+			CLI: CLIConfig{ReviewCLI: CLIAgy, SkillDir: "/s", ClaudeSettings: "/c"}, Verify: VerifyConfig{CLI: CLIClaude}},
 			[]string{EnvAgyToken + " is required when " + EnvReviewCLI}},
 		{"agy complete", Config{GitHub: gh, Engine: EngineCLI,
-			CLI: CLIConfig{ReviewCLI: CLIAgy, FixCLI: CLIClaude, SkillDir: "/s", ClaudeSettings: "/c", AgyToken: "/t"}}, nil},
+			CLI: CLIConfig{ReviewCLI: CLIAgy, SkillDir: "/s", ClaudeSettings: "/c", AgyToken: "/t"}, Verify: VerifyConfig{CLI: CLIClaude}}, nil},
 		{"both complete", Config{GitHub: gh, Engine: EngineCLI,
-			CLI: CLIConfig{ReviewCLI: CLICodex, FixCLI: CLIClaude, SkillDir: "/s", CodexAuth: "/a", ClaudeSettings: "/c"}}, nil},
+			CLI: CLIConfig{ReviewCLI: CLICodex, SkillDir: "/s", CodexAuth: "/a", ClaudeSettings: "/c"}, Verify: VerifyConfig{CLI: CLIClaude}}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

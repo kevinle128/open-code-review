@@ -71,16 +71,16 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &Config{
-		Addr: DefaultAddr, MaxRounds: 3, PollInterval: 2 * time.Minute, ReviewTimeout: 2 * time.Hour,
+		Addr: DefaultAddr, MaxRounds: 3, ReviewTimeout: 2 * time.Hour,
 		Workers: 2, MaxBodyBytes: 10485760, DataDir: "/data", WorkDir: "/work", BotIndicators: []string{"bot"},
 		Exclude: DefaultExcludes, ReviewConcurrency: 5, BundleLines: 300,
 		Engine: EngineCLI,
 		CLI: CLIConfig{
-			ReviewCLI: CLICodex, FixCLI: CLIClaude, CodexBin: "codex", ClaudeBin: "claude", AgyBin: "agy",
+			ReviewCLI: CLICodex, CodexBin: "codex", ClaudeBin: "claude", AgyBin: "agy",
 			Home:       "/data/cli-home",
 			BatchLines: 1500, BatchFiles: 25, BatchConcurrency: 1,
 		},
-		Verify: VerifyConfig{CLI: VerifyNone, Post: []string{VerdictReal}},
+		Verify: VerifyConfig{CLI: DefaultVerifyCLI},
 		Sandbox: SandboxConfig{
 			Mode: SandboxNone, DockerBin: "docker", Memory: "6g", CPUs: "4",
 			Images: DefaultSandboxImages,
@@ -105,7 +105,7 @@ func TestLoad_NilFuncsUseProcessEnv(t *testing.T) {
 func TestLoad_Overrides(t *testing.T) {
 	testKeys(t)
 	c, err := Load(env(map[string]string{
-		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvPollInterval: "30s", EnvReviewTimeout: "3h",
+		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvReviewTimeout: "3h",
 		EnvWorkers: "4", EnvMaxBodyBytes: "2048", EnvDataDir: "/d", EnvWorkDir: "/w",
 		EnvReviewConcurrency: "12", EnvBundleLines: "450",
 		EnvIgnoreRepos: "^infra/, sandbox$", EnvIgnoreAuthors: "renovate", EnvIgnoreTitles: `(?i)^\[wip\]`,
@@ -120,7 +120,7 @@ func TestLoad_Overrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.PollInterval != 30*time.Second || c.ReviewTimeout != 3*time.Hour ||
+	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.ReviewTimeout != 3*time.Hour ||
 		c.Workers != 4 || c.MaxBodyBytes != 2048 || c.DataDir != "/d" || c.WorkDir != "/w" ||
 		c.ReviewConcurrency != 12 || c.BundleLines != 450 {
 		t.Fatalf("scalars %+v", c)
@@ -202,7 +202,6 @@ func TestLoad_InvalidValues(t *testing.T) {
 		{"bundle lines too low", map[string]string{EnvBundleLines: "49"}, EnvBundleLines},
 		{"bundle lines too high", map[string]string{EnvBundleLines: "5001"}, EnvBundleLines},
 		{"body bytes zero", map[string]string{EnvMaxBodyBytes: "0"}, EnvMaxBodyBytes},
-		{"poll negative", map[string]string{EnvPollInterval: "-1m"}, EnvPollInterval},
 		{"timeout zero", map[string]string{EnvReviewTimeout: "0s"}, EnvReviewTimeout},
 		{"timeout garbage", map[string]string{EnvReviewTimeout: "soon"}, EnvReviewTimeout},
 		{"bad regex", map[string]string{EnvIgnoreTitles: "([a-"}, EnvIgnoreTitles},

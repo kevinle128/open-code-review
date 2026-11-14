@@ -27,7 +27,6 @@ import (
 const (
 	EnvAddr                = "OCR_SERVE_ADDR"
 	EnvMaxRounds           = "OCR_SERVE_MAX_ROUNDS"
-	EnvPollInterval        = "OCR_SERVE_POLL_INTERVAL"
 	EnvWorkers             = "OCR_SERVE_WORKERS"
 	EnvReviewTimeout       = "OCR_SERVE_REVIEW_TIMEOUT"
 	EnvReviewConcurrency   = "OCR_SERVE_REVIEW_CONCURRENCY"
@@ -60,7 +59,6 @@ const (
 const (
 	DefaultAddr          = "127.0.0.1:3012"
 	DefaultMaxRounds     = 3
-	DefaultPollInterval  = 2 * time.Minute
 	DefaultWorkers       = 2
 	DefaultReviewTimeout = 2 * time.Hour
 	DefaultMaxBodyBytes  = 10 << 20
@@ -93,7 +91,6 @@ const (
 type Config struct {
 	Addr          string
 	MaxRounds     int
-	PollInterval  time.Duration
 	ReviewTimeout time.Duration
 	Workers       int
 	MaxBodyBytes  int64
@@ -220,7 +217,6 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 	c := &Config{
 		Addr:          l.str(EnvAddr, DefaultAddr),
 		MaxRounds:     l.intIn(EnvMaxRounds, DefaultMaxRounds, MinRounds, MaxRounds),
-		PollInterval:  l.duration(EnvPollInterval, DefaultPollInterval),
 		ReviewTimeout: l.duration(EnvReviewTimeout, DefaultReviewTimeout),
 		Workers:       l.intIn(EnvWorkers, DefaultWorkers, MinWorkers, MaxWorkers),
 		MaxBodyBytes:  int64(l.intIn(EnvMaxBodyBytes, DefaultMaxBodyBytes, 1, MaxBodyBytesHigh)),

@@ -15,7 +15,6 @@ import (
 const (
 	EnvEngine         = "OCR_SERVE_ENGINE"
 	EnvReviewCLI      = "OCR_SERVE_REVIEW_CLI"
-	EnvFixCLI         = "OCR_SERVE_FIX_CLI"
 	EnvCodexBin       = "OCR_SERVE_CODEX_BIN"
 	EnvClaudeBin      = "OCR_SERVE_CLAUDE_BIN"
 	EnvCodexModel     = "OCR_SERVE_CODEX_MODEL"
@@ -62,7 +61,6 @@ const (
 
 	DefaultEngine    = EngineCLI
 	DefaultReviewCLI = CLICodex
-	DefaultFixCLI    = CLIClaude
 	DefaultCodexBin  = "codex"
 	DefaultClaudeBin = "claude"
 	DefaultAgyBin    = "agy"
@@ -82,12 +80,11 @@ var AgyEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 
 // CLIConfig holds the settings of the CLI review engine, which runs an
 // installed coding-agent CLI on the checkout. ReviewCLI runs reviews;
-// FixCLI runs /fix. Paths are absolute. A review runs the CLI once per
+// VerifyConfig names the CLI of the fix run. Paths are absolute. A review runs the CLI once per
 // batch of at most BatchFiles files and about BatchLines changed lines,
 // BatchConcurrency batches at a time.
 type CLIConfig struct {
 	ReviewCLI      string
-	FixCLI         string
 	CodexBin       string
 	ClaudeBin      string
 	CodexModel     string
@@ -125,7 +122,6 @@ func (l *loader) engine() string {
 func (l *loader) cli(dataDir string) CLIConfig {
 	return CLIConfig{
 		ReviewCLI:      l.oneOf(EnvReviewCLI, DefaultReviewCLI, CLICodex, CLIClaude, CLIAgy),
-		FixCLI:         l.fixCLI(),
 		CodexBin:       l.str(EnvCodexBin, DefaultCodexBin),
 		ClaudeBin:      l.str(EnvClaudeBin, DefaultClaudeBin),
 		CodexModel:     l.matching(EnvCodexModel, modelPattern),
@@ -144,16 +140,6 @@ func (l *loader) cli(dataDir string) CLIConfig {
 		BatchFiles:       l.intIn(EnvBatchFiles, DefaultBatchFiles, MinBatchFiles, MaxBatchFiles),
 		BatchConcurrency: l.intIn(EnvBatchConcurrency, DefaultBatchConcurrency, MinBatchConcurrency, MaxBatchConcurrency),
 	}
-}
-
-// fixCLI names agy in its own error, since agy is a valid review CLI and
-// the generic list of allowed values would not say why it is refused here.
-func (l *loader) fixCLI() string {
-	if strings.EqualFold(l.str(EnvFixCLI, ""), CLIAgy) {
-		l.fail("%s=%s is not supported: agy runs reviews only, set %s to %s or %s", EnvFixCLI, CLIAgy, EnvFixCLI, CLIClaude, CLICodex)
-		return DefaultFixCLI
-	}
-	return l.oneOf(EnvFixCLI, DefaultFixCLI, CLIClaude, CLICodex)
 }
 
 // optionalOneOf is oneOf for a setting whose empty value means unset.
@@ -199,7 +185,7 @@ func (l *loader) absPath(key, def string) string {
 }
 
 // requireCLI checks what the CLI engine needs: the skill directory and the
-// credential file of the review CLI, the fix CLI and the verify CLI.
+// credential file of the review CLI and the fix run CLI.
 func (c *Config) requireCLI() error {
 	if c.Engine != EngineCLI {
 		return nil
@@ -209,10 +195,7 @@ func (c *Config) requireCLI() error {
 		errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvSkillDir, EnvEngine, EngineCLI))
 	}
 	seen := map[string]bool{}
-	uses := []struct{ env, name string }{{EnvReviewCLI, c.CLI.ReviewCLI}, {EnvFixCLI, c.CLI.FixCLI}}
-	if c.Verify.Enabled() {
-		uses = append(uses, struct{ env, name string }{EnvVerifyCLI, c.Verify.CLI})
-	}
+	uses := []struct{ env, name string }{{EnvReviewCLI, c.CLI.ReviewCLI}, {EnvVerifyCLI, c.Verify.CLI}}
 	for _, use := range uses {
 		if seen[use.name] {
 			continue
