@@ -21,6 +21,7 @@ finding.pr_level = This finding is about the pull request as a whole.
 finding.pr_level_anchored = This finding is about the pull request as a whole; it is posted on {path} because a resolvable thread needs a file.
 finding.suggestion = Suggestion:
 finding.verified = **Verified:** {reason}
+finding.fix = **Fix:**\n\n{fix}
 
 summary.title = OCR code review
 summary.round = Automatic round: {round}/{max}

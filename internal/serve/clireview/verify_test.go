@@ -179,7 +179,7 @@ func TestVerifyRunInput(t *testing.T) {
 		"Do not report new findings.",
 		fmt.Sprintf("`git diff %s..%s` shows the reviewed changes.", f.req.From, f.req.To),
 		fmt.Sprintf("`git diff %s...%s` shows the whole PR.", f.req.PR.BaseSHA, f.req.PR.HeadSHA),
-		"Output language of `reason`: Vietnamese.",
+		"Output language of `reason` and of the prose in `fix`: Vietnamese.",
 		"## PR body contract\n\n" + refText(prBodyContract),
 		`"id": "F2"`,
 		"Body of C.",
@@ -413,5 +413,26 @@ func TestWriteVerifyInputUsesProjectID(t *testing.T) {
 	}
 	if _, err := writeVerifyInput(context.Background(), dir, req, Selection{Base: "nope", Head: r.head, Paths: []string{"a.go"}}, nil); err == nil {
 		t.Fatal("want a diff error")
+	}
+}
+
+func TestVerifyAppendsTheProposedFix(t *testing.T) {
+	v := &Verifier{Post: []string{"real"},
+		Note:    func(reason string) string { return "VERIFIED: " + reason },
+		FixNote: func(fix string) string { return "FIX:\n" + fix }}
+	fs := []model.LlmComment{{Path: "a.go", StartLine: 3, Severity: "medium", Content: "body"}, {Path: "b.go", StartLine: 1, Content: "other"}}
+	items := verifyItems(fs)
+	kept, _, _ := v.apply(fs, items, []verdict{
+		{ID: "F1", Verdict: "real", Severity: "high", Reason: "It panics.", Fix: "Check the index.\n```go\nif i < len(xs) {}\n```"},
+		{ID: "F2", Verdict: "real", Severity: "low", Reason: "Minor.", Fix: "  "},
+	})
+	if len(kept) != 2 {
+		t.Fatalf("kept %d", len(kept))
+	}
+	if want := "body\n\nVERIFIED: It panics.\n\nFIX:\nCheck the index.\n```go\nif i < len(xs) {}\n```"; kept[0].Content != want {
+		t.Fatalf("content %q", kept[0].Content)
+	}
+	if strings.Contains(kept[1].Content, "FIX:") {
+		t.Fatalf("an empty fix was appended: %q", kept[1].Content)
 	}
 }

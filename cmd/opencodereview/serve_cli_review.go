@@ -169,6 +169,8 @@ func buildVerifier(c serveconfig.CLIConfig, v serveconfig.VerifyConfig, sc serve
 	}
 	return &clireview.Verifier{CLI: cli, Post: v.Post, Note: func(reason string) string {
 		return loc.Text("finding.verified", "reason", reason)
+	}, FixNote: func(fix string) string {
+		return loc.Text("finding.fix", "fix", fix)
 	}}, nil
 }
 
