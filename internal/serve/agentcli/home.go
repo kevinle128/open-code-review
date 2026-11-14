@@ -6,6 +6,7 @@ package agentcli
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,7 @@ func (h *Homes) Sweep() error {
 	var errs []error
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), runPrefix) {
-			if err := os.RemoveAll(filepath.Join(h.root, e.Name())); err != nil {
+			if err := removeTree(filepath.Join(h.root, e.Name())); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -86,8 +87,24 @@ func (h *Homes) New() (*RunDir, error) {
 
 // Remove deletes the run directory and everything the CLI wrote into it.
 func (r *RunDir) Remove() error {
-	if err := os.RemoveAll(r.Dir); err != nil {
+	if err := removeTree(r.Dir); err != nil {
 		return fmt.Errorf("remove run dir: %w", err)
 	}
 	return nil
+}
+
+// removeTree removes dir. A tool can leave read-only directories behind (a
+// Go module cache does), whose entries RemoveAll cannot delete; on failure
+// the tree is made writable and removed again.
+func removeTree(dir string) error {
+	if err := os.RemoveAll(dir); err == nil {
+		return nil
+	}
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(dir)
 }

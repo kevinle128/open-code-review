@@ -51,6 +51,14 @@ func (inv Invocation) env(extra ...string) []string {
 	return append(BaseEnv(getenv, inv.Run.Home, inv.Run.Tmp), extra...)
 }
 
+// execute runs p as a child process, or inside a container when sb is set.
+func execute(ctx context.Context, sb *Sandbox, inv Invocation, p Process) error {
+	if sb == nil {
+		return Run(ctx, p)
+	}
+	return sb.run(ctx, inv, p)
+}
+
 // process writes the prompt to a file and returns the process around it.
 func (inv Invocation) process(bin string, args, env []string) (Process, error) {
 	stdin := filepath.Join(inv.Run.Out, "prompt.txt")
@@ -68,16 +76,17 @@ func (inv Invocation) process(bin string, args, env []string) (Process, error) {
 // Codex runs `codex exec` without its own sandbox: the bubblewrap sandbox
 // needs unprivileged user namespaces, which the container host does not
 // allow, and with it codex cannot run a single tool. The container is the
-// boundary instead; a review prompt forbids edits, and every prompt forbids
-// network commands, so Edit changes nothing here. AuthFile
-// is the host auth.json; the run home links to it, so a token refresh
-// reaches the host file and the host's config, sessions and logs stay out
-// of the run.
+// boundary instead, the service container or, with Sandbox set, one
+// container per run; a review prompt forbids edits, and every prompt
+// forbids network commands, so Edit changes nothing here. AuthFile is the
+// host auth.json; the run home links to it, so a token refresh reaches the
+// host file and the host's config, sessions and logs stay out of the run.
 type Codex struct {
 	Bin      string
 	Model    string
 	Effort   string
 	AuthFile string
+	Sandbox  *Sandbox
 }
 
 // Name implements CLI.
@@ -113,7 +122,7 @@ func (c Codex) Exec(ctx context.Context, inv Invocation) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := Run(ctx, p); err != nil {
+	if err := execute(ctx, c.Sandbox, inv, p); err != nil {
 		return "", err
 	}
 	if b, err := os.ReadFile(last); err == nil && strings.TrimSpace(string(b)) != "" {
@@ -196,14 +205,17 @@ func codexStreamMessage(path string) (string, error) {
 }
 
 // Claude runs `claude -p` with only the read tools, or for an Edit run the
-// read and edit tools plus Task for the installed agents; never a shell.
-// SettingsFile is the host settings.json; the run home gets a copy of its
-// env and model keys only, so the host's hooks, plugins and permission
-// rules do not apply.
+// read and edit tools plus Task for the installed agents. An Edit run gets
+// the Bash tool only with Sandbox set, so it can build and test the
+// project inside the run's container; without one a shell would run where
+// the service runs. SettingsFile is the host settings.json; the run home
+// gets a copy of its env and model keys only, so the host's hooks, plugins
+// and permission rules do not apply.
 type Claude struct {
 	Bin          string
 	Model        string
 	SettingsFile string
+	Sandbox      *Sandbox
 }
 
 // Name implements CLI.
@@ -219,6 +231,9 @@ func (c Claude) Exec(ctx context.Context, inv Invocation) (string, error) {
 	mode, tools := "default", claudeReadTools
 	if inv.Edit {
 		mode, tools = "acceptEdits", claudeEditTools
+		if c.Sandbox != nil {
+			tools += ",Bash"
+		}
 		if err := installAgents(inv.Agents, filepath.Join(inv.Run.Home, "agents")); err != nil {
 			return "", err
 		}
@@ -238,7 +253,7 @@ func (c Claude) Exec(ctx context.Context, inv Invocation) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := Run(ctx, p); err != nil {
+	if err := execute(ctx, c.Sandbox, inv, p); err != nil {
 		return "", err
 	}
 	return claudeResult(p.Stdout)

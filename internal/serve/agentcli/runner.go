@@ -27,8 +27,10 @@ const stderrTail = 2000
 
 // Process is one CLI invocation. Stdin, Stdout and Stderr are file paths;
 // files keep the output for a failed run and spare the pipe copies that
-// would hold Wait open while a stray tool keeps a pipe.
+// would hold Wait open while a stray tool keeps a pipe. Name labels errors;
+// empty means the base name of Bin.
 type Process struct {
+	Name   string
 	Bin    string
 	Args   []string
 	Env    []string
@@ -58,7 +60,7 @@ func (e *ExitError) Error() string {
 // left of the group is killed once the leader is gone, also after a normal
 // exit.
 func Run(ctx context.Context, p Process) error {
-	name := filepath.Base(p.Bin)
+	name := p.name()
 	stdin, err := os.Open(p.Stdin)
 	if err != nil {
 		return fmt.Errorf("open %s input: %w", name, err)
@@ -100,6 +102,13 @@ func Run(ctx context.Context, p Process) error {
 		return &ExitError{Name: name, Code: exitErr.ExitCode(), Stderr: tail(p.Stderr, stderrTail)}
 	}
 	return fmt.Errorf("run %s: %w", name, waitErr)
+}
+
+func (p Process) name() string {
+	if p.Name != "" {
+		return p.Name
+	}
+	return filepath.Base(p.Bin)
 }
 
 // tail returns the last n bytes of a file, trimmed, or "" when it cannot be
