@@ -176,7 +176,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpSrv.Serve(ln) }()
 	log.Info("listening", "addr", ln.Addr().String(), "version", Version, "platforms", platformNames(forges),
-		"engine", engineName(cfg), "fix_cli", fixCLIName(cfg), "sandbox", sandboxName(cfg))
+		"engine", engineName(cfg), "fix_cli", fixCLIName(cfg), "verify_cli", verifyCLIName(cfg), "sandbox", sandboxName(cfg))
 	if env.ready != nil {
 		env.ready(ln.Addr().String())
 	}
@@ -265,6 +265,15 @@ func fixCLIName(cfg *serveconfig.Config) string {
 		return cfg.CLI.FixCLI
 	}
 	return "none"
+}
+
+// verifyCLIName names the CLI of the verify pass, or "none" when no pass
+// runs.
+func verifyCLIName(cfg *serveconfig.Config) string {
+	if cfg.Engine == serveconfig.EngineCLI && cfg.Verify.Enabled() {
+		return cfg.Verify.CLI
+	}
+	return serveconfig.VerifyNone
 }
 
 // sandboxName names where a CLI run happens, or "none" for the OCR engine.
