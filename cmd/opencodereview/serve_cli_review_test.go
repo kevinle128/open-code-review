@@ -230,6 +230,59 @@ func TestBuildServeReviewerRunsTheCLIEngine(t *testing.T) {
 	}
 }
 
+// useFakeAgy makes agy the review CLI of cfg, with a fake agy that prints
+// a SUCCESS result whose structured output is answer, and a token file.
+func useFakeAgy(t *testing.T, cfg *serveconfig.Config, answer string) {
+	t.Helper()
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.json")
+	if err := os.WriteFile(out, []byte(`{"status":"SUCCESS","response":"","structured_output":`+answer+`}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "agy")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\ncat "+out+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tok := filepath.Join(dir, "antigravity-oauth-token")
+	if err := os.WriteFile(tok, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.CLI.ReviewCLI, cfg.CLI.AgyBin, cfg.CLI.AgyToken = serveconfig.CLIAgy, bin, tok
+	cfg.CLI.AgyModel, cfg.CLI.AgyEffort = "gemini-4-hydrogen-high", "high"
+}
+
+func TestBuildServeReviewerRunsAgy(t *testing.T) {
+	writeServeAppConfig(t, `{"language": "Vietnamese"}`)
+	noLLMEnv(t)
+	repo := newServeRepo(t)
+	cfg := cliEngineConfig(t, "{}")
+	useFakeAgy(t, cfg, `{"summary": "ok", "findings": [
+ {"path": "a.go", "line": 4, "end_line": null, "severity": "low", "category": "maintainability",
+  "title": "Name", "body": "Rename it.", "suggestion": null}]}`)
+	rev, fixer, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := rev.(*clireview.Reviewer).CLI.(agentcli.Agy)
+	if !ok || a.Model != "gemini-4-hydrogen-high" || a.Effort != "high" || a.TokenFile != cfg.CLI.AgyToken || a.Sandbox != nil {
+		t.Fatalf("agy cli %+v", rev.(*clireview.Reviewer).CLI)
+	}
+	if _, ok := fixer.(*clireview.Fixer).CLI.(agentcli.Claude); !ok {
+		t.Fatalf("fix cli %+v", fixer.(*clireview.Fixer).CLI)
+	}
+	pr := forge.PR{Ref: forge.PRRef{Platform: forge.GitHub, Repo: "acme/app", Number: 3}, BaseSHA: repo.base, HeadSHA: repo.head}
+	res, err := rev.Review(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head, PR: pr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Terminal != review.TerminalComplete || len(res.Findings) != 1 || res.Findings[0].StartLine != 4 {
+		t.Fatalf("result %+v", res)
+	}
+	if _, err := buildAgentCLI(cfg.CLI, cfg.Sandbox, nil, "aider"); err == nil || !strings.Contains(err.Error(), "unknown agent cli") {
+		t.Fatalf("unknown cli: %v", err)
+	}
+}
+
 func TestBuildServeReviewerPicksTheEngine(t *testing.T) {
 	cfg := cliEngineConfig(t, "{}")
 	cfg.Engine = serveconfig.EngineOCR
@@ -285,6 +338,14 @@ func TestBuildServeReviewerChecks(t *testing.T) {
 			c.CLI.ClaudeSettings = "/no/settings.json"
 		}, serveconfig.EnvClaudeSettings},
 		{"home unusable", func(c *serveconfig.Config) { c.CLI.Home = filepath.Join(notADir, "home") }, serveconfig.EnvCLIHome},
+		{"agy missing", func(c *serveconfig.Config) {
+			useFakeAgy(t, c, "{}")
+			c.CLI.AgyBin = "no-such-agy-binary"
+		}, serveconfig.EnvAgyBin},
+		{"agy token missing", func(c *serveconfig.Config) {
+			useFakeAgy(t, c, "{}")
+			c.CLI.AgyToken = "/no/antigravity-oauth-token"
+		}, serveconfig.EnvAgyToken},
 		{"fix claude missing", func(c *serveconfig.Config) { c.CLI.ClaudeBin = "no-such-claude-binary" }, "fix cli: " + serveconfig.EnvClaudeBin},
 		{"fix claude settings missing", func(c *serveconfig.Config) { c.CLI.ClaudeSettings = "/no/settings.json" }, "fix cli: " + serveconfig.EnvClaudeSettings},
 	}

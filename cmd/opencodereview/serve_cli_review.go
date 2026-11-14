@@ -171,45 +171,64 @@ func buildSandbox(ctx context.Context, cfg *serveconfig.Config, log *slog.Logger
 	return sb, nil
 }
 
+// cliSetup is what buildAgentCLI needs to know of one CLI: the settings
+// that name its executable, install directory and credential file, and how
+// a sandbox mounts that file.
+type cliSetup struct {
+	binEnv, dirEnv, credEnv string
+	installDir, cred        string
+	credMount               agentcli.Mount
+}
+
+// cliSetups describes each CLI. The codex run home links auth.json to the
+// host file, so its directory is mounted writable for a token refresh.
+// The agy run home links its token file the same way, but only the file
+// is mounted writable: a refresh written through the link reaches it, and
+// the service writes back a token that replaced the link. The Claude
+// settings file is only read.
+func cliSetups(c serveconfig.CLIConfig, sc serveconfig.SandboxConfig) map[string]cliSetup {
+	return map[string]cliSetup{
+		serveconfig.CLICodex: {serveconfig.EnvCodexBin, serveconfig.EnvSandboxCodexDir, serveconfig.EnvCodexAuth,
+			sc.CodexDir, c.CodexAuth, agentcli.Mount{Path: filepath.Dir(c.CodexAuth)}},
+		serveconfig.CLIClaude: {serveconfig.EnvClaudeBin, serveconfig.EnvSandboxClaudeDir, serveconfig.EnvClaudeSettings,
+			sc.ClaudeDir, c.ClaudeSettings, agentcli.Mount{Path: c.ClaudeSettings, ReadOnly: true}},
+		serveconfig.CLIAgy: {serveconfig.EnvAgyBin, serveconfig.EnvSandboxAgyDir, serveconfig.EnvAgyToken,
+			sc.AgyDir, c.AgyToken, agentcli.Mount{Path: c.AgyToken}},
+	}
+}
+
 // buildAgentCLI resolves the executable and checks the credential file of
 // the named CLI. With a sandbox, the CLI gets a copy of it that also mounts
 // the CLI install and its credential file.
 func buildAgentCLI(c serveconfig.CLIConfig, sc serveconfig.SandboxConfig, sb *agentcli.Sandbox, name string) (agentcli.CLI, error) {
-	binEnv, dirEnv, installDir := serveconfig.EnvCodexBin, serveconfig.EnvSandboxCodexDir, sc.CodexDir
-	if name == serveconfig.CLIClaude {
-		binEnv, dirEnv, installDir = serveconfig.EnvClaudeBin, serveconfig.EnvSandboxClaudeDir, sc.ClaudeDir
+	s, ok := cliSetups(c, sc)[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown agent cli %q", name)
 	}
 	bin, err := exec.LookPath(c.Bin(name))
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", binEnv, err)
+		return nil, fmt.Errorf("%s: %w", s.binEnv, err)
 	}
 	if bin, err = filepath.Abs(bin); err != nil {
-		return nil, fmt.Errorf("%s: %w", binEnv, err)
+		return nil, fmt.Errorf("%s: %w", s.binEnv, err)
 	}
-	credEnv, cred := serveconfig.EnvCodexAuth, c.CodexAuth
-	if name == serveconfig.CLIClaude {
-		credEnv, cred = serveconfig.EnvClaudeSettings, c.ClaudeSettings
-	}
-	if err := readable(cred); err != nil {
-		return nil, fmt.Errorf("%s: %w", credEnv, err)
+	if err := readable(s.cred); err != nil {
+		return nil, fmt.Errorf("%s: %w", s.credEnv, err)
 	}
 	if sb != nil {
-		if bin, installDir, err = sandboxInstall(bin, installDir); err != nil {
-			return nil, fmt.Errorf("%s: %w", dirEnv, err)
+		var installDir string
+		if bin, installDir, err = sandboxInstall(bin, s.installDir); err != nil {
+			return nil, fmt.Errorf("%s: %w", s.dirEnv, err)
 		}
-		// The codex run home links auth.json to the host file, so its
-		// directory is mounted writable for a token refresh; the Claude
-		// settings file is only read.
-		credMount := agentcli.Mount{Path: filepath.Dir(cred)}
-		if name == serveconfig.CLIClaude {
-			credMount = agentcli.Mount{Path: cred, ReadOnly: true}
-		}
-		sb = sb.WithMounts(agentcli.Mount{Path: installDir, ReadOnly: true}, credMount)
+		sb = sb.WithMounts(agentcli.Mount{Path: installDir, ReadOnly: true}, s.credMount)
 	}
-	if name == serveconfig.CLIClaude {
-		return agentcli.Claude{Bin: bin, Model: c.ClaudeModel, SettingsFile: cred, Sandbox: sb}, nil
+	switch name {
+	case serveconfig.CLIClaude:
+		return agentcli.Claude{Bin: bin, Model: c.ClaudeModel, SettingsFile: s.cred, Sandbox: sb}, nil
+	case serveconfig.CLIAgy:
+		return agentcli.Agy{Bin: bin, Model: c.AgyModel, Effort: c.AgyEffort, TokenFile: s.cred, Sandbox: sb}, nil
 	}
-	return agentcli.Codex{Bin: bin, Model: c.CodexModel, Effort: c.CodexEffort, AuthFile: cred, Sandbox: sb}, nil
+	return agentcli.Codex{Bin: bin, Model: c.CodexModel, Effort: c.CodexEffort, AuthFile: s.cred, Sandbox: sb}, nil
 }
 
 // sandboxInstall resolves the binary through its links, since a link on

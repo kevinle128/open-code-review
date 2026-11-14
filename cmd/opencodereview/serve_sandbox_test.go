@@ -134,6 +134,27 @@ func TestBuildServeEnginesRunsTheReviewInTheSandbox(t *testing.T) {
 	}
 }
 
+func TestBuildServeEnginesMountsTheAgyTokenFile(t *testing.T) {
+	rec := t.TempDir()
+	cfg := sandboxEngineConfig(t, "{}", rec)
+	useFakeAgy(t, cfg, "{}")
+	rev, _, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := rev.(*clireview.Reviewer).CLI.(agentcli.Agy)
+	realBin, _ := filepath.EvalSymlinks(cfg.CLI.AgyBin)
+	want := []agentcli.Mount{{Path: cfg.CLI.SkillDir, ReadOnly: true}, {Path: filepath.Dir(realBin), ReadOnly: true}, {Path: cfg.CLI.AgyToken}}
+	if a.Sandbox == nil || a.Bin != realBin || !mountsEqual(a.Sandbox.Mounts, want) {
+		t.Fatalf("agy %+v sandbox %+v", a, a.Sandbox)
+	}
+	cfg.Sandbox.AgyDir = t.TempDir()
+	if _, _, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil); err == nil ||
+		!strings.Contains(err.Error(), serveconfig.EnvSandboxAgyDir) {
+		t.Fatalf("agy outside its install dir: %v", err)
+	}
+}
+
 func TestBuildServeEnginesSandboxChecks(t *testing.T) {
 	cases := []struct {
 		name string
