@@ -84,7 +84,8 @@ echo '{"type":"item.completed","item":{"type":"agent_message","text":"from the s
 	if got != `{"summary":"ok","findings":[]}` {
 		t.Fatalf("message %q", got)
 	}
-	want := []string{"exec", "--json", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only",
+	want := []string{"exec", "--json", "--skip-git-repo-check", "--ephemeral",
+		"--dangerously-bypass-approvals-and-sandbox",
 		"-C", f.repo, "-o", filepath.Join(f.run.Out, "last.json"), "-c", "project_doc_max_bytes=0",
 		"--output-schema", filepath.Join(f.run.Out, "schema.json"), "-m", "gpt-6.1-sol",
 		"-c", `model_reasoning_effort="medium"`, "-"}

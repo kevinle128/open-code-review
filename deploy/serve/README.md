@@ -197,7 +197,13 @@ At startup the service checks that the review CLI binary, the skill file and
 the CLI credential file can be read, and stops with the variable name when
 one cannot. How each CLI runs:
 
-- Codex: `codex exec --json --ephemeral --sandbox read-only` in the checkout,
+- Codex: `codex exec --json --ephemeral --dangerously-bypass-approvals-and-sandbox`
+  in the checkout. Codex's own sandbox (bubblewrap) needs unprivileged user
+  namespaces, which Ubuntu 24.04 denies by default, so the container is the
+  only boundary: a PR that tricks codex into running a network command could
+  send the mounted `auth.json` out. Run it only on repositories whose authors
+  you trust, or use `OCR_SERVE_REVIEW_CLI=claude`, which has no shell tool.
+  It runs
   with `project_doc_max_bytes=0` so the checkout's `AGENTS.md`, which the PR
   author controls, is not loaded, and the answer schema passed with
   `--output-schema`.

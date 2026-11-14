@@ -32,7 +32,7 @@ type Invocation struct {
 	Getenv   func(string) string
 }
 
-// CLI is one coding-agent CLI. Exec runs the prompt read-only and returns
+// CLI is one coding-agent CLI. Exec runs the prompt and returns
 // the agent's final message.
 type CLI interface {
 	Name() string
@@ -61,9 +61,13 @@ func (inv Invocation) process(bin string, args, env []string) (Process, error) {
 	}, nil
 }
 
-// Codex runs `codex exec` in a read-only sandbox. AuthFile is the host
-// auth.json; the run home links to it, so a token refresh reaches the host
-// file and the host's config, sessions and logs stay out of the run.
+// Codex runs `codex exec` without its own sandbox: the bubblewrap sandbox
+// needs unprivileged user namespaces, which the container host does not
+// allow, and with it codex cannot run a single tool. The container is the
+// boundary instead; the prompt forbids edits and network commands. AuthFile
+// is the host auth.json; the run home links to it, so a token refresh
+// reaches the host file and the host's config, sessions and logs stay out
+// of the run.
 type Codex struct {
 	Bin      string
 	Model    string
@@ -84,7 +88,7 @@ func (c Codex) Exec(ctx context.Context, inv Invocation) (string, error) {
 	defer syncAuthBack(link, c.AuthFile)
 	last := filepath.Join(inv.Run.Out, "last.json")
 	args := []string{"exec", "--json", "--skip-git-repo-check", "--ephemeral",
-		"--sandbox", "read-only", "-C", inv.RepoDir, "-o", last,
+		"--dangerously-bypass-approvals-and-sandbox", "-C", inv.RepoDir, "-o", last,
 		"-c", "project_doc_max_bytes=0"}
 	if len(inv.Schema) > 0 {
 		schema := filepath.Join(inv.Run.Out, "schema.json")
