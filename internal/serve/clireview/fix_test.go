@@ -96,7 +96,7 @@ func TestFixWritesInputsAndParsesTheAnswer(t *testing.T) {
 		t.Fatalf("invocation %+v", inv)
 	}
 	for _, want := range []string{"in fix mode", "Service fix mode (ocr serve)", "pr-body-contract.md", "git diff " + strings.Repeat("a", 40) + ".." + strings.Repeat("b", 40),
-		`"id": "F2"`, "Output language", "report_only"} {
+		`"id": "F2"`, "Output language", "report_only", "Fix only the `real` findings", "Never edit the PR description", "`out_of_scope` is true"} {
 		if !strings.Contains(inv.Prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, inv.Prompt)
 		}
@@ -116,6 +116,21 @@ func TestFixWritesInputsAndParsesTheAnswer(t *testing.T) {
 
 // TestFixReportOnly gives a report-only run no edit tools and turns a fixed
 // entry into a reported one.
+// TestFixedPRLevelFindingIsReported never counts a finding about the PR as
+// a whole as fixed.
+func TestFixedPRLevelFindingIsReported(t *testing.T) {
+	cli := &fixCLI{msg: `{"fixed": [{"id": "F3", "path": "", "line": 0, "problem": "No test plan.", "fix": "Edited the body."}],
+ "report_only": [], "tests": {"command": "", "passed": true, "output_tail": ""}, "summary": "", "commit_message": ""}`}
+	fx, _ := newFixer(t, cli)
+	res, err := fx.Fix(context.Background(), fixRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Fixed) != 0 || len(res.Reported) != 1 || res.Reported[0].ID != "F3" || res.Reported[0].ProposedFix != "Edited the body." {
+		t.Fatalf("result %+v", res)
+	}
+}
+
 func TestFixReportOnly(t *testing.T) {
 	cli := &fixCLI{msg: fixAnswerJSON}
 	fx, _ := newFixer(t, cli)
@@ -125,7 +140,8 @@ func TestFixReportOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Fixed) != 0 || len(res.Reported) != 2 || res.Reported[1].ID != "F1" || res.Reported[1].ProposedFix != "Return the value." {
+	if len(res.Fixed) != 0 || len(res.Reported) != 2 || res.Reported[1].ID != "F1" || res.Reported[1].ProposedFix != "Return the value." ||
+		!strings.Contains(cli.inv.Prompt, "Do not fix anything") {
 		t.Fatalf("result %+v", res)
 	}
 	inv := cli.inv
