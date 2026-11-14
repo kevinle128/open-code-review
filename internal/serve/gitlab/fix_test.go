@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -95,83 +94,6 @@ func TestCommitIdentity(t *testing.T) {
 	}
 }
 
-func TestReplyAndResolveThread(t *testing.T) {
-	f := newFake(t)
-	f.json("POST "+mrBase+"/discussions/abc123/notes", 201, map[string]any{"id": 1})
-	f.json("PUT "+mrBase+"/discussions/abc123", 200, map[string]any{"id": "abc123"})
-	fg := newTestForge(t, f, nil)
-	ctx := context.Background()
-	if err := fg.ReplyThread(ctx, testRef, "abc123", "skipped: needs a decision"); err != nil {
-		t.Fatal(err)
-	}
-	if err := fg.ResolveThread(ctx, testRef, "abc123"); err != nil {
-		t.Fatal(err)
-	}
-	w := f.writes()
-	if len(w) != 2 {
-		t.Fatalf("writes %+v", w)
-	}
-	var body struct{ Body string }
-	_ = json.Unmarshal(w[0].Body, &body)
-	if w[0].Path != mrBase+"/discussions/abc123/notes" || body.Body != "skipped: needs a decision" {
-		t.Fatalf("reply %+v", w[0])
-	}
-	if w[1].Method != http.MethodPut || w[1].Query.Get("resolved") != "true" {
-		t.Fatalf("resolve %+v", w[1])
-	}
-	for _, bad := range []string{"", "../x", "a b"} {
-		if err := fg.ReplyThread(ctx, testRef, bad, "x"); err == nil {
-			t.Fatalf("thread id %q accepted", bad)
-		}
-		if err := fg.ResolveThread(ctx, testRef, bad); err == nil {
-			t.Fatalf("thread id %q accepted", bad)
-		}
-	}
-	if err := fg.ReplyThread(ctx, testRef, "abc123", ""); err == nil {
-		t.Fatal("empty reply accepted")
-	}
-	if err := fg.ResolveThread(ctx, forge.PRRef{}, "abc123"); err == nil {
-		t.Fatal("empty ref accepted")
-	}
-	f.fail("PUT "+mrBase+"/discussions/abc123", 403)
-	if err := fg.ResolveThread(ctx, testRef, "abc123"); !isStatus(err, 403) {
-		t.Fatalf("403: %v", err)
-	}
-}
-
-// TestListOCRThreadsPlaceAndReplies reads where a thread sits and keeps the
-// replies of people, not the bot's own or system notes.
-func TestListOCRThreadsPlaceAndReplies(t *testing.T) {
-	m := newMRFake(t)
-	human := apiUser{ID: 7, Username: "dev1"}
-	m.addDiscussion(botUser, forge.FindingTag("r1-aaaa-01")+"\nbody")
-	line, old := 12, 9
-	d := &m.discussions[0]
-	d.Notes[0].Position = &notePosition{NewPath: "a.go", NewLine: &line}
-	d.Notes = append(d.Notes,
-		apiNote{ID: 2, Body: "This is intended.", Author: human},
-		apiNote{ID: 3, Body: "Skipped by the fix run.", Author: botUser},
-		apiNote{ID: 4, Body: "resolved the thread", Author: human, System: true})
-	m.addDiscussion(botUser, forge.FindingTag("r1-aaaa-02")+"\nbody")
-	m.discussions[1].Notes[0].Position = &notePosition{OldPath: "gone.go", OldLine: &old}
-	fg := newTestForge(t, m.fakeGitLab, nil)
-	threads, err := fg.ListOCRThreads(context.Background(), testRef)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(threads) != 2 || threads[0].Path != "a.go" || threads[0].Line != 12 || threads[1].Path != "gone.go" || threads[1].Line != 9 {
-		t.Fatalf("threads %+v", threads)
-	}
-	if fmt.Sprint(threads[0].Replies) != fmt.Sprint([]forge.Reply{{Author: "dev1", Body: "This is intended."}}) || threads[1].Replies != nil {
-		t.Fatalf("replies %+v / %+v", threads[0].Replies, threads[1].Replies)
-	}
-	if threads[0].Body != forge.FindingTag("r1-aaaa-01")+"\nbody" {
-		t.Fatalf("body %q", threads[0].Body)
-	}
-}
-
-// TestBotPushIsBotSender proves the bot's own push to the source branch,
-// which GitLab reports as a merge request update with oldrev, is filtered.
 func TestBotPushIsBotSender(t *testing.T) {
 	f := offlineForge(t, serveconfig.GitLabConfig{BotUsername: "pr-review"})
 	var p map[string]any

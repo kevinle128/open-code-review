@@ -76,16 +76,13 @@ func TestNewValidation(t *testing.T) {
 }
 
 func TestEndpoints(t *testing.T) {
-	cases := []struct{ api, graphql, web string }{
-		{"https://api.github.com", "https://api.github.com/graphql", "https://github.com"},
-		{"https://ghe.example.com/api/v3", "https://ghe.example.com/api/graphql", "https://ghe.example.com"},
-		{"http://127.0.0.1:9999", "http://127.0.0.1:9999/graphql", "http://127.0.0.1:9999"},
+	cases := []struct{ api, web string }{
+		{"https://api.github.com", "https://github.com"},
+		{"https://ghe.example.com/api/v3", "https://ghe.example.com"},
+		{"http://127.0.0.1:9999", "http://127.0.0.1:9999"},
 	}
 	for _, tc := range cases {
 		u, _ := url.Parse(tc.api)
-		if got := graphqlEndpoint(tc.api); got != tc.graphql {
-			t.Errorf("graphqlEndpoint(%s) = %s", tc.api, got)
-		}
 		if got := webBase(u); got != tc.web {
 			t.Errorf("webBase(%s) = %s", tc.api, got)
 		}

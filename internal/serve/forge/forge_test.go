@@ -16,20 +16,3 @@ func TestPRRefKey_IgnoresPlatformIDs(t *testing.T) {
 		t.Fatal("platform must be part of the key")
 	}
 }
-
-func TestFindingTag_RoundTrip(t *testing.T) {
-	id := "r1-1a2b3c4d-0f0e0d0c"
-	body := FindingTag(id) + "\n**[bug]** text"
-	got, ok := ParseFindingID(body)
-	if !ok || got != id {
-		t.Fatalf("got %q %v", got, ok)
-	}
-}
-
-func TestParseFindingID_Absent(t *testing.T) {
-	for _, body := range []string{"", "plain text", "<!-- ocr-finding: -->", "<!-- ocr-finding:bad id -->"} {
-		if id, ok := ParseFindingID(body); ok {
-			t.Fatalf("%q parsed as %q", body, id)
-		}
-	}
-}

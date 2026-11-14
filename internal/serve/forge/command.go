@@ -6,11 +6,11 @@ package forge
 import "strings"
 
 // CommandLine returns the first non-empty line of a comment in slash form.
-// A line that starts by tagging the bot with one of names ("@bot fix",
-// "@bot: /review --effort=high") comes back as "/fix" or
+// A line that starts by tagging the bot with one of names ("@bot review",
+// "@bot: /review --effort=high") comes back as "/review" or
 // "/review --effort=high", and mentioned is true; a bare "@bot" gives an
-// empty line. Any other line comes back unchanged, so "/fix" still works and
-// "@someone fix" is not addressed to the bot. Names match without regard to
+// empty line. Any other line comes back unchanged, so "/review" still works
+// and "@someone review" is not addressed to the bot. Names match without regard to
 // case and must end at a space, ":", "," or the end of the line, so the name
 // "bot" does not match "@bot-x".
 func CommandLine(body string, names []string) (line string, mentioned bool) {

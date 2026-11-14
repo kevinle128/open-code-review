@@ -142,8 +142,8 @@ func TestParseFixtures(t *testing.T) {
 			}
 		}},
 		{"pull_request_review_thread_resolved.json", "pull_request_review_thread", func(t *testing.T, ev forge.Event) {
-			if ev.Kind != forge.EventThreadResolved || ev.Ref != testRef || !ev.PR.Draft || !ev.PR.AuthorIsBot {
-				t.Fatalf("event = %+v pr = %+v", ev, ev.PR)
+			if ev.Kind != forge.EventIgnored {
+				t.Fatalf("event = %+v", ev)
 			}
 		}},
 		{"issue_comment_created.json", "issue_comment", func(t *testing.T, ev forge.Event) {

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 )
 
 // ErrNotFound matches, through errors.Is, a forge answer that the PR or file
@@ -73,15 +72,14 @@ const (
 type EventKind string
 
 const (
-	EventOpened         EventKind = "opened"
-	EventReady          EventKind = "ready"
-	EventReopened       EventKind = "reopened"
-	EventPush           EventKind = "push"
-	EventClosed         EventKind = "closed"
-	EventThreadResolved EventKind = "thread-resolved"
-	EventNote           EventKind = "note"
-	EventCommand        EventKind = "command"
-	EventIgnored        EventKind = "ignored"
+	EventOpened   EventKind = "opened"
+	EventReady    EventKind = "ready"
+	EventReopened EventKind = "reopened"
+	EventPush     EventKind = "push"
+	EventClosed   EventKind = "closed"
+	EventNote     EventKind = "note"
+	EventCommand  EventKind = "command"
+	EventIgnored  EventKind = "ignored"
 )
 
 // Event is a verified webhook delivery in platform-neutral form. PR is set
@@ -100,39 +98,6 @@ type Event struct {
 	CommentID       string
 	CommentBody     string
 	PrevCommentBody string
-}
-
-// Finding is one review finding ready to post.
-type Finding struct {
-	ID             string
-	Path           string
-	StartLine      int
-	EndLine        int
-	Category       string
-	Severity       string
-	Content        string
-	ExistingCode   string
-	SuggestionCode string
-}
-
-// Thread is a resolvable thread whose root comment the service posted.
-// Path and Line are where the thread sits (Line is 0 for a file-level
-// thread); Body is the root comment as posted. Replies are the later
-// comments in the thread, without the ones the service wrote.
-type Thread struct {
-	ID        string
-	FindingID string
-	Resolved  bool
-	Path      string
-	Line      int
-	Body      string
-	Replies   []Reply
-}
-
-// Reply is a comment a person added to a finding thread.
-type Reply struct {
-	Author string
-	Body   string
 }
 
 // Identity is the git author the service commits as.
@@ -166,39 +131,14 @@ const (
 	ReactionFailure Reaction = "failure"
 )
 
-// PostResult counts how findings were placed.
-type PostResult struct {
-	Posted    int
-	Relocated int
-	FileLevel int
-	General   int
-	Skipped   int
-}
-
 // SummaryTag is the first line of the sticky summary. Forges find the summary
 // by this tag rather than by the state marker, so a damaged marker is still
 // found and reported instead of silently starting over.
 const SummaryTag = "<!-- ocr-serve-summary -->"
 
-var findingTagRE = regexp.MustCompile(`<!-- ocr-finding:([A-Za-z0-9_-]+) -->`)
-
-// FindingTag returns the hidden tag that starts every finding thread.
-func FindingTag(id string) string {
-	return "<!-- ocr-finding:" + id + " -->"
-}
-
-// ParseFindingID returns the id of the first finding tag in body.
-func ParseFindingID(body string) (string, bool) {
-	m := findingTagRE.FindStringSubmatch(body)
-	if m == nil {
-		return "", false
-	}
-	return m[1], true
-}
-
-// Forge is the platform client used by the orchestrator. Methods that read
-// service-owned state (GetSummary, ListOCRThreads) must only return comments
-// authored by the service identity, so a human cannot forge a marker.
+// Forge is the platform client used by the orchestrator. GetSummary, which
+// reads service-owned state, must only return a comment authored by the
+// service identity, so a human cannot forge a marker.
 type Forge interface {
 	Platform() Platform
 	Verify(h http.Header, body []byte) error
@@ -211,9 +151,6 @@ type Forge interface {
 	// GetSummary returns the bot-authored comment that starts with SummaryTag, or nil.
 	GetSummary(ctx context.Context, ref PRRef) (*Comment, error)
 	UpsertSummary(ctx context.Context, ref PRRef, body string) error
-	// ListOCRThreads returns threads whose bot-authored root carries a finding tag.
-	ListOCRThreads(ctx context.Context, ref PRRef) ([]Thread, error)
-	PostFindings(ctx context.Context, pr PR, fs []Finding, render func(Finding, Placement) string) (PostResult, error)
 	PostNote(ctx context.Context, ref PRRef, body string) error
 	React(ctx context.Context, ref PRRef, commentID string, r Reaction) error
 	Clone(ctx context.Context, pr PR) (CloneSpec, error)
@@ -227,11 +164,25 @@ type Forge interface {
 	PushSpec(ctx context.Context, pr PR) (CloneSpec, error)
 	// CommitIdentity is the git author for commits the service pushes.
 	CommitIdentity(ctx context.Context, ref PRRef) (Identity, error)
-	// ReplyThread adds a reply to a thread from ListOCRThreads.
-	ReplyThread(ctx context.Context, ref PRRef, threadID, body string) error
-	// ResolveThread resolves a thread from ListOCRThreads.
-	ResolveThread(ctx context.Context, ref PRRef, threadID string) error
+	// SetStatus sets the StatusContext commit status of sha, a commit of
+	// the PR head branch. description is one short line.
+	SetStatus(ctx context.Context, pr PR, sha string, st CommitState, description string) error
 }
+
+// StatusContext names the commit status the service sets on the PR head.
+// Branch protection (GitHub) or "Pipelines must succeed" (GitLab) makes it
+// a merge gate.
+const StatusContext = "ocr-review"
+
+// CommitState is the state of the StatusContext commit status. Each forge
+// maps it to its own spelling.
+type CommitState string
+
+const (
+	StatusPending CommitState = "pending"
+	StatusSuccess CommitState = "success"
+	StatusFailure CommitState = "failure"
+)
 
 // ErrFork is returned by PushSpec for a PR whose head branch is in a fork.
 var ErrFork = errors.New("the head branch is in a fork")

@@ -100,63 +100,6 @@ func TestCommitIdentityErrors(t *testing.T) {
 	}
 }
 
-func TestReplyAndResolveThread(t *testing.T) {
-	fa := newFakeAPI(t)
-	f, _ := fa.forge(t)
-	ctx := context.Background()
-	if err := f.ReplyThread(ctx, testRef, "T1", "skipped: needs a decision"); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.ResolveThread(ctx, testRef, "T1"); err != nil {
-		t.Fatal(err)
-	}
-	if len(fa.mutations) != 2 {
-		t.Fatalf("mutations = %d", len(fa.mutations))
-	}
-	reply, resolve := fa.mutations[0], fa.mutations[1]
-	if !strings.Contains(reply["query"].(string), "addPullRequestReviewThreadReply") ||
-		reply["variables"].(map[string]any)["body"] != "skipped: needs a decision" ||
-		reply["variables"].(map[string]any)["thread"] != "T1" {
-		t.Fatalf("reply = %v", reply)
-	}
-	if !strings.Contains(resolve["query"].(string), "resolveReviewThread") || resolve["variables"].(map[string]any)["thread"] != "T1" {
-		t.Fatalf("resolve = %v", resolve)
-	}
-}
-
-func TestReplyAndResolveThreadErrors(t *testing.T) {
-	fa := newFakeAPI(t)
-	f, _ := fa.forge(t)
-	ctx := context.Background()
-	if err := f.ReplyThread(ctx, testRef, "", "x"); err == nil {
-		t.Fatal("empty thread id accepted")
-	}
-	if err := f.ResolveThread(ctx, testRef, ""); err == nil {
-		t.Fatal("empty thread id accepted")
-	}
-	if err := f.ResolveThread(ctx, forge.PRRef{Repo: "bad"}, "T1"); err == nil {
-		t.Fatal("bad ref accepted")
-	}
-	fa.mutationErr = "Resource not accessible by integration"
-	if err := f.ResolveThread(ctx, testRef, "T1"); err == nil || !strings.Contains(err.Error(), "not accessible") {
-		t.Fatalf("err = %v", err)
-	}
-	fa.mutationErr = ""
-	fa.override["POST /graphql"] = func(w http.ResponseWriter, r *http.Request) { writeRaw(w, 200, `{`) }
-	if err := f.ReplyThread(ctx, testRef, "T1", "x"); err == nil || !strings.Contains(err.Error(), "decode") {
-		t.Fatalf("err = %v", err)
-	}
-	fa.override["POST /graphql"] = func(w http.ResponseWriter, r *http.Request) { writeRaw(w, 502, `{}`) }
-	if err := f.ReplyThread(ctx, testRef, "T1", "x"); err == nil {
-		t.Fatal("HTTP error ignored")
-	}
-	if n := fa.count("POST /graphql"); n != 3 {
-		t.Fatalf("graphql calls = %d, want 3 (a 5xx mutation is not resent)", n)
-	}
-}
-
-// TestBotPushIsBotSender proves the App's own push to the head branch, which
-// GitHub reports as pull_request synchronize sent by the App, is filtered.
 func TestBotPushIsBotSender(t *testing.T) {
 	fa := newFakeAPI(t)
 	f, _ := fa.forge(t)

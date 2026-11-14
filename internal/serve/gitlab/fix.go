@@ -5,10 +5,7 @@ package gitlab
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	"regexp"
 
 	"github.com/alibaba/open-code-review/internal/serve/forge"
@@ -38,37 +35,3 @@ func (f *Forge) CommitIdentity(ctx context.Context, _ forge.PRRef) (forge.Identi
 }
 
 var discussionIDRE = regexp.MustCompile(`^[A-Za-z0-9]+$`)
-
-func (f *Forge) discussionPath(ref forge.PRRef, threadID string) (string, error) {
-	if !discussionIDRE.MatchString(threadID) {
-		return "", fmt.Errorf("gitlab: invalid discussion id %q", threadID)
-	}
-	path, err := mrPath(ref)
-	if err != nil {
-		return "", err
-	}
-	return path + "/discussions/" + threadID, nil
-}
-
-// ReplyThread implements forge.Forge.
-func (f *Forge) ReplyThread(ctx context.Context, ref forge.PRRef, threadID, body string) error {
-	path, err := f.discussionPath(ref, threadID)
-	if err != nil {
-		return err
-	}
-	if body == "" {
-		return errors.New("gitlab: reply: body is required")
-	}
-	_, err = f.c.call(ctx, http.MethodPost, path+"/notes", nil, map[string]string{"body": body}, nil)
-	return err
-}
-
-// ResolveThread implements forge.Forge.
-func (f *Forge) ResolveThread(ctx context.Context, ref forge.PRRef, threadID string) error {
-	path, err := f.discussionPath(ref, threadID)
-	if err != nil {
-		return err
-	}
-	_, err = f.c.call(ctx, http.MethodPut, path, url.Values{"resolved": {"true"}}, nil, nil)
-	return err
-}

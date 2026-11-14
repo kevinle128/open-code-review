@@ -44,17 +44,16 @@ const (
 
 // Forge is the GitHub App client. It is safe for concurrent use.
 type Forge struct {
-	appID      int64
-	key        *rsa.PrivateKey
-	secret     []byte
-	apiURL     string
-	api        *url.URL
-	graphqlURL string
-	webURL     string
-	httpc      *http.Client
-	now        func() time.Time
-	sleep      forge.Sleeper
-	log        *slog.Logger
+	appID  int64
+	key    *rsa.PrivateKey
+	secret []byte
+	apiURL string
+	api    *url.URL
+	webURL string
+	httpc  *http.Client
+	now    func() time.Time
+	sleep  forge.Sleeper
+	log    *slog.Logger
 
 	tokenMu sync.Mutex
 	tokens  map[int64]*tokenSlot
@@ -110,18 +109,17 @@ func New(cfg serveconfig.GitHubConfig, httpc *http.Client, now func() time.Time,
 		sleep = forge.SleepContext
 	}
 	return &Forge{
-		appID:      cfg.AppID,
-		key:        key,
-		secret:     []byte(cfg.WebhookSecret),
-		apiURL:     apiURL,
-		api:        api,
-		graphqlURL: graphqlEndpoint(apiURL),
-		webURL:     webBase(api),
-		httpc:      httpc,
-		now:        now,
-		sleep:      sleep,
-		log:        slog.Default(),
-		tokens:     map[int64]*tokenSlot{},
+		appID:  cfg.AppID,
+		key:    key,
+		secret: []byte(cfg.WebhookSecret),
+		apiURL: apiURL,
+		api:    api,
+		webURL: webBase(api),
+		httpc:  httpc,
+		now:    now,
+		sleep:  sleep,
+		log:    slog.Default(),
+		tokens: map[int64]*tokenSlot{},
 	}, nil
 }
 
@@ -145,15 +143,6 @@ func parsePrivateKey(pemBytes []byte) (*rsa.PrivateKey, error) {
 		return nil, errors.New("private key: not an RSA private key")
 	}
 	return key, nil
-}
-
-// graphqlEndpoint maps the REST base to the GraphQL endpoint. GitHub
-// Enterprise Server serves REST under /api/v3 and GraphQL under /api/graphql.
-func graphqlEndpoint(apiURL string) string {
-	if base, ok := strings.CutSuffix(apiURL, "/api/v3"); ok {
-		return base + "/api/graphql"
-	}
-	return apiURL + "/graphql"
 }
 
 // webBase is the host that serves git over HTTPS for the API host.

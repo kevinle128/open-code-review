@@ -25,7 +25,7 @@ func TestGetSummaryOwnership(t *testing.T) {
 		t.Fatalf("empty PR: %v, %v", c, err)
 	}
 
-	forged := forge.SummaryTag + "\nfake\n" + state.Encode(state.Initial(3))
+	forged := forge.SummaryTag + "\nfake\n" + state.Encode(state.Marker{Status: state.ChainSuccess, Max: 3})
 	fa.addComment(&fa.issueComments, forged, "mallory", "User")
 	fa.addComment(&fa.issueComments, forged, "mallory[bot]", "User")
 	fa.addComment(&fa.issueComments, forged, "other-app[bot]", "Bot")
@@ -37,14 +37,14 @@ func TestGetSummaryOwnership(t *testing.T) {
 
 	// A bot comment that only quotes the tag or a marker, such as a finding
 	// on the line that defines them, is not the summary.
-	fa.addComment(&fa.issueComments, "lost first line\n"+state.Encode(state.Initial(3)), "OCR-Test[bot]", "Bot")
-	fa.addComment(&fa.issueComments, forge.FindingTag("r1-aaaaaaaa-01020304")+"\nquote "+forge.SummaryTag, testBot, "Bot")
+	fa.addComment(&fa.issueComments, "lost first line\n"+state.Encode(state.Marker{Status: state.ChainSuccess, Max: 3}), "OCR-Test[bot]", "Bot")
+	fa.addComment(&fa.issueComments, "<!-- ocr-finding:r1-aaaaaaaa-01020304 -->"+"\nquote "+forge.SummaryTag, testBot, "Bot")
 	c, err = f.GetSummary(ctx, testRef)
 	if err != nil || c != nil {
 		t.Fatalf("a comment that does not start with the summary tag was trusted: %+v, %v", c, err)
 	}
 
-	summary := forge.SummaryTag + "\n" + state.Encode(state.Initial(3))
+	summary := forge.SummaryTag + "\n" + state.Encode(state.Marker{Status: state.ChainSuccess, Max: 3})
 	own := fa.addComment(&fa.issueComments, summary, "OCR-Test[bot]", "Bot")
 	c, err = f.GetSummary(ctx, testRef)
 	if err != nil || c == nil || c.Body != summary || c.ID != strconv.FormatInt(own["id"].(int64), 10) {
@@ -55,7 +55,7 @@ func TestGetSummaryOwnership(t *testing.T) {
 func TestUpsertSummaryLeavesFindingCommentAlone(t *testing.T) {
 	fa := newFakeAPI(t)
 	f, _ := fa.forge(t)
-	fa.addComment(&fa.issueComments, forge.FindingTag("r1-aaaaaaaa-01020304")+"\nquote "+forge.SummaryTag, testBot, "Bot")
+	fa.addComment(&fa.issueComments, "<!-- ocr-finding:r1-aaaaaaaa-01020304 -->"+"\nquote "+forge.SummaryTag, testBot, "Bot")
 	if err := f.UpsertSummary(context.Background(), testRef, "progress "+forge.SummaryTag); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestUpsertSummary(t *testing.T) {
 	f, _ := fa.forge(t)
 	ctx := context.Background()
 
-	first := forge.SummaryTag + "\nreviewing\n" + state.Encode(state.Initial(3))
+	first := forge.SummaryTag + "\nreviewing\n" + state.Encode(state.Marker{Status: state.ChainSuccess, Max: 3})
 	if err := f.UpsertSummary(ctx, testRef, first); err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestUpsertSummary(t *testing.T) {
 	}
 	patched := fa.patches[0]["body"].(string)
 	if fa.patches[0]["id"] != id || !strings.HasPrefix(patched, forge.SummaryTag+"\nprogress only") ||
-		!strings.Contains(patched, state.Encode(state.Initial(3))) {
+		!strings.Contains(patched, state.Encode(state.Marker{Status: state.ChainSuccess, Max: 3})) {
 		t.Fatalf("patch = %+v", fa.patches[0])
 	}
 

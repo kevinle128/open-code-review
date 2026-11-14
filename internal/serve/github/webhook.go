@@ -99,11 +99,6 @@ func (f *Forge) ParseEvent(h http.Header, body []byte) (forge.Event, error) {
 			return ev, nil
 		}
 		return withPull(ev, kind, p)
-	case "pull_request_review_thread":
-		if p.Action != "resolved" {
-			return ev, nil
-		}
-		return withPull(ev, forge.EventThreadResolved, p)
 	case "issue_comment":
 		return f.commentEvent(ev, p)
 	default:

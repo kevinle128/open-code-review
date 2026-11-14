@@ -4,7 +4,6 @@
 package gitlab
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -214,25 +213,10 @@ func (f *Forge) toPR(ref forge.PRRef, mr apiMR) forge.PR {
 }
 
 type apiNote struct {
-	ID         int64         `json:"id"`
-	Body       string        `json:"body"`
-	Author     apiUser       `json:"author"`
-	System     bool          `json:"system"`
-	Resolvable bool          `json:"resolvable"`
-	Resolved   bool          `json:"resolved"`
-	Position   *notePosition `json:"position"`
-}
-
-type notePosition struct {
-	NewPath string `json:"new_path"`
-	OldPath string `json:"old_path"`
-	NewLine *int   `json:"new_line"`
-	OldLine *int   `json:"old_line"`
-}
-
-type apiDiscussion struct {
-	ID    string    `json:"id"`
-	Notes []apiNote `json:"notes"`
+	ID     int64   `json:"id"`
+	Body   string  `json:"body"`
+	Author apiUser `json:"author"`
+	System bool    `json:"system"`
 }
 
 // summaryNote returns the newest bot-authored note that starts with the
@@ -297,65 +281,6 @@ func (f *Forge) PostNote(ctx context.Context, ref forge.PRRef, body string) erro
 	}
 	_, err = f.c.call(ctx, http.MethodPost, path+"/notes", nil, map[string]string{"body": body}, nil)
 	return err
-}
-
-// botDiscussions lists the discussions whose first note the bot wrote.
-func (f *Forge) botDiscussions(ctx context.Context, ref forge.PRRef) ([]apiDiscussion, error) {
-	path, err := mrPath(ref)
-	if err != nil {
-		return nil, err
-	}
-	botID, err := f.BotUserID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	all, err := paginate[apiDiscussion](ctx, f.c, path+"/discussions", nil)
-	if err != nil {
-		return nil, err
-	}
-	out := all[:0]
-	for _, d := range all {
-		if len(d.Notes) > 0 && d.Notes[0].Author.ID == botID && !d.Notes[0].System {
-			out = append(out, d)
-		}
-	}
-	return out, nil
-}
-
-// ListOCRThreads implements forge.Forge with one paginated read, because the
-// poller calls it for every waiting MR.
-func (f *Forge) ListOCRThreads(ctx context.Context, ref forge.PRRef) ([]forge.Thread, error) {
-	ds, err := f.botDiscussions(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
-	var out []forge.Thread
-	for _, d := range ds {
-		root := d.Notes[0]
-		id, ok := forge.ParseFindingID(root.Body)
-		if !ok || !root.Resolvable {
-			continue
-		}
-		t := forge.Thread{ID: d.ID, FindingID: id, Resolved: root.Resolved, Body: root.Body}
-		if p := root.Position; p != nil {
-			t.Path = cmp.Or(p.NewPath, p.OldPath)
-			switch {
-			case p.NewLine != nil:
-				t.Line = *p.NewLine
-			case p.OldLine != nil:
-				t.Line = *p.OldLine
-			}
-		}
-		botID, _ := f.cachedBot()
-		for _, n := range d.Notes[1:] {
-			if n.System || n.Author.ID == botID {
-				continue
-			}
-			t.Replies = append(t.Replies, forge.Reply{Author: n.Author.Username, Body: n.Body})
-		}
-		out = append(out, t)
-	}
-	return out, nil
 }
 
 var emojiNames = map[forge.Reaction]string{
