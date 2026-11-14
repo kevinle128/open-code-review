@@ -25,6 +25,25 @@ const (
 	EnvCLIHome        = "OCR_SERVE_CLI_HOME"
 	EnvCodexAuth      = "OCR_SERVE_CODEX_AUTH"
 	EnvClaudeSettings = "OCR_SERVE_CLAUDE_SETTINGS"
+
+	EnvBatchLines       = "OCR_SERVE_BATCH_LINES"
+	EnvBatchFiles       = "OCR_SERVE_BATCH_FILES"
+	EnvBatchConcurrency = "OCR_SERVE_BATCH_CONCURRENCY"
+)
+
+// Review batch limits. One CLI run over a large PR reads a lot and reports
+// little, so the CLI engine reviews the files in batches of this size.
+const (
+	DefaultBatchLines       = 1500
+	DefaultBatchFiles       = 25
+	DefaultBatchConcurrency = 1
+
+	MinBatchLines       = 100
+	MaxBatchLines       = 50000
+	MinBatchFiles       = 1
+	MaxBatchFiles       = 500
+	MinBatchConcurrency = 1
+	MaxBatchConcurrency = 4
 )
 
 // Engines and agent CLIs.
@@ -53,7 +72,9 @@ var (
 
 // CLIConfig holds the settings of the CLI review engine, which runs an
 // installed coding-agent CLI on the checkout. ReviewCLI runs reviews;
-// FixCLI runs /fix. Paths are absolute.
+// FixCLI runs /fix. Paths are absolute. A review runs the CLI once per
+// batch of at most BatchFiles files and about BatchLines changed lines,
+// BatchConcurrency batches at a time.
 type CLIConfig struct {
 	ReviewCLI      string
 	FixCLI         string
@@ -66,6 +87,10 @@ type CLIConfig struct {
 	Home           string
 	CodexAuth      string
 	ClaudeSettings string
+
+	BatchLines       int
+	BatchFiles       int
+	BatchConcurrency int
 }
 
 // Bin returns the configured executable of the named CLI.
@@ -93,6 +118,10 @@ func (l *loader) cli(dataDir string) CLIConfig {
 		Home:           l.absPath(EnvCLIHome, filepath.Join(dataDir, cliHomeName)),
 		CodexAuth:      l.absPath(EnvCodexAuth, ""),
 		ClaudeSettings: l.absPath(EnvClaudeSettings, ""),
+
+		BatchLines:       l.intIn(EnvBatchLines, DefaultBatchLines, MinBatchLines, MaxBatchLines),
+		BatchFiles:       l.intIn(EnvBatchFiles, DefaultBatchFiles, MinBatchFiles, MaxBatchFiles),
+		BatchConcurrency: l.intIn(EnvBatchConcurrency, DefaultBatchConcurrency, MinBatchConcurrency, MaxBatchConcurrency),
 	}
 }
 

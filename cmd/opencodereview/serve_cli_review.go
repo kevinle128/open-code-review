@@ -75,6 +75,10 @@ func (s serveSelector) Select(ctx context.Context, req review.Request) (clirevie
 		switch {
 		case e.WillReview:
 			sel.Paths = append(sel.Paths, e.Path)
+			if sel.Lines == nil {
+				sel.Lines = map[string]int{}
+			}
+			sel.Lines[e.Path] = int(e.Insertions + e.Deletions)
 		// The OCR engine drops provider directories before it selects, so
 		// its skipped counts leave them out; keep the counts comparable.
 		case e.ExcludeReason != agent.ExcludeProviderDirectory:
@@ -132,7 +136,8 @@ func buildServeEngines(ctx context.Context, cfg *serveconfig.Config, getenv func
 	}
 	rev := &clireview.Reviewer{
 		Selector: serveSelector{ocr: ocr}, CLI: reviewCLI, Homes: homes,
-		SkillDir: c.SkillDir, Getenv: getenv,
+		SkillDir: c.SkillDir, Getenv: getenv, Log: log,
+		Batching: clireview.Batching{Lines: c.BatchLines, Files: c.BatchFiles, Concurrency: c.BatchConcurrency},
 	}
 	fix := &clireview.Fixer{CLI: fixCLI, Homes: homes, SkillDir: c.SkillDir, Language: lang, Getenv: getenv}
 	return rev, fix, nil

@@ -72,6 +72,9 @@ func TestServeSelectorAppliesTheServeFilters(t *testing.T) {
 	if strings.Join(sel.Paths, ",") != "a.go,a_test.go" {
 		t.Fatalf("paths %v", sel.Paths)
 	}
+	if len(sel.Lines) != 2 || sel.Lines["a_test.go"] != 3 || sel.Lines["a.go"] < 1 {
+		t.Fatalf("lines %v", sel.Lines)
+	}
 	if sel.Skipped["large_data"] != 1 || sel.Skipped["default_path"] != 1 || sel.Skipped["user_exclude"] != 1 ||
 		sel.Skipped["provider_directory"] != 0 {
 		t.Fatalf("skipped %v", sel.Skipped)
@@ -173,6 +176,7 @@ func cliEngineConfig(t *testing.T, answer string) *serveconfig.Config {
 		CLI: serveconfig.CLIConfig{
 			ReviewCLI: serveconfig.CLICodex, FixCLI: serveconfig.CLIClaude, CodexBin: bin, ClaudeBin: bin, SkillDir: skillDir,
 			Home: filepath.Join(dir, "cli-home"), CodexAuth: auth, ClaudeSettings: settings,
+			BatchLines: 900, BatchFiles: 12, BatchConcurrency: 2,
 		},
 	}
 }
@@ -192,6 +196,9 @@ func TestBuildServeReviewerRunsTheCLIEngine(t *testing.T) {
 	rev, fixer, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cr, ok := rev.(*clireview.Reviewer); !ok || cr.Batching != (clireview.Batching{Lines: 900, Files: 12, Concurrency: 2}) {
+		t.Fatalf("reviewer %+v", rev)
 	}
 	fx, ok := fixer.(*clireview.Fixer)
 	if !ok || fx.Language != "Vietnamese" || fx.SkillDir != cfg.CLI.SkillDir {

@@ -282,7 +282,8 @@ func TestWriteInputUsesProjectIDWithoutRepoPath(t *testing.T) {
 	dir := t.TempDir()
 	req := review.Request{RepoDir: r.dir, Commit: r.head,
 		PR: forge.PR{Ref: forge.PRRef{Platform: forge.GitLab, ProjectID: 42, Number: 5}}}
-	if err := writeInput(context.Background(), dir, req, Selection{Base: r.base, Head: r.head, Paths: []string{"a.go"}}); err != nil {
+	one := batch{count: 1, paths: []string{"a.go"}}
+	if err := writeInput(context.Background(), dir, req, Selection{Base: r.base, Head: r.head, Paths: []string{"a.go"}}, one); err != nil {
 		t.Fatal(err)
 	}
 	var pr prInput
@@ -290,14 +291,14 @@ func TestWriteInputUsesProjectIDWithoutRepoPath(t *testing.T) {
 	if err := json.Unmarshal(b, &pr); err != nil || pr.Repository != "42" || pr.Platform != "gitlab" || pr.Mode != ModeCommit {
 		t.Fatalf("pr.json %s err %v", b, err)
 	}
-	if err := writeInput(context.Background(), filepath.Join(dir, "gone"), req, Selection{}); err == nil ||
+	if err := writeInput(context.Background(), filepath.Join(dir, "gone"), req, Selection{}, one); err == nil ||
 		!strings.Contains(err.Error(), "write pr.json") {
 		t.Fatalf("err %v", err)
 	}
 }
 
 func TestBuildPromptWithoutLanguageOrBackground(t *testing.T) {
-	p := buildPrompt("skill", "/in", Selection{}, false)
+	p := buildPrompt("skill", "/in", Selection{}, batch{count: 1}, false)
 	if strings.Contains(p, "Output language") || strings.Contains(p, "Review background") {
 		t.Fatalf("prompt\n%s", p)
 	}
@@ -318,7 +319,7 @@ func TestToCommentsMapsPRLevelFindings(t *testing.T) {
 		{Path: "Makefile", Line: 1, Body: "An unselected repo file."},
 		{Path: "notes.txt", Line: 1, Body: "A missing file with an extension."},
 	}
-	got, dropped := toComments(fs, []string{"a.go"}, repoDir)
+	got, dropped := newMapper(repoDir).comments(fs, []string{"a.go"}, true)
 	if len(got) != 5 || len(dropped) != 3 {
 		t.Fatalf("comments %+v dropped %v", got, dropped)
 	}
@@ -338,7 +339,7 @@ func TestToCommentsMapsPRLevelFindings(t *testing.T) {
 }
 
 func TestPromptAsksForAnEmptyPathOnPRLevelFindings(t *testing.T) {
-	p := buildPrompt("skill", "/in", Selection{}, false)
+	p := buildPrompt("skill", "/in", Selection{}, batch{count: 1}, false)
 	if !strings.Contains(p, "`path` is `\"\"` and `line` is 0") {
 		t.Fatalf("prompt\n%s", p)
 	}

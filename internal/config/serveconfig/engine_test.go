@@ -10,18 +10,21 @@ import (
 
 func TestLoad_CLIEngineSettings(t *testing.T) {
 	c, err := Load(env(map[string]string{
-		EnvEngine:         "OCR",
-		EnvReviewCLI:      "claude",
-		EnvFixCLI:         "codex",
-		EnvCodexBin:       "/opt/codex/bin/codex",
-		EnvClaudeBin:      "/opt/claude/versions/2.1.322",
-		EnvCodexModel:     "gpt-6.1-sol",
-		EnvClaudeModel:    "claude-sonnet-5-5[1m]",
-		EnvCodexEffort:    "medium",
-		EnvSkillDir:       "/opt/ocr-skills/",
-		EnvCLIHome:        "/state/cli",
-		EnvCodexAuth:      "/run/codex/auth.json",
-		EnvClaudeSettings: "/run/claude/settings.json",
+		EnvEngine:           "OCR",
+		EnvReviewCLI:        "claude",
+		EnvFixCLI:           "codex",
+		EnvCodexBin:         "/opt/codex/bin/codex",
+		EnvClaudeBin:        "/opt/claude/versions/2.1.322",
+		EnvCodexModel:       "gpt-6.1-sol",
+		EnvClaudeModel:      "claude-sonnet-5-5[1m]",
+		EnvCodexEffort:      "medium",
+		EnvSkillDir:         "/opt/ocr-skills/",
+		EnvCLIHome:          "/state/cli",
+		EnvCodexAuth:        "/run/codex/auth.json",
+		EnvClaudeSettings:   "/run/claude/settings.json",
+		EnvBatchLines:       "800",
+		EnvBatchFiles:       "10",
+		EnvBatchConcurrency: "4",
 	}), files(nil))
 	if err != nil {
 		t.Fatal(err)
@@ -32,6 +35,7 @@ func TestLoad_CLIEngineSettings(t *testing.T) {
 		CodexModel: "gpt-6.1-sol", ClaudeModel: "claude-sonnet-5-5[1m]", CodexEffort: "medium",
 		SkillDir: "/opt/ocr-skills", Home: "/state/cli",
 		CodexAuth: "/run/codex/auth.json", ClaudeSettings: "/run/claude/settings.json",
+		BatchLines: 800, BatchFiles: 10, BatchConcurrency: 4,
 	}
 	if c.Engine != EngineOCR || c.CLI != want {
 		t.Fatalf("engine %q cli %+v", c.Engine, c.CLI)
@@ -49,20 +53,26 @@ func TestLoad_CLIHomeFollowsDataDir(t *testing.T) {
 	if c.CLI.Home != "/srv/ocr/cli-home" {
 		t.Fatalf("home %q", c.CLI.Home)
 	}
+	if c.CLI.BatchLines != DefaultBatchLines || c.CLI.BatchFiles != DefaultBatchFiles || c.CLI.BatchConcurrency != DefaultBatchConcurrency {
+		t.Fatalf("batch defaults %+v", c.CLI)
+	}
 }
 
 func TestLoad_InvalidCLIEngineSettings(t *testing.T) {
 	cases := map[string]string{
-		EnvEngine:         "claude",
-		EnvReviewCLI:      "gemini",
-		EnvFixCLI:         "aider",
-		EnvCodexModel:     `gpt"; rm -rf`,
-		EnvClaudeModel:    "--dangerously-skip-permissions",
-		EnvCodexEffort:    "Medium high",
-		EnvSkillDir:       "skills",
-		EnvCLIHome:        "./home",
-		EnvCodexAuth:      "auth.json",
-		EnvClaudeSettings: "~/.claude/settings.json",
+		EnvEngine:           "claude",
+		EnvReviewCLI:        "gemini",
+		EnvFixCLI:           "aider",
+		EnvCodexModel:       `gpt"; rm -rf`,
+		EnvClaudeModel:      "--dangerously-skip-permissions",
+		EnvCodexEffort:      "Medium high",
+		EnvSkillDir:         "skills",
+		EnvCLIHome:          "./home",
+		EnvCodexAuth:        "auth.json",
+		EnvClaudeSettings:   "~/.claude/settings.json",
+		EnvBatchLines:       "99",
+		EnvBatchFiles:       "0",
+		EnvBatchConcurrency: "5",
 	}
 	for key, val := range cases {
 		t.Run(key, func(t *testing.T) {

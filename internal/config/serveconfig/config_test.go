@@ -77,7 +77,8 @@ func TestLoad_Defaults(t *testing.T) {
 		Engine: EngineCLI,
 		CLI: CLIConfig{
 			ReviewCLI: CLICodex, FixCLI: CLIClaude, CodexBin: "codex", ClaudeBin: "claude",
-			Home: "/data/cli-home",
+			Home:       "/data/cli-home",
+			BatchLines: 1500, BatchFiles: 25, BatchConcurrency: 1,
 		},
 		Sandbox: SandboxConfig{
 			Mode: SandboxNone, DockerBin: "docker", Memory: "6g", CPUs: "4",
