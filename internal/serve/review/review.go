@@ -25,8 +25,10 @@ import (
 // review to an external agent pass its identity and description on; the
 // in-process OCR engine ignores it.
 //
-// Dismissed are findings the author turned down in an earlier run; an
-// agent engine is told not to report them again. The OCR engine ignores it.
+// FixCommit marks Commit as a fix commit the service pushed in the previous
+// round. An agent engine then reviews only what that commit changed and
+// does not check the PR description or scope again, which the first round
+// already did. The OCR engine ignores it.
 type Request struct {
 	RepoDir     string
 	From        string
@@ -37,17 +39,7 @@ type Request struct {
 	Excludes    []string
 	ProjectRule *rules.ProjectRule
 	PR          forge.PR
-	Dismissed   []Dismissed
-}
-
-// Dismissed is a finding whose thread was resolved with a reply from a
-// person, which gives the reason it is not a problem.
-type Dismissed struct {
-	Path   string `json:"path"`
-	Line   int    `json:"line"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	Reason string `json:"reason"`
+	FixCommit   bool
 }
 
 // Terminal states of a review run.
@@ -60,24 +52,13 @@ const (
 
 // Result is the outcome of a review run. Base is the commit the diff was
 // taken against: for a range review the merge base of From and To, not
-// From itself. It is empty when the run did not resolve one. Verify is
-// the outcome of the verify pass; its zero value means no pass ran.
+// From itself. It is empty when the run did not resolve one.
 type Result struct {
 	Findings []model.LlmComment
 	Terminal string
 	Warnings []string
 	Coverage Coverage
 	Base     string
-	Verify   Verification
-}
-
-// Verification counts the findings a verify pass checked and the ones it
-// kept for posting. Failed means the pass did not finish, so every checked
-// finding was kept unverified.
-type Verification struct {
-	Checked int
-	Posted  int
-	Failed  bool
 }
 
 // Coverage counts the files a run selected for review, after filtering, and
@@ -131,51 +112,73 @@ type Workspaces interface {
 	Acquire(ctx context.Context) (Workspace, func(), error)
 }
 
-// FixFinding is an open finding thread a fix run works on. Replies are what
-// people answered in the thread; a fix skips a finding they disputed.
-type FixFinding struct {
-	ID       string     `json:"id"`
-	Path     string     `json:"path"`
-	Line     int        `json:"line"`
-	Severity string     `json:"severity"`
-	Title    string     `json:"title"`
-	Body     string     `json:"body"`
-	Replies  []FixReply `json:"replies"`
-}
-
-// FixReply is one reply in a finding thread.
-type FixReply struct {
-	Author string `json:"author"`
-	Body   string `json:"body"`
+// Finding is one review finding a fix run judges. ID is unique within the
+// run; Path is empty for a finding about the PR as a whole.
+type Finding struct {
+	ID       string `json:"id"`
+	Path     string `json:"path"`
+	Line     int    `json:"line"`
+	EndLine  int    `json:"end_line"`
+	Severity string `json:"severity"`
+	Category string `json:"category"`
+	Content  string `json:"content"`
 }
 
 // FixRequest is one fix run on a checkout of the PR head branch. Files are
-// the files the PR changes.
+// the files the PR changes. Base and Head are the reviewed range; Base is
+// empty when one commit, Head, was reviewed. ReportOnly asks for no edit:
+// the run only judges the findings and proposes fixes.
 type FixRequest struct {
-	RepoDir  string
-	PR       forge.PR
-	Files    []string
-	Findings []FixFinding
+	RepoDir    string
+	PR         forge.PR
+	Files      []string
+	Base       string
+	Head       string
+	Findings   []Finding
+	ReportOnly bool
 }
 
-// FixSkip is a finding a fix run left open, with the reason.
-type FixSkip struct {
-	ID     string
-	Reason string
+// Fixed is a finding the fix run judged real and fixed.
+type Fixed struct {
+	ID      string
+	Path    string
+	Line    int
+	Problem string
+	Fix     string
 }
 
-// FixResult is what the agent reports after editing the checkout. Fixed
-// and Skipped hold only ids from the request. CommitMessage is one line.
+// Reported is a real finding the run did not fix: in a report-only run,
+// for a finding about the PR as a whole, or when no safe fix exists.
+type Reported struct {
+	ID          string
+	Path        string
+	Line        int
+	Problem     string
+	Scenario    string
+	ProposedFix string
+}
+
+// Tests is the test run after the fix. Command is empty when no test ran.
+type Tests struct {
+	Command    string
+	Passed     bool
+	OutputTail string
+}
+
+// FixResult is what the agent reports. Fixed and Reported hold only ids
+// from the request, each once; findings in neither were judged not real.
+// CommitMessage is one line.
 type FixResult struct {
-	Fixed         []string
-	Skipped       []FixSkip
+	Fixed         []Fixed
+	Reported      []Reported
+	Tests         Tests
 	Summary       string
 	CommitMessage string
 	Warnings      []string
 }
 
-// Fixer edits a checkout to fix review findings. It leaves committing and
-// pushing to the caller.
+// Fixer judges review findings, fixes the real ones in the checkout and
+// runs the tests. It leaves committing and pushing to the caller.
 type Fixer interface {
 	Fix(ctx context.Context, req FixRequest) (FixResult, error)
 }

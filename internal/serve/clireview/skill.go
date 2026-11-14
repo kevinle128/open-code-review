@@ -26,6 +26,7 @@ var (
 	fixReferences = []string{
 		"mode-fix.md",
 		"review-checklist.md",
+		"pr-body-contract.md",
 	}
 )
 

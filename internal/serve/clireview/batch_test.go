@@ -82,10 +82,9 @@ func TestBatchingDefaults(t *testing.T) {
 
 // batchRun is what one batch run saw.
 type batchRun struct {
-	pr        prInput
-	diff      string
-	prompt    string
-	dismissed bool
+	pr     prInput
+	diff   string
+	prompt string
 }
 
 // batchCLI answers each batch with answer(index), where index counts from
@@ -108,7 +107,6 @@ func (c *batchCLI) Exec(_ context.Context, inv agentcli.Invocation) (string, err
 	b, _ := os.ReadFile(filepath.Join(inv.Run.Input, "pr.json"))
 	_ = json.Unmarshal(b, &pr)
 	diff, _ := os.ReadFile(filepath.Join(inv.Run.Input, "diff.patch"))
-	_, err := os.Stat(filepath.Join(inv.Run.Input, DismissedFile))
 	index := 1
 	if pr.Batch != nil {
 		index = pr.Batch.Index
@@ -118,7 +116,7 @@ func (c *batchCLI) Exec(_ context.Context, inv agentcli.Invocation) (string, err
 	if c.runs == nil {
 		c.runs = map[int]batchRun{}
 	}
-	c.runs[index] = batchRun{pr: pr, diff: string(diff), prompt: inv.Prompt, dismissed: err == nil}
+	c.runs[index] = batchRun{pr: pr, diff: string(diff), prompt: inv.Prompt}
 	c.active++
 	c.maxSeen = max(c.maxSeen, c.active)
 	c.mu.Unlock()
@@ -188,7 +186,7 @@ func TestReviewRunsBatches(t *testing.T) {
 	rev.Batching = Batching{Lines: 6}
 	var logs bytes.Buffer
 	rev.Log = slog.New(slog.NewTextHandler(&logs, nil))
-	req := review.Request{RepoDir: r.dir, From: r.base, To: r.head, Dismissed: []review.Dismissed{{Path: "web/c.go", Line: 1, Reason: "fine"}}}
+	req := review.Request{RepoDir: r.dir, From: r.base, To: r.head}
 	res, err := rev.Review(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -214,8 +212,8 @@ func TestReviewRunsBatches(t *testing.T) {
 	first, second := cli.runs[1], cli.runs[2]
 	for i, run := range []batchRun{first, second} {
 		if strings.Join(run.pr.Files, ",") != "api/a.go,api/b.go,web/c.go" || run.pr.Batch == nil ||
-			run.pr.Batch.Count != 2 || !run.dismissed {
-			t.Fatalf("batch %d pr.json %+v dismissed %v", i+1, run.pr, run.dismissed)
+			run.pr.Batch.Count != 2 {
+			t.Fatalf("batch %d pr.json %+v", i+1, run.pr)
 		}
 		if !strings.Contains(run.prompt, fmt.Sprintf("This run is batch %d of 2", i+1)) ||
 			!strings.Contains(run.prompt, refText("review-workflow.md")) {

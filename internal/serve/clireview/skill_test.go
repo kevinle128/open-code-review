@@ -84,7 +84,7 @@ func TestReviewAndFixPromptsHoldTheReferences(t *testing.T) {
 		t.Errorf("review prompt misses the override rule")
 	}
 
-	fcli := &fixCLI{msg: `{"fixed":[],"skipped":[],"summary":"none","commit_message":"fix: none"}`}
+	fcli := &fixCLI{msg: `{"fixed":[],"report_only":[],"tests":{"command":"","passed":true,"output_tail":""},"summary":"none","commit_message":"fix: none"}`}
 	fx, _ := newFixer(t, fcli)
 	if _, err := fx.Fix(context.Background(), fixRequest()); err != nil {
 		t.Fatal(err)

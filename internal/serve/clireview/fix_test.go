@@ -56,55 +56,85 @@ func fixRequest() review.FixRequest {
 		PR: forge.PR{Ref: forge.PRRef{Platform: forge.GitHub, Repo: "acme/app", Number: 12},
 			Title: "Add A", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40)},
 		Files: []string{"a.go"},
-		Findings: []review.FixFinding{
-			{ID: "f1", Path: "a.go", Line: 3, Severity: "high", Title: "Missing return", Body: "A returns nothing.",
-				Replies: []review.FixReply{{Author: "alice", Body: "Intended, see the spec."}}},
-			{ID: "f2", Path: "a.go", Line: 5, Severity: "low", Body: "Add a doc comment."},
-			{ID: "f3", Path: "b.go", Line: 1, Severity: "medium", Body: "Check the error."},
+		Base:  strings.Repeat("a", 40), Head: strings.Repeat("b", 40),
+		Findings: []review.Finding{
+			{ID: "F1", Path: "a.go", Line: 3, Severity: "high", Category: "bug", Content: "**Missing return**\n\nA returns nothing."},
+			{ID: "F2", Path: "a.go", Line: 5, Severity: "low", Category: "style", Content: "Add a doc comment."},
+			{ID: "F3", Path: "", Line: 0, Severity: "medium", Category: "documentation", Content: "The PR body lacks a test plan."},
 		},
 	}
 }
 
+const fixAnswerJSON = `{"fixed": [{"id": "F1", "path": "", "line": 0, "problem": " A returns nothing. ", "fix": "Return the value."},
+ {"id": "zz", "path": "x.go", "line": 1, "problem": "p", "fix": "f"}, {"id": "F3", "path": "", "line": 0, "problem": "p", "fix": "f"}],
+ "report_only": [{"id": "F3", "path": "", "line": 0, "problem": "No test plan.", "scenario": "A reviewer cannot check it.", "proposed_fix": "Add a test plan."}],
+ "tests": {"command": " go   test ./... ", "passed": false, "output_tail": "--- FAIL: TestA"},
+ "summary": " Fixed A. ", "commit_message": "\n fix: return the value from A\nbody line"}`
+
 func TestFixWritesInputsAndParsesTheAnswer(t *testing.T) {
-	cli := &fixCLI{msg: "Done.\n```json\n" + `{"fixed": ["f2", "f3", "zz", "f2"], "skipped": [{"id": "f1", "reason": " The author disputed it. "}, {"id": "f3", "reason": "also"}],
- "summary": " Added a doc comment. ", "commit_message": "\n fix: add a doc comment\nbody line"}` + "\n```"}
+	cli := &fixCLI{msg: "Done.\n```json\n" + fixAnswerJSON + "\n```"}
 	fx, root := newFixer(t, cli)
 	res, err := fx.Fix(context.Background(), fixRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(res.Fixed, ",") != "f2" || len(res.Skipped) != 2 || res.Skipped[0] != (review.FixSkip{ID: "f1", Reason: "The author disputed it."}) ||
-		res.Skipped[1].ID != "f3" || res.Summary != "Added a doc comment." || res.CommitMessage != "fix: add a doc comment" {
+	if len(res.Fixed) != 1 || res.Fixed[0] != (review.Fixed{ID: "F1", Path: "a.go", Line: 3, Problem: "A returns nothing.", Fix: "Return the value."}) {
+		t.Fatalf("fixed %+v", res.Fixed)
+	}
+	if len(res.Reported) != 1 || res.Reported[0] != (review.Reported{ID: "F3", Problem: "No test plan.", Scenario: "A reviewer cannot check it.", ProposedFix: "Add a test plan."}) {
+		t.Fatalf("reported %+v", res.Reported)
+	}
+	if res.Tests != (review.Tests{Command: "go test ./...", OutputTail: "--- FAIL: TestA"}) ||
+		res.Summary != "Fixed A." || res.CommitMessage != "fix: return the value from A" {
 		t.Fatalf("result %+v", res)
 	}
-	if len(res.Warnings) != 3 {
+	if len(res.Warnings) != 2 {
 		t.Fatalf("warnings %v", res.Warnings)
 	}
 	inv := cli.inv
-	if !inv.Edit || inv.RepoDir != "/work/slot-0" || len(inv.Agents) != 1 || !strings.HasSuffix(inv.Agents[0], "agents/kongming.md") ||
-		len(inv.ReadDirs) != 2 || !strings.Contains(string(inv.Schema), `"commit_message"`) {
+	if !inv.Edit || inv.Shell || len(inv.Agents) != 1 || !strings.HasSuffix(inv.Agents[0], AgentFile) || !json.Valid(inv.Schema) {
 		t.Fatalf("invocation %+v", inv)
 	}
-	for _, want := range []string{"Arguments: `12 --advice --fix --reply`", "Service fix mode (ocr serve `/fix`)",
-		"references/mode-fix.md", FindingsFile, "Output language of `summary` and `reason`: Vietnamese"} {
+	for _, want := range []string{"in fix mode", "Service fix mode (ocr serve)", "pr-body-contract.md", "git diff " + strings.Repeat("a", 40) + ".." + strings.Repeat("b", 40),
+		`"id": "F2"`, "Output language", "report_only"} {
 		if !strings.Contains(inv.Prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, inv.Prompt)
 		}
 	}
 	var pr prInput
-	if err := json.Unmarshal([]byte(cli.prJSON), &pr); err != nil || pr.Mode != ModeFix || pr.Number != 12 ||
-		pr.Language != "Vietnamese" || len(pr.Files) != 1 || pr.HeadSHA != strings.Repeat("b", 40) {
+	if err := json.Unmarshal([]byte(cli.prJSON), &pr); err != nil || pr.Mode != ModeFix || pr.Number != 12 || pr.Language != "Vietnamese" {
 		t.Fatalf("pr.json %s err %v", cli.prJSON, err)
 	}
-	var fs []review.FixFinding
-	if err := json.Unmarshal([]byte(cli.findings), &fs); err != nil || len(fs) != 3 || fs[0].Replies[0].Author != "alice" {
+	var fs []review.Finding
+	if err := json.Unmarshal([]byte(cli.findings), &fs); err != nil || len(fs) != 3 || fs[0].ID != "F1" {
 		t.Fatalf("findings.json %s err %v", cli.findings, err)
-	}
-	if !strings.Contains(cli.findings, `"replies": []`) {
-		t.Fatalf("a finding without replies must list an empty array:\n%s", cli.findings)
 	}
 	if runDirsLeft(t, root) != 0 {
 		t.Fatal("run dir left")
+	}
+}
+
+// TestFixReportOnly gives a report-only run no edit tools and turns a fixed
+// entry into a reported one.
+func TestFixReportOnly(t *testing.T) {
+	cli := &fixCLI{msg: fixAnswerJSON}
+	fx, _ := newFixer(t, cli)
+	req := fixRequest()
+	req.ReportOnly, req.Base = true, ""
+	res, err := fx.Fix(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Fixed) != 0 || len(res.Reported) != 2 || res.Reported[1].ID != "F1" || res.Reported[1].ProposedFix != "Return the value." {
+		t.Fatalf("result %+v", res)
+	}
+	inv := cli.inv
+	if inv.Edit || !inv.Shell || len(inv.Agents) != 0 || !strings.Contains(inv.Prompt, "report-only mode") ||
+		!strings.Contains(inv.Prompt, "git show "+strings.Repeat("b", 40)) || !strings.Contains(inv.Prompt, "read-only checkout") {
+		t.Fatalf("invocation %+v", inv)
+	}
+	if !strings.Contains(cli.prJSON, `"mode": "report"`) {
+		t.Fatalf("pr.json %s", cli.prJSON)
 	}
 }
 
@@ -116,8 +146,8 @@ func TestFixErrors(t *testing.T) {
 	}{
 		{"cli error", &fixCLI{err: errors.New("claude exited with code 1")}, "fake fix: claude exited"},
 		{"no json", &fixCLI{msg: "I fixed it."}, "no JSON object"},
-		{"wrong shape", &fixCLI{msg: `{"fixed": "f1"}`}, "fix schema"},
-		{"missing keys", &fixCLI{msg: `{"fixed": []}`}, "lacks"},
+		{"wrong shape", &fixCLI{msg: `{"fixed": "F1"}`}, "fix schema"},
+		{"missing keys", &fixCLI{msg: `{"fixed": [], "report_only": [], "summary": ""}`}, "lacks"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,7 +176,7 @@ func TestWriteFixInputDefaults(t *testing.T) {
 	req := fixRequest()
 	req.PR.Ref = forge.PRRef{Platform: forge.GitLab, ProjectID: 42, Number: 5}
 	req.Files = nil
-	if err := writeFixInput(dir, req, ""); err != nil {
+	if _, err := writeFixInput(dir, req, ""); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "pr.json"))
@@ -154,11 +184,23 @@ func TestWriteFixInputDefaults(t *testing.T) {
 	if err := json.Unmarshal(b, &pr); err != nil || pr.Repository != "42" || pr.Files == nil {
 		t.Fatalf("pr.json %s err %v", b, err)
 	}
-	if err := writeFixInput(filepath.Join(dir, "gone"), req, ""); err == nil {
+	if _, err := writeFixInput(filepath.Join(dir, "gone"), req, ""); err == nil {
 		t.Fatal("write into a missing dir accepted")
 	}
-	if p := buildFixPrompt("skill", "/in", 5, ""); strings.Contains(p, "Output language") {
+	if p := buildFixPrompt("skill", "/in", req, "", nil); strings.Contains(p, "Output language") {
 		t.Fatalf("prompt\n%s", p)
+	}
+}
+
+func TestBoundAndTail(t *testing.T) {
+	if got := bound(" "+strings.Repeat("x", 12)+" ", 10); got != strings.Repeat("x", 10)+"..." {
+		t.Fatalf("bound %q", got)
+	}
+	if got := tail("abcdef", 3); got != "...def" {
+		t.Fatalf("tail %q", got)
+	}
+	if got := tail("abc", 3); got != "abc" {
+		t.Fatalf("tail %q", got)
 	}
 }
 
@@ -177,43 +219,20 @@ func TestCommitMessage(t *testing.T) {
 	}
 }
 
-// TestReviewWritesDismissed passes the findings the author dismissed to the
-// agent and names the file in the prompt.
-func TestReviewWritesDismissed(t *testing.T) {
+// TestReviewOfAFixCommit tells the agent to review only the fix commit and
+// drops a PR-level finding, which the first round already checked.
+func TestReviewOfAFixCommit(t *testing.T) {
 	r := newRepo(t)
-	var dismissed string
-	cli := &dismissedCLI{fakeCLI: fakeCLI{msg: `{"summary": "ok", "findings": []}`}, got: &dismissed}
+	cli := &fakeCLI{msg: `{"summary": "ok", "findings": [{"path": "", "line": 0, "end_line": null, "severity": "low", "category": "documentation", "title": "PR body", "body": "Add a test plan.", "suggestion": null}]}`}
 	rev, _ := newReviewer(t, fakeSelector{sel: Selection{Base: r.base, Head: r.head, Paths: []string{"a.go"}}}, cli)
-	req := review.Request{RepoDir: r.dir, From: r.base, To: r.head,
-		Dismissed: []review.Dismissed{{Path: "a.go", Line: 3, Title: "Missing return", Body: "A returns nothing.", Reason: "alice: intended"}}}
-	if _, err := rev.Review(context.Background(), req); err != nil {
+	res, err := rev.Review(context.Background(), review.Request{RepoDir: r.dir, Commit: r.head, FixCommit: true})
+	if err != nil {
 		t.Fatal(err)
 	}
-	var got []review.Dismissed
-	if err := json.Unmarshal([]byte(dismissed), &got); err != nil || len(got) != 1 || got[0].Reason != "alice: intended" || got[0].Line != 3 {
-		t.Fatalf("dismissed.json %s err %v", dismissed, err)
+	if len(res.Findings) != 0 {
+		t.Fatalf("findings %+v", res.Findings)
 	}
-	if !strings.Contains(cli.inv.Prompt, DismissedFile) || !strings.Contains(cli.inv.Prompt, "Do not report any of them again") {
+	if !strings.Contains(cli.inv.Prompt, "covers only commit `"+r.head+"`") {
 		t.Fatalf("prompt\n%s", cli.inv.Prompt)
 	}
-
-	dismissed = ""
-	req.Dismissed = nil
-	if _, err := rev.Review(context.Background(), req); err != nil {
-		t.Fatal(err)
-	}
-	if dismissed != "" || strings.Contains(cli.inv.Prompt, DismissedFile) {
-		t.Fatal("dismissed.json written without dismissed findings")
-	}
-}
-
-type dismissedCLI struct {
-	fakeCLI
-	got *string
-}
-
-func (c *dismissedCLI) Exec(ctx context.Context, inv agentcli.Invocation) (string, error) {
-	b, _ := os.ReadFile(filepath.Join(inv.Run.Input, DismissedFile))
-	*c.got = string(b)
-	return c.fakeCLI.Exec(ctx, inv)
 }
