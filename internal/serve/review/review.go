@@ -60,13 +60,24 @@ const (
 
 // Result is the outcome of a review run. Base is the commit the diff was
 // taken against: for a range review the merge base of From and To, not
-// From itself. It is empty when the run did not resolve one.
+// From itself. It is empty when the run did not resolve one. Verify is
+// the outcome of the verify pass; its zero value means no pass ran.
 type Result struct {
 	Findings []model.LlmComment
 	Terminal string
 	Warnings []string
 	Coverage Coverage
 	Base     string
+	Verify   Verification
+}
+
+// Verification counts the findings a verify pass checked and the ones it
+// kept for posting. Failed means the pass did not finish, so every checked
+// finding was kept unverified.
+type Verification struct {
+	Checked int
+	Posted  int
+	Failed  bool
 }
 
 // Coverage counts the files a run selected for review, after filtering, and

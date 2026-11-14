@@ -64,7 +64,8 @@ type Selector interface {
 // Reviewer runs a review through a CLI. Getenv supplies the process
 // variables passed to the CLI; nil means os.Getenv. Batching splits a large
 // review into several CLI runs; Log gets one line per run, nil meaning
-// slog.Default().
+// slog.Default(). Verify, when set, checks the merged findings before they
+// are returned.
 type Reviewer struct {
 	Selector Selector
 	CLI      agentcli.CLI
@@ -73,6 +74,7 @@ type Reviewer struct {
 	Grace    time.Duration
 	Getenv   func(string) string
 	Batching Batching
+	Verify   *Verifier
 	Log      *slog.Logger
 }
 
@@ -82,7 +84,8 @@ var _ review.Reviewer = (*Reviewer)(nil)
 // selected files and merges the findings. A failed batch leaves its files
 // unreviewed and the result partial; only when every batch fails does the
 // review fail. Each run directory is removed when its batch ends, so a
-// failed removal still reaches the result as a warning.
+// failed removal still reaches the result as a warning. The verify pass
+// runs once on the findings of all batches.
 func (r *Reviewer) Review(ctx context.Context, req review.Request) (res review.Result, err error) {
 	res = review.Result{Terminal: review.TerminalFailed}
 	sel, err := r.Selector.Select(ctx, req)
@@ -133,6 +136,9 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (res review.R
 	res.Terminal = review.TerminalComplete
 	if len(errs) > 0 {
 		res.Terminal = review.TerminalPartial
+	}
+	if r.Verify != nil && len(res.Findings) > 0 {
+		r.verify(ctx, req, sel, &res)
 	}
 	return res, nil
 }

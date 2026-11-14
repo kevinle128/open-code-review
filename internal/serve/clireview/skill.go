@@ -49,17 +49,27 @@ func loadSkill(root string, refs []string) (skillText, error) {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(string(raw)))
 	for _, name := range refs {
-		ref, err := os.ReadFile(filepath.Join(out.Dir, "references", name))
-		if err != nil {
-			reason := err.Error()
-			if errors.Is(err, fs.ErrNotExist) {
-				reason = "missing"
-			}
-			out.Warnings = append(out.Warnings, fmt.Sprintf("skill reference %s left out of the prompt: %s", name, reason))
+		ref, warning := readReference(out.Dir, name)
+		if warning != "" {
+			out.Warnings = append(out.Warnings, warning)
 			continue
 		}
-		fmt.Fprintf(&b, "\n\n---\n\n# Reference: references/%s\n\n%s", name, strings.TrimSpace(string(ref)))
+		fmt.Fprintf(&b, "\n\n---\n\n# Reference: references/%s\n\n%s", name, ref)
 	}
 	out.Text = b.String()
 	return out, nil
+}
+
+// readReference reads one reference file of the skill in dir. A file it
+// cannot read gives a warning instead of the text.
+func readReference(dir, name string) (text, warning string) {
+	ref, err := os.ReadFile(filepath.Join(dir, "references", name))
+	if err != nil {
+		reason := err.Error()
+		if errors.Is(err, fs.ErrNotExist) {
+			reason = "missing"
+		}
+		return "", fmt.Sprintf("skill reference %s left out of the prompt: %s", name, reason)
+	}
+	return strings.TrimSpace(string(ref)), ""
 }
