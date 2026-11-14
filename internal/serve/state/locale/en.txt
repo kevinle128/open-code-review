@@ -26,7 +26,7 @@ summary.reviewed_none = Reviewed commit: none yet
 summary.open = Open findings: {count}
 summary.runs_title = Recent runs
 summary.runs_header = | Run | Type | Range | Findings |
-summary.hint = Resolve every finding thread before merging. Commands: `/review` (full review), `/review-commit` (latest commit only).
+summary.hint = Resolve every finding thread before merging. Commands: `/review` (full review), `/review-commit` (latest commit only), `/fix` (fix the open findings and push).
 summary.skipped = The last review found no reviewable change (for example, every changed file is excluded) and did not count as a round.
 
 coverage.complete = Files reviewed: {reviewed}/{total}.
@@ -58,4 +58,12 @@ limit.note = Automatic review stopped after {max} rounds. Comment `/review` for 
 
 command.done = Review finished: {count} new finding(s).
 command.error = Command failed: {reason}
-command.help = Supported commands: `/review [--effort=low|medium|high]` (full review) and `/review-commit` (latest commit only).
+command.help = Supported commands: `/review [--effort=low|medium|high]` (full review), `/review-commit` (latest commit only) and `/fix` (fix the open findings and push to the branch).
+
+fix.nothing = Nothing to fix: there is no open review finding.
+fix.cannot_push = The bot cannot push to branch {branch}: {reason}
+fix.no_changes = The fix run changed no file, so nothing was pushed.
+fix.done = Fix pushed in commit {sha}: {fixed} finding(s) fixed, {skipped} skipped. The fixed threads are resolved; the fix commit is reviewed next.
+fix.skipped_title = Not fixed:
+fix.skip_reply = Not fixed by `/fix`: {reason}
+fix.no_reason = no reason given

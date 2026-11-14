@@ -234,7 +234,5 @@ func RenderLimitNote(limit int, loc Locale) string {
 // user input, so it is put in a code span on one line to keep mentions and
 // markdown inert.
 func RenderCommandError(reason string, loc Locale) string {
-	reason = strings.Join(strings.Fields(reason), " ")
-	reason = "`" + strings.ReplaceAll(reason, "`", "'") + "`"
-	return "❌ " + loc.Text("command.error", "reason", reason) + "\n\n" + loc.Text("command.help")
+	return "❌ " + loc.Text("command.error", "reason", codeSpan(reason)) + "\n\n" + loc.Text("command.help")
 }
