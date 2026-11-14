@@ -110,8 +110,8 @@ func TestLoad_Overrides(t *testing.T) {
 		EnvReviewConcurrency: "12", EnvBundleLines: "450",
 		EnvIgnoreRepos: "^infra/, sandbox$", EnvIgnoreAuthors: "renovate", EnvIgnoreTitles: `(?i)^\[wip\]`,
 		EnvIgnoreSourceBranch: "^release/", EnvIgnoreTargetBranch: "^gh-pages$", EnvIgnoreLabels: "no-review, skip ocr",
-		EnvBotIndicators: "Bot, Automation",
-		EnvGitHubAppID:   "12345", EnvGitHubPrivateKey + "_FILE": "/run/key.pem", EnvGitHubWebhookSecret: "gh-secret",
+		EnvBotIndicators: "Bot, Automation", EnvMentions: "ocr, Review.Bot_2",
+		EnvGitHubAppID: "12345", EnvGitHubPrivateKey + "_FILE": "/run/key.pem", EnvGitHubWebhookSecret: "gh-secret",
 		EnvGitHubAPIURL: "https://ghe.example.com/api/v3/",
 		EnvGitLabURL:    "https://git.example.com/", EnvGitLabToken + "_FILE": "/run/gl", EnvGitLabWebhookSecret: " gl-secret ",
 		EnvGitLabAdminToken: "admin", EnvGitLabHookURL: "https://hooks.example.com/ocr/gitlab/webhook", EnvGitLabBotUsername: "ocr-bot",
@@ -131,6 +131,9 @@ func TestLoad_Overrides(t *testing.T) {
 	}
 	if !reflect.DeepEqual(c.BotIndicators, []string{"bot", "automation"}) {
 		t.Fatalf("bots %v", c.BotIndicators)
+	}
+	if !reflect.DeepEqual(c.Mentions, []string{"ocr", "Review.Bot_2"}) {
+		t.Fatalf("mentions %v", c.Mentions)
 	}
 	if c.GitHub == nil || c.GitHub.AppID != 12345 || c.GitHub.WebhookSecret != "gh-secret" ||
 		c.GitHub.APIURL != "https://ghe.example.com/api/v3" || !strings.Contains(string(c.GitHub.PrivateKeyPEM), "RSA PRIVATE KEY") {
@@ -203,6 +206,8 @@ func TestLoad_InvalidValues(t *testing.T) {
 		{"timeout zero", map[string]string{EnvReviewTimeout: "0s"}, EnvReviewTimeout},
 		{"timeout garbage", map[string]string{EnvReviewTimeout: "soon"}, EnvReviewTimeout},
 		{"bad regex", map[string]string{EnvIgnoreTitles: "([a-"}, EnvIgnoreTitles},
+		{"mention with at sign", map[string]string{EnvMentions: "ok, @ocr"}, EnvMentions},
+		{"mention with space", map[string]string{EnvMentions: "ocr bot"}, EnvMentions},
 		{"bad exclude glob", map[string]string{EnvExclude: "a/**, b/[x"}, EnvExclude},
 		{"github app id", map[string]string{EnvGitHubAppID: "abc", EnvGitHubPrivateKey: pkcs1PEM, EnvGitHubWebhookSecret: "s"}, EnvGitHubAppID},
 		{"github missing key", map[string]string{EnvGitHubAppID: "1", EnvGitHubWebhookSecret: "s"}, EnvGitHubPrivateKey},

@@ -43,6 +43,7 @@ const (
 	EnvIgnoreTargetBranch  = "OCR_SERVE_IGNORE_TARGET_BRANCHES"
 	EnvIgnoreLabels        = "OCR_SERVE_IGNORE_LABELS"
 	EnvBotIndicators       = "OCR_SERVE_BOT_INDICATORS"
+	EnvMentions            = "OCR_SERVE_MENTIONS"
 	EnvGitHubAppID         = "OCR_SERVE_GITHUB_APP_ID"
 	EnvGitHubPrivateKey    = "OCR_SERVE_GITHUB_PRIVATE_KEY"
 	EnvGitHubWebhookSecret = "OCR_SERVE_GITHUB_WEBHOOK_SECRET"
@@ -107,7 +108,10 @@ type Config struct {
 	WorkDir       string
 	Ignore        IgnoreRules
 	BotIndicators []string
-	Exclude       []string // DefaultExcludes, then OCR_SERVE_EXCLUDE
+	// Mentions are extra names users may tag the bot with to run a command,
+	// on top of the GitHub App slug and the GitLab bot username.
+	Mentions []string
+	Exclude  []string // DefaultExcludes, then OCR_SERVE_EXCLUDE
 
 	// Engine picks the review engine: EngineCLI runs an agent CLI, EngineOCR
 	// the in-process OCR review.
@@ -128,9 +132,10 @@ type GitHubConfig struct {
 	APIURL        string
 }
 
-// GitLabConfig holds the GitLab settings. AdminToken, HookURL and BotUsername
-// are used only by the hook registration command; the admin token is passed
-// per invocation and never kept in the service environment.
+// GitLabConfig holds the GitLab settings. AdminToken and HookURL are used
+// only by the hook registration command; the admin token is passed per
+// invocation and never kept in the service environment. The service also
+// uses BotUsername to know its own notes and the name users tag.
 type GitLabConfig struct {
 	URL           string
 	Token         string
@@ -233,6 +238,7 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 			Labels:         splitList(getenv(EnvIgnoreLabels)),
 		},
 		BotIndicators: l.botIndicators(),
+		Mentions:      l.mentions(),
 		Exclude:       l.excludes(),
 		Engine:        l.engine(),
 	}
@@ -372,6 +378,20 @@ func (l *loader) botIndicators() []string {
 	var out []string
 	for _, s := range splitList(raw) {
 		out = append(out, strings.ToLower(s))
+	}
+	return out
+}
+
+var mentionRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func (l *loader) mentions() []string {
+	var out []string
+	for _, s := range splitList(l.getenv(EnvMentions)) {
+		if !mentionRE.MatchString(s) {
+			l.fail("%s: invalid name %q (use letters, digits, '-', '_' and '.', without '@')", EnvMentions, s)
+			continue
+		}
+		out = append(out, s)
 	}
 	return out
 }
