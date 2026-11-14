@@ -1,11 +1,15 @@
 # `ocr serve`: PR review webhook service
 
-`ocr serve` receives GitHub App and GitLab webhooks, reviews each pull request
-or merge request in bounded rounds, and posts every finding as a resolvable
-review thread. The review runs an agent CLI (Codex CLI or Claude Code) by
-default, or the in-process OCR review; see [Review engine](#review-engine). A sticky summary comment holds the round state.
-Combined with the forge setting "all threads must be resolved", open findings
-block the merge.
+`ocr serve` receives GitHub App and GitLab webhooks and runs a bounded chain
+of review rounds on each pull request or merge request. In each round a
+review CLI finds problems, a fix run keeps only the real ones, fixes them,
+runs the tests and the service pushes the fix to the PR branch; the next
+round reviews that fix commit. Each round posts one PR comment. The review
+runs an agent CLI (Codex CLI, Claude Code or Antigravity) by default, or the
+in-process OCR review; see [Review engine](#review-engine). A sticky summary
+comment holds the chain state, and the commit status `ocr-review` blocks the
+merge while the chain runs; see [Review rounds](#review-rounds) and
+[Merge gate](#merge-gate).
 
 `ocr serve hooks gitlab` registers the webhooks on a GitLab instance.
 
@@ -36,8 +40,9 @@ curl -s http://127.0.0.1:3012/healthz
 
 Without GitHub, remove the `github-app.pem` volume and the
 `OCR_SERVE_GITHUB_PRIVATE_KEY_FILE` line from `compose.yml`. The example runs
-the OCR engine (`OCR_SERVE_ENGINE=ocr`); for the CLI engine, add the mounts
-and settings of [Review engine](#review-engine).
+the OCR engine (`OCR_SERVE_ENGINE=ocr`), which has no fix run, so every round
+only reports; for the CLI engine, add the mounts and settings of
+[Review engine](#review-engine).
 
 ## Komodo
 
@@ -76,15 +81,16 @@ OCR_SERVE_GITLAB_WEBHOOK_SECRET=[[OCR_SERVE_GITLAB_WEBHOOK_SECRET]]
 OCR_SERVE_IGNORE_AUTHORS=
 OCR_SERVE_MAX_ROUNDS=
 OCR_SERVE_REVIEW_TIMEOUT=
-OCR_SERVE_POLL_INTERVAL=
 OCR_SERVE_WORKERS=
 OCR_SERVE_REVIEW_CONCURRENCY=
 OCR_SERVE_BUNDLE_LINES=
 OCR_SERVE_EXCLUDE=
 OCR_LLM_TIMEOUT=900
-# Review engine; empty uses the default (cli with codex).
+# Review engine; empty uses the default (cli with codex, fix run with claude).
 OCR_SERVE_ENGINE=
 OCR_SERVE_REVIEW_CLI=
+OCR_SERVE_VERIFY_CLI=
+OCR_SERVE_VERIFY_MODEL=
 OCR_SERVE_CODEX_EFFORT=medium
 ```
 
@@ -129,7 +135,7 @@ Layout under `~/ocr-review/`:
 |---|---|
 | `src/` | Checkout of this repository; `deploy.sh` clones it on the first run. |
 | `bin/ocr`, `bin/ocr.prev` | The running binary and the previous one. |
-| `data/` | `OCR_SERVE_DATA_DIR`: `waiting.json`, `cli-home/` (run dirs), `cache/` (toolchain caches). |
+| `data/` | `OCR_SERVE_DATA_DIR`: `cli-home/` (run dirs), `cache/` (toolchain caches). |
 | `work/` | `OCR_SERVE_WORK_DIR`: checkout slots. |
 | `skills/` | The review skill tree (`OCR_SERVE_SKILL_DIR`). |
 | `config.json` | OCR config with `language` (`OCR_CONFIG_FILE`). |
@@ -164,9 +170,9 @@ OCR_SERVE_GITLAB_WEBHOOK_SECRET=<secret>
 # For OCR_SERVE_REVIEW_CLI=agy (review only):
 # OCR_SERVE_AGY_BIN=/home/<user>/.local/bin/agy
 # OCR_SERVE_AGY_TOKEN=/home/<user>/.gemini/antigravity-cli/antigravity-oauth-token
-# Optional, as on the stack: OCR_SERVE_REVIEW_CLI, OCR_SERVE_FIX_CLI,
-# OCR_SERVE_VERIFY_CLI, OCR_SERVE_VERIFY_MODEL, OCR_SERVE_VERIFY_POST,
-# OCR_SERVE_CODEX_EFFORT, OCR_SERVE_MAX_ROUNDS, OCR_SERVE_EXCLUDE, ...
+# Optional, as on the stack: OCR_SERVE_REVIEW_CLI, OCR_SERVE_VERIFY_CLI,
+# OCR_SERVE_VERIFY_MODEL, OCR_SERVE_CODEX_EFFORT, OCR_SERVE_MAX_ROUNDS,
+# OCR_SERVE_EXCLUDE, ...
 # OCR_LLM_* only for OCR_SERVE_ENGINE=ocr.
 ```
 
@@ -245,14 +251,13 @@ setting both forms is an error.
 | Variable | Default | Notes |
 |---|---|---|
 | `OCR_SERVE_ADDR` | `127.0.0.1:3012` | The image sets `0.0.0.0:3012`. The health check uses port 3012. |
-| `OCR_SERVE_MAX_ROUNDS` | `3` | Automatic rounds per PR, 1..10. |
-| `OCR_SERVE_POLL_INTERVAL` | `2m` | How often waiting GitLab MRs are checked for resolved threads. |
-| `OCR_SERVE_WORKERS` | `2` | Concurrent reviews, 1..16; also the number of checkout slots. |
-| `OCR_SERVE_REVIEW_TIMEOUT` | `2h` | Limit for one review run, timed from when a worker takes it. Each file group in the review has a limit of 120 minutes per review round. |
+| `OCR_SERVE_MAX_ROUNDS` | `3` | Fix rounds per chain, 1..10. One report-only round follows them; see [Review rounds](#review-rounds). |
+| `OCR_SERVE_WORKERS` | `2` | Concurrent rounds, 1..16; also the number of checkout slots. |
+| `OCR_SERVE_REVIEW_TIMEOUT` | `2h` | Limit for one round (the review and the fix run together), timed from when a worker takes it. Each file group in the review has a limit of 120 minutes per round. |
 | `OCR_SERVE_REVIEW_CONCURRENCY` | `5` | LLM subtasks that one review runs at the same time, 1..32. `ocr review --concurrency` keeps its default of 8. |
 | `OCR_SERVE_BUNDLE_LINES` | `300` | A PR with fewer files than the grouping minimum (4) and fewer changed lines than this value is reviewed as one group; otherwise each file is a separate group. 50..5000. Replaces the template value of 200 for serve reviews only. |
 | `OCR_SERVE_MAX_BODY_BYTES` | `10485760` | Webhook body limit. |
-| `OCR_SERVE_DATA_DIR` | `~/ocr-review/data` | Holds `waiting.json` (GitLab MRs waiting for resolution), the CLI run dirs and the sandbox caches. The image sets `/data`; without `HOME` the default is `/data`. A relative path is made absolute. |
+| `OCR_SERVE_DATA_DIR` | `~/ocr-review/data` | Holds the CLI run dirs and the sandbox caches. The image sets `/data`; without `HOME` the default is `/data`. A relative path is made absolute. |
 | `OCR_SERVE_WORK_DIR` | `~/ocr-review/work` | Checkout slots `slot-N`, emptied after each run. The image sets `/work`; without `HOME` the default is `/work`. |
 | `OCR_SERVE_IGNORE_REPOS` | empty | Comma-separated RE2 patterns; match anywhere in the value. |
 | `OCR_SERVE_IGNORE_AUTHORS` | empty | Same format. |
@@ -262,7 +267,7 @@ setting both forms is an error.
 | `OCR_SERVE_IGNORE_LABELS` | empty | Comma-separated, exact match. |
 | `OCR_SERVE_EXCLUDE` | empty | Comma-separated globs added to the serve file filter for every repository; see [File filter](#file-filter). |
 | `OCR_SERVE_BOT_INDICATORS` | `bot` | Substrings that mark a GitLab sender as a bot. |
-| `OCR_SERVE_MENTIONS` | empty | Comma-separated extra names users may tag the bot with to run a command (`@<name> fix`), on top of the GitHub App slug and the GitLab bot username. Letters, digits, `-`, `_` and `.` only, without `@`. |
+| `OCR_SERVE_MENTIONS` | empty | Comma-separated extra names users may tag the bot with to run a command (`@<name> review`), on top of the GitHub App slug and the GitLab bot username. Letters, digits, `-`, `_` and `.` only, without `@`. |
 | `OCR_SERVE_GITHUB_APP_ID` | empty | Enables GitHub. |
 | `OCR_SERVE_GITHUB_PRIVATE_KEY` / `_FILE` | | Required with GitHub. The example compose sets `_FILE`. A one-line value with literal `\n` escapes is accepted. |
 | `OCR_SERVE_GITHUB_WEBHOOK_SECRET` / `_FILE` | | Required with GitHub. |
@@ -276,8 +281,9 @@ At least one platform must be enabled; otherwise the service stops with
 
 ### Review engine
 
-`OCR_SERVE_ENGINE` picks the engine. Both post findings the same way: inline
-threads, the summary marker, rounds and the merge gate do not change.
+`OCR_SERVE_ENGINE` picks the engine. Rounds, the round comments, the summary
+marker and the merge gate are the same for both; only `cli` has a
+[fix run](#fix-run), so with `ocr` every round only reports.
 
 - `cli` (default) runs an installed agent CLI on the checkout. The service
   selects the files with the same filters as the OCR engine (project rule,
@@ -293,11 +299,13 @@ threads, the summary marker, rounds and the merge gate do not change.
   mode (ocr serve)" section overrides the `gh` steps of the references.
   Findings on files outside the selection are dropped. A finding about the
   PR as a whole, such as the PR description check (the agent reports it with
-  an empty path, or on `pr.json`), becomes a PR-level thread: on GitLab a
-  discussion without a position, on GitHub a file-level thread on the first
-  changed file, since only review threads can be resolved there; its body
-  says it is about the whole PR. Both block the merge until resolved. The
-  skill is not part of this repository.
+  an empty path, or on `pr.json`), is kept as a PR-level finding with an
+  empty path; the fix run never edits the PR description, so a real one is
+  listed in the round comment as not fixed. When the round reviews a fix
+  commit the service pushed, the prompt tells the agent to report only
+  problems that commit introduces or leaves unfixed in its changed lines,
+  and not to check the PR description or scope again. The skill is not part
+  of this repository.
 
   A large PR is reviewed in batches, one CLI run each, in its own run
   directory. Files of one directory stay in one batch where they fit. Each
@@ -306,15 +314,14 @@ threads, the summary marker, rounds and the merge gate do not change.
   batch); a PR within both limits is one run. In a batch, `pr.json` keeps
   the whole PR and every selected file in `files`, and adds `batch`
   (`index` from 1, `count`, and the batch `files`); `diff.patch` holds only
-  the batch files, and the dismissed findings go to every batch. Only the
-  first batch checks the PR description. Findings are merged, and a finding
-  with the same path, line and title as an earlier one is dropped. The run
-  timeout covers all batches. When a batch fails, the others still post
-  their findings and the review is partial: the summary lists the files of
-  the failed batch, and `/review` reviews again. Each batch logs one
-  `review batch` line with its files, changed lines, findings and duration.
-  Batching applies to every review (automatic rounds, `/review`,
-  `/review-commit` and the review after a `/fix` commit); `/fix` is one run.
+  the batch files. Only the first batch checks the PR description. Findings
+  are merged, and a finding with the same path, line and title as an earlier
+  one is dropped. The round timeout covers all batches. When a batch fails,
+  the others still give their findings and the review is partial: the round
+  comment lists the files of the failed batch, and `review` starts the chain
+  again. Each batch logs one `review batch` line with its files, changed
+  lines, findings and duration. Batching applies to the review of every
+  round; the fix run is one run.
 - `ocr` runs the in-process OCR review with the `OCR_LLM_*` settings. Use it
   to roll back: set `OCR_SERVE_ENGINE=ocr` and redeploy. The CLI settings and
   mounts are then not used.
@@ -323,13 +330,12 @@ threads, the summary marker, rounds and the merge gate do not change.
 |---|---|---|
 | `OCR_SERVE_ENGINE` | `cli` | `cli` or `ocr`. |
 | `OCR_SERVE_REVIEW_CLI` | `codex` | CLI for reviews: `codex`, `claude` or `agy` (see [Antigravity CLI](#antigravity-cli-agy)). |
-| `OCR_SERVE_FIX_CLI` | `claude` | CLI for `/fix` runs: `claude` or `codex`. Its credential file is required too. `agy` is refused at startup: it runs reviews only. |
 | `OCR_SERVE_CODEX_BIN` | `codex` | Name on `PATH` or absolute path. The Komodo stack sets the mounted binary. |
 | `OCR_SERVE_CLAUDE_BIN` | `claude` | Same. |
 | `OCR_SERVE_CODEX_MODEL` | empty | Codex `-m`; empty uses the account default. |
 | `OCR_SERVE_CODEX_EFFORT` | empty | Codex `model_reasoning_effort`, for example `medium`. |
 | `OCR_SERVE_CLAUDE_MODEL` | empty | Claude `--model`; empty uses the `model` of the settings file. |
-| `OCR_SERVE_SKILL_DIR` | | Required with `cli`. Absolute path of the directory that holds `skills/ak-review-pr/SKILL.md` and its `references/`, and optionally `agents/kongming.md` for `/fix`. |
+| `OCR_SERVE_SKILL_DIR` | | Required with `cli`. Absolute path of the directory that holds `skills/ak-review-pr/SKILL.md` and its `references/`, and optionally `agents/kongming.md` for the fix run. |
 | `OCR_SERVE_CLI_HOME` | `$OCR_SERVE_DATA_DIR/cli-home` | Directory the service owns. Each run gets `run-<id>/` in it, removed when the run ends; leftovers are removed at startup. |
 | `OCR_SERVE_CODEX_AUTH` | | Required with `codex`. The host `~/.codex/auth.json`. Each run's `CODEX_HOME` links `auth.json` to it; nothing else of the host `~/.codex` is used. Mount it read-write so a token refresh reaches the host file. |
 | `OCR_SERVE_BATCH_LINES` | `1500` | Changed lines (insertions plus deletions) per review batch, `100`..`50000`. |
@@ -341,7 +347,7 @@ threads, the summary marker, rounds and the merge gate do not change.
 | `OCR_SERVE_AGY_MODEL` | empty | agy `--model`, a slug from `agy models`, for example `gemini-4-hydrogen-high`; empty uses the account default. |
 | `OCR_SERVE_AGY_EFFORT` | empty | agy `--effort`: `low`, `medium`, `high`, `xhigh` or `max`. |
 
-At startup the service checks that the review, fix and verify CLI binaries, the
+At startup the service checks that the review and fix run CLI binaries, the
 skill file and the CLI credential files can be read, and stops with the
 variable name when one cannot. How each CLI runs:
 
@@ -358,13 +364,14 @@ variable name when one cannot. How each CLI runs:
 - Claude: `claude -p --output-format json` with only the `Read`, `Grep` and
   `Glob` tools, `--setting-sources user` and `--strict-mcp-config` so the
   checkout's settings and MCP servers are not loaded, and `--add-dir` for the
-  skill and run directories. A `/fix` run uses `--permission-mode acceptEdits`
-  and the tools `Read`, `Edit`, `MultiEdit`, `Write`, `Glob`, `Grep` and
-  `Task`, plus `Bash` only with `OCR_SERVE_SANDBOX=docker`, where the shell
-  runs in the run's container (see [Sandbox](#sandbox)). Without the sandbox
-  it gets no shell. A [verify](#verify-pass) run keeps the read tools and
+  skill and run directories. A [fix run](#fix-run) uses
+  `--permission-mode acceptEdits` and the tools `Read`, `Edit`, `MultiEdit`,
+  `Write`, `Glob`, `Grep` and `Task`, plus `Bash` only with
+  `OCR_SERVE_SANDBOX=docker`, where the shell runs in the run's container
+  (see [Sandbox](#sandbox)). A report-only fix run keeps the read tools and
   gets `Bash` the same way, only with the docker sandbox, where the checkout
-  is mounted read-only.
+  is mounted read-only. Without the sandbox neither gets a shell, so neither
+  can run the tests.
 - agy: `agy -p <prompt> --output-format json --json-schema <schema file>
   --dangerously-skip-permissions --disable-slash-commands --settings <json>`
   in the run input directory, not in the checkout, with `--add-dir` for the
@@ -404,7 +411,8 @@ redeploy.
 ### Antigravity CLI (agy)
 
 `OCR_SERVE_REVIEW_CLI=agy` reviews with the Google Antigravity CLI. It is a
-review CLI only; `/fix` keeps `OCR_SERVE_FIX_CLI` (`claude` or `codex`).
+review CLI only; the fix run keeps `OCR_SERVE_VERIFY_CLI` (`claude` or
+`codex`).
 
 Install it and sign in once, as the service user on the host:
 
@@ -470,87 +478,81 @@ Read-only intent. agy has no read-only mode. The prompt forbids edits, the
 deny rule blocks agy's file write tool, and with `OCR_SERVE_SANDBOX=docker`
 the checkout is mounted read-only. With `OCR_SERVE_SANDBOX=none` agy can
 still change the checkout through a shell command. The checkout slot is
-emptied when the review ends, but a change stays in place for the later
-batches of the same review, so run agy with the docker sandbox where you
-can.
+emptied when the round ends, but a change stays in place for the later
+batches of the same review and for the fix run, and the service commits
+every change in the checkout, so such a change can reach the bot's fix
+commit. Run agy (and codex) with the docker sandbox where you can.
 As with codex, agy has a shell (`--dangerously-skip-permissions`), so a PR
 that tricks it into a network command could send the token file out.
 
-### Verify pass
+### Fix run
 
-`OCR_SERVE_VERIFY_CLI` turns on a second check of the findings before they
-are posted. One reviewer CLI finds the most real problems but also reports
-minor, wrong and out-of-scope ones; a second CLI that reads the code for
-each finding sorts them. Example: review with agy, verify with Claude Opus,
-and post only the real findings:
+With the CLI engine every round that has findings runs one fix run after the
+review. It reads the code for each finding, keeps only the real ones, fixes
+them with the smallest change, runs the project tests and answers with what
+it fixed. A finding it judges minor, false or out of scope is dropped and is
+not shown anywhere. Example: review with agy, fix with Claude Opus:
 
 ```bash
 OCR_SERVE_REVIEW_CLI=agy
 OCR_SERVE_AGY_MODEL=gemini-4-carbon-medium
 OCR_SERVE_VERIFY_CLI=claude
 OCR_SERVE_VERIFY_MODEL=opus
-OCR_SERVE_VERIFY_POST=real
 ```
 
-After the review has merged the findings of all batches and dropped the
-duplicates, and when at least one finding is left, the service runs the
-verify CLI once, in the same sandbox as a review and with the checkout
-read-only. Its run directory holds `pr.json`, `diff.patch` with the changes
-of every selected file, and `findings.json` with each finding under an id
-(`F1`, `F2`, ...). The prompt does not hold the review skill, only
-`pr-body-contract.md` from its `references/` and the findings. It tells the
-verifier to act as an independent senior reviewer, to read the code at each
-cited location, the PR diff (it names the `git diff` ranges), the callers
-and the tests, not to trust the finding text, and not to report new
-findings. It gives each finding one verdict, and may correct its severity:
+The review findings get the ids `F1`, `F2`, ... and go to the run directory
+as `findings.json` (`id`, `path`, `line`, `end_line`, `severity`,
+`category`, `content`), next to `pr.json` with `mode` `fix` (and `files`, the
+files the branch changes) or `report` (report-only). The prompt is the
+skill's `SKILL.md` followed by `mode-fix.md`, `review-checklist.md` and
+`pr-body-contract.md` from its `references/`, and the service instructions:
+the section "Service fix mode (ocr serve)" of `mode-fix.md` applies, the
+`git diff` ranges of the reviewed changes and of the whole PR, the findings,
+and the answer schema. In a fix round the current directory is a checkout of
+the PR head branch; in a report-only round it is a read-only checkout of the
+PR head. For Claude in a fix round, `$OCR_SERVE_SKILL_DIR/agents/kongming.md`
+is installed into the run's config dir with `model: inherit`, read-only
+tools and no project memory; without the file the run goes on without it.
+
+The skill section gives each finding one verdict:
 
 | Verdict | Meaning |
 |---|---|
 | `real` | A defect this PR introduces or touches that should be fixed before merge, with a concrete failing scenario. |
-| `minor` | True but of low impact: style, a speculative concern, hardening of configuration the project sets itself. |
+| `minor` | True but of low impact. |
 | `false` | Wrong: already handled, a misreading, or unreachable. |
 | `out_of_scope` | True, but this PR did not introduce or change the code at fault. |
 
-A PR-level finding about the PR description is judged by
-`pr-body-contract.md`; one about the PR scope is `real` when the PR clearly
-mixes unrelated changes.
+A finding about the PR description is judged by `pr-body-contract.md`; one
+about the PR scope is real when the PR clearly mixes unrelated changes. The
+fix run never edits the PR description: real PR-level findings, and real
+findings without a safe fix, go to `report_only` with the failing scenario
+and the proposed fix.
 
-The service posts only the findings whose verdict is in
-`OCR_SERVE_VERIFY_POST`, with the verifier's severity and its reason as a
-last line (locale key `finding.verified`). A finding the verifier gave no
-valid verdict is posted unverified, with a warning in the log. When the
-verify run fails or times out, every finding is posted unverified, the log
-gets a `review verify failed` warning and the summary comment says that the
-check failed; the review still counts as complete (or partial). The verify
-run has 45 minutes and ends 5 minutes before the review timeout, so the
-findings can still be posted. A successful run logs one `review verify`
-line with the count of each verdict (`real`, `minor`, `out_of_scope`,
-`false`, and `missing` for findings without a verdict), the findings posted
-and the duration, and the summary comment shows how many findings were
-checked and posted.
-
-The pass runs for every review: automatic rounds, `/review`,
-`/review-commit` and the review after a `/fix` commit. `/fix`, rounds,
-threads, the merge gate and the dismissed findings do not change. A finding
-the verifier drops gets no thread, so a later round can report it again,
-and the verifier then checks it again.
+The answer is one JSON object:
+`{fixed: [{id, path, line, problem, fix}], report_only: [{id, path, line, problem, scenario, proposed_fix}], tests: {command, passed, output_tail}, summary, commit_message}`.
+The service keeps only ids of the request, each once; an id in both lists
+counts as reported, and a `fixed` entry of a report-only run becomes a
+reported one with its fix as the proposal. The texts are in the `language`
+of `config.json`; `commit_message` is one short English line, cut to its
+first line and 100 characters (`fix: address review findings` when empty).
 
 | Variable | Default | Notes |
 |---|---|---|
-| `OCR_SERVE_VERIFY_CLI` | `none` | `none`, `claude` or `codex`. `agy` is refused at startup. The credential file of the CLI is required, as for the review CLI. |
-| `OCR_SERVE_VERIFY_MODEL` | empty | Model of the verify run: Claude `--model` or Codex `-m`, for example `opus`. Empty uses the model setting of that CLI (`OCR_SERVE_CLAUDE_MODEL` or `OCR_SERVE_CODEX_MODEL`), then the CLI default. Codex keeps `OCR_SERVE_CODEX_EFFORT`. |
-| `OCR_SERVE_VERIFY_POST` | `real` | Comma list of the verdicts whose findings are posted: `real`, `minor`, `out_of_scope`, `false`. |
+| `OCR_SERVE_VERIFY_CLI` | `claude` | CLI of the fix run: `claude` or `codex`. `agy` and `none` are refused at startup: agy runs reviews only, and every round needs the fix run. The credential file of the CLI is required, as for the review CLI. Not used with `OCR_SERVE_ENGINE=ocr`. |
+| `OCR_SERVE_VERIFY_MODEL` | empty | Model of the fix run: Claude `--model` or Codex `-m`, for example `opus`. Empty uses the model setting of that CLI (`OCR_SERVE_CLAUDE_MODEL` or `OCR_SERVE_CODEX_MODEL`), then the CLI default. Codex keeps `OCR_SERVE_CODEX_EFFORT`. |
 
-With `claude` the verify run gets `Read`, `Grep` and `Glob`, plus `Bash`
-with `OCR_SERVE_SANDBOX=docker` so it can run `git diff` and similar read
-commands in the container. As for a `/fix` run, that shell can reach the
-network, so a PR that tricks the verifier could send the token of the
-mounted settings out; without the sandbox it gets no shell.
+The tests run in the fix run's shell. Use `OCR_SERVE_SANDBOX=docker`: the
+[sandbox](#sandbox) image of the checkout holds the toolchain, and Claude
+gets `Bash` only there. A Claude fix run without the sandbox runs no tests,
+and the round comment says the tests were not run. The shell can reach the
+network, so a PR that tricks the fix run could send the token of the mounted
+settings or auth file out.
 
 ### Sandbox
 
-`OCR_SERVE_SANDBOX=docker` runs every CLI process (the codex review, the
-claude or codex `/fix`) in a throwaway container of its own. The default
+`OCR_SERVE_SANDBOX=docker` runs every CLI process (the review and the fix
+run) in a throwaway container of its own. The default
 `none` runs the CLI as a child process of the service, which is right when
 the service itself runs in a container (the Komodo stack). The sandbox needs
 the docker CLI and a daemon the service user may use (on Linux, membership
@@ -597,7 +599,7 @@ the container as on the host:
 
 | Mount | Mode |
 |---|---|
-| The PR checkout (`$OCR_SERVE_WORK_DIR/slot-N`) | read-write for `/fix`, read-only for a review |
+| The PR checkout (`$OCR_SERVE_WORK_DIR/slot-N`) | read-write for a fix run, read-only for a review and a report-only fix run |
 | The run directory (`$OCR_SERVE_CLI_HOME/run-<id>`: home, input, output) | read-write |
 | `$OCR_SERVE_SKILL_DIR` | read-only |
 | The CLI install (see above) | read-only |
@@ -628,7 +630,7 @@ codex), the Claude settings file (for claude), the agy token file (for agy),
 the toolchain caches, and the network. What it cannot reach: any other host path (the service `.env`, the
 GitHub App key, the forge tokens, the docker socket, other checkouts), the
 host processes, and root in the container. Accepted risk: the network is
-open, because the CLI needs its API and `/fix` needs package registries, so
+open, because the CLI needs its API and the fix run needs package registries, so
 a CLI tricked by the PR content could still send the mounted auth file (and
 the rest of `~/.codex`, or the Claude settings with their API token) out.
 Run the service only on repositories whose authors you trust.
@@ -716,104 +718,136 @@ The summary's file count covers only the files left after filtering.
 
 ## Review rounds
 
-- Round 1 runs when a non-draft PR opens, is reopened, or a draft becomes
-  ready. It reviews the whole PR (merge base to HEAD).
-- A push while OCR threads are open does nothing. When every OCR thread is
-  resolved and HEAD moved, the next round reviews the new commits only
-  (reviewed SHA to HEAD). GitHub reports resolution by webhook; GitLab has no
-  such event, so waiting MRs are polled and re-checked on push and comments.
-- A force-push that drops the reviewed commit gives a full review, which still
-  counts as one round.
-- After `max_rounds` automatic rounds the service posts one note and stops
-  automatic reviews for that PR.
-- A review that fails does not count as a round; the next trigger retries.
-  A review that finds nothing to review (for example, every changed file is
-  excluded) does not count either: it moves the reviewed SHA so the same
-  commits are not reviewed again, and the summary says so.
-- Commands in a PR comment always run and never count toward the limit:
-  `/review [--effort=low|medium|high]` reviews the whole PR and moves the
-  reviewed SHA; `/review-commit` reviews the HEAD commit against its first
-  parent; `/fix` fixes the open findings and pushes (see
-  [Fixing findings](#fixing-findings-fix)). Their findings are threads that must be resolved too. The command
-  comment gets a reaction on receipt (eyes) and on the result (GitHub: rocket
-  or confused; GitLab: white_check_mark or x), plus a reply. On GitLab,
-  assigning the bot as reviewer of a non-draft MR acts as `/review`.
-- A command can also tag the bot instead of starting with `/`:
-  `@<bot> review --effort=high`, `@<bot> review-commit`, `@<bot> fix`, or
-  `@<bot> /fix`, with an optional `:` or `,` after the name
-  (`@<bot>: fix`). `<bot>` is the GitHub App slug (the bot login without
-  `[bot]`) or the GitLab bot username (the user of `OCR_SERVE_GITLAB_TOKEN`,
-  and `OCR_SERVE_GITLAB_BOT_USERNAME` when set), plus any name in
-  `OCR_SERVE_MENTIONS`; the name matches without regard to case. Only the
-  first non-empty line counts, and only when the tag starts it: a tag later
-  in the line or a tag of another user is an ordinary comment. A tag with no
-  command or an unknown word gets the help reply. The help reply and the
-  summary show the tag form with the bot name of the platform. The service
-  reads the GitHub App slug at startup. When that fails it logs a warning
-  and, until a later API call reads the slug, accepts only the slash form
-  and the `OCR_SERVE_MENTIONS` names; the texts then show the first of those
-  names, or only the slash form when none is set. Editing a comment from
-  `@<bot> fix` to `/fix` does not run it again.
+A chain is a series of rounds on one PR. One round:
 
-## Fixing findings (`/fix`)
-
-A PR comment `/fix` (no arguments) asks the service to fix the open finding
-threads and push the fix to the PR branch. Like `/review` it always runs,
-never counts as a round, is queued with the other runs of the PR, and gets
-the same reactions. It needs `OCR_SERVE_ENGINE=cli`; with `ocr` it answers
-that it is not available.
-
-1. A PR whose head branch is in a fork gets a reply that the bot cannot push
-   there, and nothing runs. With no open finding thread it replies that there
-   is nothing to fix.
-2. The service checks out the head branch itself (not detached) with a token
-   that can push, and writes `pr.json` and `findings.json` into the run
-   directory. `findings.json` lists the open threads of the bot: `id` (the
-   finding tag), `path`, `line`, `severity`, `title`, `body`, and `replies`
-   (`author`, `body`) from people in the thread; the agent skips a finding
-   they disputed.
-3. `OCR_SERVE_FIX_CLI` runs the skill as `/ak-review-pr <PR> --advice --fix
-   --reply` in its "Service fix mode" section, read from
-   `$OCR_SERVE_SKILL_DIR/skills/ak-review-pr/references/mode-fix.md`; the
-   prompt holds the full text of `mode-fix.md` and `review-checklist.md`. For
-   Claude, `$OCR_SERVE_SKILL_DIR/agents/kongming.md` is installed into the
-   run's config dir with `model: inherit`, read-only tools and no project
-   memory; without the file the run goes on without it. The agent answers
-   with `fixed`, `skipped` (id and reason), `summary` and `commit_message`.
-4. When the checkout changed, the service commits as the bot (GitHub:
+1. The review CLI reviews the round's scope (see the table below).
+2. When it finds something, the [fix run](#fix-run) keeps only the real
+   findings, fixes them and runs the tests. With the OCR engine there is no
+   fix run, and every finding is reported as the review gave it.
+3. When the fix run changed files, the service commits as the bot (GitHub:
    `<app-slug>[bot]` with `<bot-user-id>+<app-slug>[bot]@users.noreply.github.com`;
-   GitLab: the bot user's name and commit email) with the agent's message cut
-   to one line (`fix: address review findings` when empty), and pushes without
-   force. Hooks do not run, and a run that changed `.git/config`, made its own
-   commit or left the branch is refused. A refused push (protected branch,
-   missing permission, branch moved) gets a reply with git's reason. Without
-   changes it posts the summary and the skipped findings and stops.
-5. After the push it resolves the fixed threads, replies in each skipped
-   thread with the reason (the thread stays open), posts one note with the
-   summary, the commit and the counts, and reviews the fix commit as
-   `/review-commit` does, without counting a round.
+   GitLab: the bot user's name and commit email) with the fix run's commit
+   message, and pushes to the PR head branch without force. Hooks do not
+   run, and a fix run that changed `.git/config`, made its own commit or left
+   the branch fails the round.
+4. The service posts one PR comment for the round.
 
-The bot's own push does not start an automatic round: GitHub reports it with
-the App as sender, GitLab with the bot user, and both are filtered as bot
-events. `OCR_SERVE_REVIEW_TIMEOUT` limits a fix run as it limits a review; the
-run directory is removed and the CLI process group is stopped when it ends.
+| Round | Starts when | Scope | Fix and push |
+|---|---|---|---|
+| 1 | a non-draft PR opens or a draft becomes ready, and the PR has no OCR summary comment yet (a PR with a chain only gets its status copied) | the whole PR (merge base to head) | yes |
+| 2 to `max_rounds` | the service pushed a fix in the previous round; it queues the round itself | only that fix commit | yes |
+| `max_rounds` + 1 | the same, after round `max_rounds` | only the last fix commit | no: report only |
 
-Reviews remember dismissed findings: a resolved finding thread with at least
-one reply from a person is passed to the review CLI as `dismissed.json`
-(`path`, `line`, `title`, `body`, `reason` = the replies), and the agent is told
-not to report it again. A thread resolved without a reply counts as fixed.
+`max_rounds` is `OCR_SERVE_MAX_ROUNDS` (default 3), or `max_rounds` in the
+repository's `serve.json`. A review of a fix commit does not check the PR
+description or scope again. The report-only round gets a read-only checkout
+and lists the real findings with the failing scenario and the proposed fix.
+Nothing runs automatically after it.
+
+The chain ends when a round has no real finding or nothing to review (for
+example, every changed file is excluded): no push, so no next round. It also
+ends after a round that only reports. A round only reports when:
+
+- it is round `max_rounds` + 1;
+- the PR head branch is in a fork (the bot cannot push there);
+- the push is refused (protected branch, missing permission, branch moved);
+  the comment quotes git's reason;
+- the fix run changed no file, or fixed none of the real findings;
+- the engine is `ocr`.
+
+When the tests fail or cannot run after a fix, the fix is pushed anyway and
+the comment says so with the end of the test output.
+
+The round comment has the title "OCR review, round k/N" (or "round N+1
+(report only)"), the reviewed range, and for each fixed finding the file and
+line, the problem and how it was fixed, then the fix commit and the test
+command with its result. Real findings that were not fixed, PR-level ones
+included, are listed under "Real findings, not fixed" with the scenario and
+the proposed fix, and, when the round could not fix at all, why. Findings the
+fix run dropped are not shown. The texts come from the service locale.
+
+A push by a person, or a reopened PR, never starts a round: it copies the
+chain's current status to the new head (see [Merge gate](#merge-gate)). The
+bot's own push is filtered as a bot event; the round that pushed queues the
+next round. One chain runs per PR, and the rounds of a PR run one at a time.
+
+The summary comment holds the chain state: the status and a table with one
+row per round (round, reviewed range, real findings, fixed, fix commit). The
+round comments are separate comments.
+
+Commands in a PR comment:
+
+- `/review [--effort=low|medium|high]` restarts the chain as round 1 on the
+  whole PR. A round of the old chain that runs is cancelled, and its queued
+  rounds are skipped.
+- `/review-commit` does the same, but round 1 covers only the latest commit.
+- The command comment gets a reaction on receipt (eyes) and when round 1
+  ends (GitHub: rocket; GitLab: white_check_mark); the round comment is the
+  answer. A command that is rejected or whose round fails gets GitHub:
+  confused or GitLab: x, plus a reply. An unknown command, `fix` included,
+  gets the help reply. On GitLab, assigning the bot as reviewer acts as
+  `/review`.
+- A command can also tag the bot instead of starting with `/`:
+  `@<bot> review --effort=high` or `@<bot> review-commit`, with an optional
+  `:` or `,` after the name (`@<bot>: review`). `<bot>` is the GitHub App
+  slug (the bot login without `[bot]`) or the GitLab bot username (the user
+  of `OCR_SERVE_GITLAB_TOKEN`, and `OCR_SERVE_GITLAB_BOT_USERNAME` when set),
+  plus any name in `OCR_SERVE_MENTIONS`; the name matches without regard to
+  case. Only the first non-empty line counts, and only when the tag starts
+  it: a tag later in the line or a tag of another user is an ordinary
+  comment. A tag with no command or an unknown word gets the help reply. The
+  help reply and the summary show the tag form with the bot name of the
+  platform. The service reads the GitHub App slug at startup. When that fails
+  it logs a warning and, until a later API call reads the slug, accepts only
+  the slash form and the `OCR_SERVE_MENTIONS` names; the texts then show the
+  first of those names, or only the slash form when none is set. Editing a
+  comment from `@<bot> review` to `/review` does not run it again.
+
+## Merge gate
+
+The service sets the commit status `ocr-review` on the PR head:
+
+| State | When |
+|---|---|
+| `pending` | the chain runs |
+| `success` | the chain ended: a round had no real finding, a report-only round reported, or the bot cannot push |
+| `failure` (GitLab: `failed`) | a round failed (CLI error, quota, timeout, forge error, or a shutdown during the round), until a later `review` succeeds |
+
+When the chain ends, the current head gets the status too, in case a person
+pushed while the round ran. A service restart between a push and the next
+round leaves `pending` until someone comments `review`.
+
+- GitHub: the Statuses API. Make `ocr-review` a required status check in the
+  branch protection of each repository, for example:
+
+  ```bash
+  gh api -X PUT repos/OWNER/REPO/branches/main/protection \
+    -F required_status_checks[strict]=false \
+    -F 'required_status_checks[contexts][]=ocr-review' \
+    -F enforce_admins=false -F required_pull_request_reviews=null \
+    -F restrictions=null -F required_conversation_resolution=false
+  ```
+
+  GitHub enforces branch protection on private repositories only with a paid
+  plan; the Free plan enforces it on public repositories.
+- GitLab: `POST /projects/:id/statuses/:sha` with `name=ocr-review` and
+  `ref` set to the source branch. GitLab counts the status as an external
+  pipeline, so "Pipelines must succeed" blocks the merge; see
+  [GitLab hooks](#gitlab-hooks). GitLab's "Cannot transition status" answer
+  means the status already has that state and is not an error.
 
 ## GitHub App
 
 Webhook URL `https://<host>/ocr/github/webhook` with the webhook secret.
 
-- Repository permissions: Contents read and write (`/fix` pushes to the PR
-  branch; read is enough without it), Pull requests read and write, Issues
-  read and write, Metadata read.
-- Events: Pull request, Issue comment, Pull request review thread.
+- Repository permissions: Contents read and write (the fix rounds push to
+  the PR branch), Pull requests read and write, Issues read and write,
+  Commit statuses read and write (the [merge gate](#merge-gate)), Metadata
+  read.
+- Events: Pull request, Issue comment.
 
-For the merge block, enable "Require conversation resolution before merging"
-in the branch protection of each repository.
+For the merge block, make `ocr-review` a required status check; see
+[Merge gate](#merge-gate).
 
 ## GitLab hooks
 
@@ -838,22 +872,47 @@ docker compose run --rm \
 
 Without `--project` the command manages a system hook for merge request
 events, a project hook on every project for note events, the bot as Developer
-in every top-level group, and turns on "All threads must be resolved" on every
-project. Run it again after new projects appear.
+in every top-level group, and turns on "Pipelines must succeed"
+(`only_allow_merge_if_pipeline_succeeds`) on every project, so the
+`ocr-review` status gates the merge. Run it again after new projects appear.
+It does not turn off "All threads must be resolved": on a project where an
+earlier version of the service set it, turn it off by hand, since old OCR
+threads may stay open and block the merge.
 
-`/fix` pushes to the merge request's source branch with the bot token, so the
-bot needs push rights there: Developer can push to unprotected branches; a
-protected source branch must allow Developers (or the bot) to push, otherwise
-`/fix` replies that the push was refused.
+A fix round pushes to the merge request's source branch with the bot token,
+so the bot needs push rights there: Developer can push to unprotected
+branches; a protected source branch must allow Developers (or the bot) to
+push, otherwise the round only reports and its comment quotes the refusal.
 
 ## Operations
 
 - Logs: JSON lines on stdout with `request_id`; OCR progress lines on stderr
   are plain text prefixed with `[ocr]`.
 - `docker compose stop` sends SIGTERM: the service stops taking webhooks and
-  waits up to 60 seconds for running reviews. A review cut short does not
-  count as a round. `stop_grace_period` in the example is 75 seconds.
-- The round state lives in the PR summary comment, so `/data` and `/work` can
-  be dropped without losing rounds. Without `/data/waiting.json`, a GitLab MR
-  that was waiting for resolution is checked again on its next push or
-  comment instead of by the poller.
+  waits up to 60 seconds for running rounds. A round cut short fails and
+  sets the `failure` status. `stop_grace_period` in the example is 75
+  seconds.
+- The chain state lives in the PR summary comment, so `/data` and `/work` can
+  be dropped without losing it. Queued rounds live only in memory: a restart
+  between a fix push and the next round leaves the status `pending` until
+  someone comments `review`.
+
+## Upgrade from the thread flow
+
+Earlier versions posted each finding as a review thread, gated the merge on
+resolved threads and fixed on `/fix`. When you upgrade:
+
+- These settings are now ignored; remove them: `OCR_SERVE_FIX_CLI`,
+  `OCR_SERVE_VERIFY_POST`, `OCR_SERVE_POLL_INTERVAL`. The GitLab poller and
+  `waiting.json` are gone; an old `waiting.json` in the data dir is not read.
+- `OCR_SERVE_VERIFY_CLI` now names the fix run CLI and defaults to `claude`;
+  `none` and `agy` stop the service at startup.
+- `/fix` is an unknown command and gets the help reply.
+- GitHub: add the App permission "Commit statuses: Read and write", drop the
+  "Pull request review thread" event, and replace "Require conversation
+  resolution before merging" with the required status check `ocr-review`.
+- GitLab: run `ocr serve hooks gitlab --apply` to turn on "Pipelines must
+  succeed", and turn off "All threads must be resolved" by hand.
+- A summary comment with a marker of the old flow reads as no chain. Such a
+  PR gets no automatic round 1 (it already has a summary) and no status;
+  comment `review` to start a chain on it.

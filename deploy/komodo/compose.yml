@@ -45,9 +45,9 @@
 #
 #   Optional; empty means the service default:
 #   OCR_SERVE_IGNORE_AUTHORS         Comma-separated RE2 patterns.
-#   OCR_SERVE_MAX_ROUNDS             Default 3, 1..10.
-#   OCR_SERVE_REVIEW_TIMEOUT         Default 2h.
-#   OCR_SERVE_POLL_INTERVAL          Default 2m.
+#   OCR_SERVE_MAX_ROUNDS             Fix rounds before the report-only
+#                                    round; default 3, 1..10.
+#   OCR_SERVE_REVIEW_TIMEOUT         Default 2h per round.
 #   OCR_SERVE_WORKERS                Default 2, 1..16.
 #   OCR_SERVE_REVIEW_CONCURRENCY     LLM subtasks per review at the same time;
 #                                    default 5, 1..32.
@@ -65,19 +65,17 @@
 #   OCR_SERVE_ENGINE                 cli (default) or ocr, the in-process
 #                                    OCR review kept for rollback.
 #   OCR_SERVE_REVIEW_CLI             codex (default), claude or agy.
-#   OCR_SERVE_FIX_CLI                claude (default) or codex; agy runs
-#                                    reviews only.
 #   OCR_SERVE_CODEX_MODEL, OCR_SERVE_CLAUDE_MODEL, OCR_SERVE_CODEX_EFFORT,
 #   OCR_SERVE_AGY_MODEL, OCR_SERVE_AGY_EFFORT
 #                                    Empty uses the CLI default.
 #   OCR_SERVE_BATCH_LINES, OCR_SERVE_BATCH_FILES, OCR_SERVE_BATCH_CONCURRENCY
 #                                    Review batch size and parallel batches;
 #                                    defaults 1500, 25 and 1.
-#   OCR_SERVE_VERIFY_CLI             none (default), claude or codex: a
-#                                    second CLI checks the findings first.
-#   OCR_SERVE_VERIFY_MODEL           Model of the verify run, e.g. opus;
-#                                    empty uses that CLI's model setting.
-#   OCR_SERVE_VERIFY_POST            Verdicts to post; default real.
+#   OCR_SERVE_VERIFY_CLI             claude (default) or codex: the fix run
+#                                    of each round, which keeps the real
+#                                    findings, fixes them and runs the tests.
+#   OCR_SERVE_VERIFY_MODEL           Model of the fix run, e.g. opus; empty
+#                                    uses that CLI's model setting.
 #   OCR_SERVE_CLAUDE_BIN             Default /opt/claude/versions/2.1.322;
 #                                    change it when the host Claude updates.
 #   OCR_SERVE_CODEX_BIN              Default /opt/codex/releases/0.163.0-
@@ -128,14 +126,12 @@ services:
       OCR_SERVE_IGNORE_AUTHORS: ${OCR_SERVE_IGNORE_AUTHORS:-}
       OCR_SERVE_MAX_ROUNDS: ${OCR_SERVE_MAX_ROUNDS:-}
       OCR_SERVE_REVIEW_TIMEOUT: ${OCR_SERVE_REVIEW_TIMEOUT:-}
-      OCR_SERVE_POLL_INTERVAL: ${OCR_SERVE_POLL_INTERVAL:-}
       OCR_SERVE_WORKERS: ${OCR_SERVE_WORKERS:-}
       OCR_SERVE_REVIEW_CONCURRENCY: ${OCR_SERVE_REVIEW_CONCURRENCY:-}
       OCR_SERVE_BUNDLE_LINES: ${OCR_SERVE_BUNDLE_LINES:-}
       OCR_SERVE_EXCLUDE: ${OCR_SERVE_EXCLUDE:-}
       OCR_SERVE_ENGINE: ${OCR_SERVE_ENGINE:-}
       OCR_SERVE_REVIEW_CLI: ${OCR_SERVE_REVIEW_CLI:-}
-      OCR_SERVE_FIX_CLI: ${OCR_SERVE_FIX_CLI:-}
       OCR_SERVE_CODEX_MODEL: ${OCR_SERVE_CODEX_MODEL:-}
       OCR_SERVE_CLAUDE_MODEL: ${OCR_SERVE_CLAUDE_MODEL:-}
       OCR_SERVE_CODEX_EFFORT: ${OCR_SERVE_CODEX_EFFORT:-}
@@ -146,7 +142,6 @@ services:
       OCR_SERVE_BATCH_CONCURRENCY: ${OCR_SERVE_BATCH_CONCURRENCY:-}
       OCR_SERVE_VERIFY_CLI: ${OCR_SERVE_VERIFY_CLI:-}
       OCR_SERVE_VERIFY_MODEL: ${OCR_SERVE_VERIFY_MODEL:-}
-      OCR_SERVE_VERIFY_POST: ${OCR_SERVE_VERIFY_POST:-}
       OCR_SERVE_CLAUDE_BIN: ${OCR_SERVE_CLAUDE_BIN:-/opt/claude/versions/2.1.322}
       OCR_SERVE_CODEX_BIN: ${OCR_SERVE_CODEX_BIN:-/opt/codex/releases/0.163.0-x86_64-unknown-linux-musl/bin/codex}
       OCR_SERVE_CODEX_AUTH: /opt/codex-home/auth.json
