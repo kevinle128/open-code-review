@@ -20,13 +20,17 @@ import (
 //
 // RepoDir is the working directory. ReadDirs are directories outside it
 // that the agent must be able to read. Schema, when set, is the JSON Schema
-// of the final answer. Getenv supplies the process variables BaseEnv passes
-// on; nil means os.Getenv.
+// of the final answer. Edit lets the agent change files in RepoDir. Agents
+// are subagent definition files a CLI that supports subagents installs for
+// the run; a missing file is left out. Getenv supplies the process
+// variables BaseEnv passes on; nil means os.Getenv.
 type Invocation struct {
 	RepoDir  string
 	Prompt   string
 	Schema   []byte
 	ReadDirs []string
+	Edit     bool
+	Agents   []string
 	Run      *RunDir
 	Grace    time.Duration
 	Getenv   func(string) string
@@ -64,7 +68,8 @@ func (inv Invocation) process(bin string, args, env []string) (Process, error) {
 // Codex runs `codex exec` without its own sandbox: the bubblewrap sandbox
 // needs unprivileged user namespaces, which the container host does not
 // allow, and with it codex cannot run a single tool. The container is the
-// boundary instead; the prompt forbids edits and network commands. AuthFile
+// boundary instead; a review prompt forbids edits, and every prompt forbids
+// network commands, so Edit changes nothing here. AuthFile
 // is the host auth.json; the run home links to it, so a token refresh
 // reaches the host file and the host's config, sessions and logs stay out
 // of the run.
@@ -190,9 +195,11 @@ func codexStreamMessage(path string) (string, error) {
 	return "", errors.New("codex returned no agent message")
 }
 
-// Claude runs `claude -p` with only the read tools. SettingsFile is the host
-// settings.json; the run home gets a copy of its env and model keys only, so
-// the host's hooks, plugins and permission rules do not apply.
+// Claude runs `claude -p` with only the read tools, or for an Edit run the
+// read and edit tools plus Task for the installed agents; never a shell.
+// SettingsFile is the host settings.json; the run home gets a copy of its
+// env and model keys only, so the host's hooks, plugins and permission
+// rules do not apply.
 type Claude struct {
 	Bin          string
 	Model        string
@@ -209,8 +216,15 @@ func (c Claude) Exec(ctx context.Context, inv Invocation) (string, error) {
 	if err := writeClaudeSettings(c.SettingsFile, filepath.Join(inv.Run.Home, "settings.json")); err != nil {
 		return "", err
 	}
+	mode, tools := "default", claudeReadTools
+	if inv.Edit {
+		mode, tools = "acceptEdits", claudeEditTools
+		if err := installAgents(inv.Agents, filepath.Join(inv.Run.Home, "agents")); err != nil {
+			return "", err
+		}
+	}
 	args := []string{"-p", "--output-format", "json", "--no-session-persistence",
-		"--permission-mode", "default", "--allowedTools", "Read,Grep,Glob",
+		"--permission-mode", mode, "--allowedTools", tools,
 		"--setting-sources", "user", "--strict-mcp-config"}
 	if c.Model != "" {
 		args = append(args, "--model", c.Model)
@@ -228,6 +242,67 @@ func (c Claude) Exec(ctx context.Context, inv Invocation) (string, error) {
 		return "", err
 	}
 	return claudeResult(p.Stdout)
+}
+
+const (
+	claudeReadTools = "Read,Grep,Glob"
+	claudeEditTools = "Read,Edit,MultiEdit,Write,Glob,Grep,Task"
+	// agentTools are the tools an installed agent keeps: the agents a fix
+	// run consults advise, and a write from one would land in the commit.
+	agentTools = "Glob, Grep, Read"
+)
+
+// installAgents copies agent definitions into the run's agents directory.
+// The front matter is rewritten: model becomes inherit, so the agent runs
+// on the run's model through the same endpoint; memory is dropped, since
+// project memory would be written into the checkout and committed; tools
+// become read-only.
+func installAgents(paths []string, dir string) error {
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read agent %s: %w", filepath.Base(p), err)
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create agents dir: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, filepath.Base(p)), rewriteAgent(b), 0o600); err != nil {
+			return fmt.Errorf("install agent %s: %w", filepath.Base(p), err)
+		}
+	}
+	return nil
+}
+
+func rewriteAgent(b []byte) []byte {
+	lines := strings.Split(string(b), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return b
+	}
+	out := []string{lines[0]}
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		l := lines[i]
+		if strings.TrimSpace(l) == "---" {
+			end = i
+			break
+		}
+		switch key, _, _ := strings.Cut(l, ":"); strings.TrimSpace(key) {
+		case "model":
+			out = append(out, "model: inherit")
+		case "tools":
+			out = append(out, "tools: "+agentTools)
+		case "memory":
+		default:
+			out = append(out, l)
+		}
+	}
+	if end < 0 {
+		return b
+	}
+	return []byte(strings.Join(append(out, lines[end:]...), "\n"))
 }
 
 // claudeSettingsKeys are the host settings a run keeps: the API endpoint
