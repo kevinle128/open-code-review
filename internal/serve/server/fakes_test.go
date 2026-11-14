@@ -505,6 +505,7 @@ type harness struct {
 	gh    *fakeForge
 	gl    *fakeForge
 	rev   *fakeReviewer
+	fix   *fakeFixer
 	ws    *fakeWorkspaces
 	logs  *syncBuffer
 	cfg   *serveconfig.Config
@@ -531,12 +532,12 @@ func newHarness(t *testing.T, tweak ...func(*serveconfig.Config)) *harness {
 	}
 	h := &harness{
 		t: t, gh: newFakeForge(forge.GitHub), gl: newFakeForge(forge.GitLab),
-		rev: &fakeReviewer{}, ws: &fakeWorkspaces{}, logs: &syncBuffer{}, cfg: cfg, loc: loc,
+		rev: &fakeReviewer{}, fix: &fakeFixer{}, ws: &fakeWorkspaces{}, logs: &syncBuffer{}, cfg: cfg, loc: loc,
 		clock: time.Unix(1_800_000_000, 0),
 	}
 	srv, err := New(Deps{
 		Config: cfg, Forges: map[forge.Platform]forge.Forge{forge.GitHub: h.gh, forge.GitLab: h.gl},
-		Reviewer: h.rev, Workspaces: h.ws, Locale: loc, Logger: NewLogger(h.logs),
+		Reviewer: h.rev, Fixer: h.fix, Workspaces: h.ws, Locale: loc, Logger: NewLogger(h.logs),
 		Now: func() time.Time { return h.clock }, Version: "test",
 	})
 	if err != nil {

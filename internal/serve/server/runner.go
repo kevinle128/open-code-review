@@ -29,6 +29,7 @@ type prState struct {
 	present bool
 	open    int
 	openIDs map[string]bool
+	threads []forge.Thread
 	repo    serveconfig.RepoConfig
 	rule    *rules.ProjectRule
 }
@@ -44,7 +45,12 @@ func (s *Server) process(ref forge.PRRef, j job) bool {
 		s.commandFailed(f, ref, j.cmd, j.cmd.reject, log)
 		return false
 	}
-	err := s.evaluate(ctx, f, ref, j, log)
+	var err error
+	if j.cmd != nil && j.cmd.Kind == CommandFix {
+		err = s.fix(ctx, f, ref, j, log)
+	} else {
+		err = s.evaluate(ctx, f, ref, j, log)
+	}
 	if errors.Is(err, errHeadMoved) {
 		log.Info("head moved, evaluating again")
 		return true
@@ -68,7 +74,7 @@ func (s *Server) evaluate(ctx context.Context, f forge.Forge, ref forge.PRRef, j
 	}
 	// A command the platform raised (a reviewer assignment) follows the
 	// draft rule of automatic reviews; only a typed command runs on a draft.
-	if j.cmd != nil && j.cmd.commentID == "" && st.pr.Draft {
+	if j.cmd != nil && j.cmd.commentID == "" && !j.cmd.followUp && st.pr.Draft {
 		log.Info("decided", "trigger", string(trigger), "action", state.None.String(), "reason", state.ReasonDraft)
 		s.unwait(ref, log)
 		return nil
@@ -146,7 +152,7 @@ func (s *Server) read(ctx context.Context, f forge.Forge, ref forge.PRRef, log *
 	if err != nil {
 		return st, fmt.Errorf("list threads: %w", err)
 	}
-	st.open, st.openIDs = countOpen(threads), openFindingIDs(threads)
+	st.open, st.openIDs, st.threads = countOpen(threads), openFindingIDs(threads), threads
 	if st.repo, err = s.repoConfig(ctx, f, ref, st.pr, log); err != nil {
 		return st, err
 	}
@@ -240,7 +246,7 @@ func (s *Server) run(f forge.Forge, ref forge.PRRef, st prState, a state.Action,
 	from, to, kind := state.ResolveRange(a, st.pr.BaseSHA, st.pr.HeadSHA, ancestry)
 	req := review.Request{RepoDir: ws.Dir(), From: from, To: to,
 		Background: st.repo.Background, Effort: st.repo.Effort, Excludes: st.repo.Exclude,
-		ProjectRule: st.rule, PR: st.pr}
+		ProjectRule: st.rule, PR: st.pr, Dismissed: s.dismissed(st.threads)}
 	if a.Kind == state.RunManualCommit {
 		req.From, req.To, req.Commit = "", "", st.pr.HeadSHA
 	}

@@ -16,9 +16,10 @@ import (
 const (
 	CommandReview       = "review"
 	CommandReviewCommit = "review-commit"
+	CommandFix          = "fix"
 )
 
-// Command is a parsed /review or /review-commit comment.
+// Command is a parsed /review, /review-commit or /fix comment.
 type Command struct {
 	Kind   string
 	Effort string
@@ -35,8 +36,9 @@ var slashWordRE = regexp.MustCompile(`^/[A-Za-z][A-Za-z0-9_-]*$`)
 
 // ParseCommand reads the first non-empty line of a comment. Only that line
 // counts, so prose below a command cannot add arguments. The bool is false
-// when the line is not /review or /review-commit; the error rejects an
-// argument outside the override allowlist and is safe to quote in a reply.
+// when the line is not a known command; the error rejects an argument
+// outside the override allowlist and is safe to quote in a reply. /fix
+// takes no argument.
 func ParseCommand(body string) (Command, bool, error) {
 	name, rest := firstWord(body)
 	var cmd Command
@@ -45,12 +47,20 @@ func ParseCommand(body string) (Command, bool, error) {
 		cmd.Kind = CommandReview
 	case "/review-commit":
 		cmd.Kind = CommandReviewCommit
+	case "/fix":
+		cmd.Kind = CommandFix
 	default:
 		return Command{}, false, nil
 	}
 	args, err := splitArgs(rest)
 	if err != nil {
 		return cmd, true, err
+	}
+	if cmd.Kind == CommandFix {
+		if len(args) > 0 {
+			return cmd, true, errors.New("/fix takes no arguments")
+		}
+		return cmd, true, nil
 	}
 	effort, err := serveconfig.ParseCommandOverrides(args)
 	if err != nil {

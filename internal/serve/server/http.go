@@ -26,11 +26,13 @@ import (
 )
 
 // Deps are the collaborators of the server. A nil entry in Forges disables
-// that platform, and its webhook route answers 404.
+// that platform, and its webhook route answers 404. A nil Fixer turns /fix
+// off: the command then answers that it is not available.
 type Deps struct {
 	Config     *serveconfig.Config
 	Forges     map[forge.Platform]forge.Forge
 	Reviewer   review.Reviewer
+	Fixer      review.Fixer
 	Workspaces review.Workspaces
 	Locale     state.Locale
 	Logger     *slog.Logger
@@ -43,6 +45,7 @@ type Server struct {
 	cfg        *serveconfig.Config
 	forges     map[forge.Platform]forge.Forge
 	reviewer   review.Reviewer
+	fixer      review.Fixer
 	workspaces review.Workspaces
 	loc        state.Locale
 	log        *slog.Logger
@@ -107,7 +110,7 @@ func New(d Deps) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		cfg: d.Config, forges: forges, reviewer: d.Reviewer, workspaces: d.Workspaces,
+		cfg: d.Config, forges: forges, reviewer: d.Reviewer, fixer: d.Fixer, workspaces: d.Workspaces,
 		loc: d.Locale, log: d.Logger, now: d.Now, version: d.Version,
 		store: store, seen: newDedupe(d.Now, dedupeTTL, dedupeMaxKeys),
 		workers: make(chan struct{}, d.Config.Workers),

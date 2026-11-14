@@ -10,9 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
+	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/agentcli"
 	"github.com/alibaba/open-code-review/internal/serve/clireview"
 	"github.com/alibaba/open-code-review/internal/serve/review"
@@ -116,5 +120,70 @@ cp ` + answer + ` "$out"
 	mustContain(t, h.gh.summary(ref), h.loc.Text("summary.open", "count", "2"))
 	if entries, _ := os.ReadDir(homeRoot); len(entries) != 0 {
 		t.Fatal("run dir left after the review")
+	}
+}
+
+// TestCLIFixTimeoutCleansUp runs /fix through the CLI fix engine with a fake
+// claude that never answers: past the limit the process group is stopped,
+// the run directory removed, the slot released and the command answered.
+func TestCLIFixTimeoutCleansUp(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	claude := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\ncat >/dev/null\nsleep 30 &\necho $! > " + pidFile + "\nwait\n"
+	if err := os.WriteFile(claude, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"model":"sonnet"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(skillDir, "skills", "ak-review-pr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, clireview.SkillFile), []byte("# skill\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	homeRoot := filepath.Join(t.TempDir(), "cli-home")
+	homes, err := agentcli.NewHomes(homeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, func(c *serveconfig.Config) { c.ReviewTimeout = 500 * time.Millisecond })
+	engine := &clireview.Fixer{CLI: agentcli.Claude{Bin: claude, SettingsFile: settings},
+		Homes: homes, SkillDir: skillDir, Grace: 100 * time.Millisecond}
+	repo := t.TempDir()
+	// The fake workspace has no directory; the CLI runs in a real one.
+	h.fix.fn = func(ctx context.Context, req review.FixRequest) (review.FixResult, error) {
+		req.RepoDir = repo
+		return engine.Fix(ctx, req)
+	}
+	ref := ghRef(1)
+	h.gh.setPR(openPR(ref, sha1))
+	h.setThreads(ref, h.findingThread("f1", "a.go", 3, "Missing return", false))
+	h.command(ref, "/fix", "c-1")
+
+	if entries, _ := os.ReadDir(homeRoot); len(entries) != 0 {
+		t.Fatal("run dir left after the timeout")
+	}
+	if _, _, _, acquired, released := h.ws.fixLists(); acquired != 1 || released != 1 {
+		t.Fatalf("slot %d/%d", acquired, released)
+	}
+	mustContain(t, strings.Join(h.gh.noteList(), "\n"), h.srv.fixFailureReason("fix", "req-cmd"))
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if pid <= 0 {
+		t.Fatalf("pid %q", raw)
+	}
+	// The tool the CLI started must be gone with the group.
+	deadline := time.Now().Add(2 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("process %d outlived the run", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

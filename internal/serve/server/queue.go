@@ -22,10 +22,13 @@ type job struct {
 // cmdJob is a command from a comment. An empty commentID means the platform
 // raised the command itself, so there is nothing to react or reply to. A
 // non-empty reject answers the comment with an error and runs nothing.
+// followUp marks a command the service queued itself, the review of a fix
+// commit, which runs whatever the draft state.
 type cmdJob struct {
 	Command
 	commentID string
 	reject    string
+	followUp  bool
 }
 
 type prWork struct {
