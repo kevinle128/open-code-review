@@ -834,8 +834,10 @@ The service sets the commit status `ocr-review` on the PR head:
 | `failure` (GitLab: `failed`) | a round failed (CLI error, quota, timeout, forge error, or a shutdown during the round), until a later `review` succeeds |
 
 When the chain ends, the current head gets the status too, in case a person
-pushed while the round ran. A service restart between a push and the next
-round leaves `pending` until someone comments `review`.
+pushed while the round ran. A round that waits for a worker sets `pending`
+on the head first, so a merge cannot pass before the review starts. A
+service restart that cuts a running or waiting round sets `failure` until
+someone comments `review`.
 
 - GitHub: the Statuses API. Make `ocr-review` a required status check in the
   branch protection of each repository, for example:
@@ -914,8 +916,9 @@ push, otherwise the round only reports and its comment quotes the refusal.
   seconds.
 - The chain state lives in the PR summary comment, so `/data` and `/work` can
   be dropped without losing it. Queued rounds live only in memory: a restart
-  between a fix push and the next round leaves the status `pending` until
-  someone comments `review`.
+  between a fix push and the next round marks the chain failed (status
+  `failure`) until someone comments `review`. After the drain time the
+  service waits up to 10 more seconds for these status writes.
 
 ## Upgrade from the thread flow
 

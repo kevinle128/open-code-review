@@ -72,7 +72,11 @@ type Server struct {
 
 const (
 	sideCallTimeout = 30 * time.Second
-	maxReruns       = 3
+	// failWriteGrace bounds the wait after a drain timeout for the failed
+	// status writes of the cut rounds. The drain (60 s) plus this wait stays
+	// below the 75 s stop timeout of the PM2 and compose deploys.
+	failWriteGrace = 10 * time.Second
+	maxReruns      = 3
 )
 
 // New checks d.
@@ -149,13 +153,21 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.wg.Wait()
 		close(done)
 	}()
-	defer s.cancelRun()
 	select {
 	case <-done:
+		s.cancelRun()
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
 	}
+	// The cancelled rounds still write their failed status. Give them a
+	// short time to finish, so a PR is not left at the pending status of a
+	// round that will never run.
+	s.cancelRun()
+	select {
+	case <-done:
+	case <-time.After(failWriteGrace):
+	}
+	return ctx.Err()
 }
 
 // intake runs fn only while the server accepts work.
