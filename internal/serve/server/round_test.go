@@ -68,7 +68,7 @@ func TestChainRunsThreeFixRoundsAndAReport(t *testing.T) {
 				t.Fatalf("notes %q", notes)
 			}
 			mustContain(t, notes[0], "### OCR review, round 1/3")
-			mustContain(t, notes[0], "Fix commit: `fffffff`")
+			mustContain(t, notes[0], "Fix commit: [`fffffff`](https://forge.test/"+ref.Repo+"/commit/"+fixSHA(1)+")")
 			mustContain(t, notes[0], "Tests: `go test ./...` passed.")
 			mustContain(t, notes[0], "reviewed next, in round 2/3")
 			mustContain(t, notes[2], "reviewed next, in round 4 (report only)")
@@ -209,6 +209,115 @@ func TestPushRejectedReportsTheFixes(t *testing.T) {
 	}
 	if m := h.gl.marker(t, ref); m.Rounds[0].Fixed != 0 || m.Rounds[0].Real != 1 || m.Rounds[0].Fix != "" {
 		t.Fatalf("marker %+v", m)
+	}
+}
+
+// roundDiff is a fix commit diff with a hunk in a.go, one in b.go and one
+// in c.go.
+const roundDiff = `diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -3 +3 @@
+-func A() {}
++func A() int { return 1 }
+diff --git a/b.go b/b.go
+--- a/b.go
++++ b/b.go
+@@ -9 +9 @@
+-b := 1
++b := 2
+diff --git a/c.go b/c.go
+--- a/c.go
++++ b/c.go
+@@ -1 +1 @@
+-c
++d
+`
+
+// fixWithChanges fixes every finding and ties the first one to a.go line 3
+// and the second to b.go line 9; the rest claim no hunk.
+func fixWithChanges(_ context.Context, req review.FixRequest) (review.FixResult, error) {
+	res := fixAll(req)
+	ranges := []review.Change{{Path: "a.go", StartLine: 3, EndLine: 3}, {Path: "b.go", StartLine: 9, EndLine: 9}}
+	for i := range res.Fixed {
+		res.Fixed[i].Scenario = "it fails"
+		if i < len(ranges) {
+			res.Fixed[i].Changes = []review.Change{ranges[i]}
+		}
+	}
+	return res, nil
+}
+
+func TestRoundCommentShowsTheFixDiff(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(30)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) { w.diff = roundDiff })
+	h.rev.set(func(_ context.Context, req review.Request) (review.Result, error) {
+		if req.FixCommit {
+			return review.Result{Terminal: review.TerminalComplete}, nil
+		}
+		return findingsResult(comment("a.go", 3), comment("b.go", 9), comment("d.go", 1))(context.Background(), req)
+	})
+	h.fix.set(fixWithChanges)
+	h.opened(ref)
+	h.drain()
+	note := h.gh.noteList()[0]
+	mustContain(t, note, "```diff\ndiff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -3 +3 @@\n-func A() {}\n+func A() int { return 1 }\n```")
+	mustContain(t, note, "+b := 2")
+	mustContain(t, note, "**"+h.loc.Text("round.other_changes")+"**\n\n```diff\ndiff --git a/c.go b/c.go")
+	mustContain(t, note, "[`fffffff`](https://forge.test/acme/app/commit/"+fixSHA(1)+")")
+	mustContain(t, note, h.loc.Text("round.how_fixed", "fix", "fixed it"))
+	if strings.Count(note, h.loc.Text("round.how_fixed", "fix", "fixed it")) != 1 {
+		t.Fatalf("prose shown beside a diff:\n%s", note)
+	}
+	if !h.logs.has("fixed findings match no hunk of the fix commit; the round comment shows them as prose") ||
+		!strings.Contains(h.logs.String(), `"ids":["F3"]`) {
+		t.Fatalf("logs:\n%s", h.logs.String())
+	}
+}
+
+func TestRoundCommentWithoutTheFixDiff(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(31)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) { w.diffErr = errors.New("git diff: exit status 128") })
+	h.rev.set(func(_ context.Context, req review.Request) (review.Result, error) {
+		if req.FixCommit {
+			return review.Result{Terminal: review.TerminalComplete}, nil
+		}
+		return findingsResult(comment("a.go", 3))(context.Background(), req)
+	})
+	h.fix.set(fixWithChanges)
+	h.opened(ref)
+	h.drain()
+	note := h.gh.noteList()[0]
+	mustContain(t, note, h.loc.Text("round.how_fixed", "fix", "fixed it"))
+	if strings.Contains(note, "```diff") || !h.logs.has("read the fix commit diff; the round comment shows the fixes as prose") {
+		t.Fatalf("note:\n%s\nlogs:\n%s", note, h.logs.String())
+	}
+	if len(h.ws.pushed) != 1 {
+		t.Fatalf("pushed %v", h.ws.pushed)
+	}
+}
+
+func TestPushRejectedShowsTheUnpushedDiff(t *testing.T) {
+	h := newHarness(t)
+	ref := glRef(32)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		w.diff = roundDiff
+		w.pushErr = errors.New("git push: exit status 1: protected branch")
+	})
+	h.rev.set(findingsResult(comment("a.go", 3)))
+	h.fix.set(fixWithChanges)
+	h.opened(ref)
+	h.drain()
+	note := h.gl.noteList()[0]
+	mustContain(t, note, h.loc.Text("round.proposed_diff")+"\n\n```diff\ndiff --git a/a.go b/a.go")
+	mustContain(t, note, h.loc.Text("round.scenario", "scenario", "it fails"))
+	if strings.Contains(note, "c.go") || strings.Contains(note, h.loc.Text("round.other_changes")) {
+		t.Fatalf("note:\n%s", note)
 	}
 }
 

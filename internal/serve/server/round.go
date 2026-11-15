@@ -413,9 +413,10 @@ func (r *roundRun) fix(ctx context.Context, ws review.Workspace, findings []revi
 	}
 	if !changed {
 		r.log.Warn("fix run reported fixes but changed no file")
-		unfixed(out, state.ReportNoEdit)
+		unfixed(out, state.ReportNoEdit, nil)
 		return nil
 	}
+	diffs, other := r.fixDiff(ctx, ws, sha, out.Fixed)
 	// A fresh token: the one used for the fetch can expire during a long run.
 	spec, err := r.f.PushSpec(ctx, r.pr)
 	if err != nil {
@@ -423,20 +424,41 @@ func (r *roundRun) fix(ctx context.Context, ws review.Workspace, findings []revi
 	}
 	if err := ws.Push(ctx, spec, sha); err != nil {
 		r.log.Warn("fix push rejected", "error", err.Error())
-		unfixed(out, state.ReportPush)
+		unfixed(out, state.ReportPush, diffs)
 		out.PushReason = pushReason(err)
 		return nil
 	}
 	r.log.Info("fix pushed", "commit", sha, "branch", r.pr.SourceBranch)
-	out.FixCommit = sha
+	out.FixCommit, out.CommitURL = sha, r.f.CommitURL(r.ref, sha)
+	out.FixDiffs, out.OtherDiff = diffs, other
 	return nil
 }
 
+// fixDiff splits the diff of the fix commit among the fixed findings. A
+// diff that cannot be read leaves the comment with the fixes as prose.
+func (r *roundRun) fixDiff(ctx context.Context, ws review.Workspace, sha string, fixed []review.Fixed) ([]string, string) {
+	diff, err := ws.CommitDiff(ctx, sha)
+	if err != nil {
+		r.log.Warn("read the fix commit diff; the round comment shows the fixes as prose", "commit", sha, "error", err.Error())
+		return nil, ""
+	}
+	diffs, other, unmatched := state.SplitDiff(diff, fixed)
+	if len(unmatched) > 0 {
+		r.log.Warn("fixed findings match no hunk of the fix commit; the round comment shows them as prose", "commit", sha, "ids", unmatched)
+	}
+	return diffs, other
+}
+
 // unfixed moves the fixes that did not reach the branch to the report, with
-// each fix as the proposal.
-func unfixed(out *state.RoundReport, reason string) {
-	for _, f := range out.Fixed {
-		out.Reported = append(out.Reported, review.Reported{ID: f.ID, Path: f.Path, Line: f.Line, Problem: f.Problem, ProposedFix: f.Fix})
+// each fix as the proposal; diffs holds the part of the unpushed fix commit
+// of each fix, by index, or is nil.
+func unfixed(out *state.RoundReport, reason string, diffs []string) {
+	for i, f := range out.Fixed {
+		rep := review.Reported{ID: f.ID, Path: f.Path, Line: f.Line, Problem: f.Problem, Scenario: f.Scenario, ProposedFix: f.Fix}
+		if i < len(diffs) {
+			rep.ProposedDiff = diffs[i]
+		}
+		out.Reported = append(out.Reported, rep)
 	}
 	out.Fixed, out.Tests, out.Report = nil, review.Tests{}, reason
 }
