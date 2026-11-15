@@ -211,6 +211,10 @@ func (f *fakeForge) CommitIdentity(context.Context, forge.PRRef) (forge.Identity
 
 // Test helpers on the fake.
 
+func (f *fakeForge) CommitURL(ref forge.PRRef, sha string) string {
+	return forge.CommitLink("https://forge.test", ref.Repo, "/commit/", sha)
+}
+
 func (f *fakeForge) setPR(pr forge.PR) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

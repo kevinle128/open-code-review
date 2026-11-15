@@ -117,3 +117,15 @@ func TestBotPushIsBotSender(t *testing.T) {
 		t.Fatalf("bot push %+v", ev)
 	}
 }
+
+func TestCommitURL(t *testing.T) {
+	fa := newFakeAPI(t)
+	f, _ := fa.forge(t)
+	sha := strings.Repeat("a", 40)
+	if got := f.CommitURL(testRef, sha); got != f.webURL+"/acme/widgets/commit/"+sha {
+		t.Fatalf("commit url %q", got)
+	}
+	if got := f.CommitURL(testRef, "main"); got != "" {
+		t.Fatalf("a ref name gave %q", got)
+	}
+}

@@ -42,6 +42,11 @@ func (f *Forge) CommitIdentity(ctx context.Context, ref forge.PRRef) (forge.Iden
 	return forge.Identity{Name: login, Email: strconv.FormatInt(id, 10) + "+" + login + "@users.noreply.github.com"}, nil
 }
 
+// CommitURL implements forge.Forge.
+func (f *Forge) CommitURL(ref forge.PRRef, sha string) string {
+	return forge.CommitLink(f.webURL, ref.Repo, "/commit/", sha)
+}
+
 func (f *Forge) botUserID(ctx context.Context, installationID int64, login string) (int64, error) {
 	f.botMu.Lock()
 	id := f.botID

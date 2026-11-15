@@ -110,3 +110,16 @@ func TestBotPushIsBotSender(t *testing.T) {
 		t.Fatalf("bot push %+v", ev)
 	}
 }
+
+func TestCommitURL(t *testing.T) {
+	fg := newTestForge(t, newFake(t), nil)
+	sha := strings.Repeat("b", 40)
+	ref := forge.PRRef{Platform: forge.GitLab, Repo: "group/sub/svc", ProjectID: 42, Number: 3}
+	if got := fg.CommitURL(ref, sha); got != fg.cfg.URL+"/group/sub/svc/-/commit/"+sha {
+		t.Fatalf("commit url %q", got)
+	}
+	ref.Repo = ""
+	if got := fg.CommitURL(ref, sha); got != "" {
+		t.Fatalf("no repository path gave %q", got)
+	}
+}

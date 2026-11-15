@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 )
@@ -32,6 +33,12 @@ func (f *Forge) CommitIdentity(ctx context.Context, _ forge.PRRef) (forge.Identi
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.identity, nil
+}
+
+// CommitURL implements forge.Forge. The configured URL is the web root of
+// the instance, the API being under /api/v4 of it.
+func (f *Forge) CommitURL(ref forge.PRRef, sha string) string {
+	return forge.CommitLink(strings.TrimSpace(f.cfg.URL), ref.Repo, "/-/commit/", sha)
 }
 
 var discussionIDRE = regexp.MustCompile(`^[A-Za-z0-9]+$`)

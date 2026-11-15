@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strings"
 )
 
 // ErrNotFound matches, through errors.Is, a forge answer that the PR or file
@@ -164,6 +166,9 @@ type Forge interface {
 	PushSpec(ctx context.Context, pr PR) (CloneSpec, error)
 	// CommitIdentity is the git author for commits the service pushes.
 	CommitIdentity(ctx context.Context, ref PRRef) (Identity, error)
+	// CommitURL is the web page of commit sha in the PR repository, or
+	// empty when the repository path or sha cannot form a safe link.
+	CommitURL(ref PRRef, sha string) string
 	// SetStatus sets the StatusContext commit status of sha, a commit of
 	// the PR head branch. description is one short line.
 	SetStatus(ctx context.Context, pr PR, sha string, st CommitState, description string) error
@@ -186,3 +191,23 @@ const (
 
 // ErrFork is returned by PushSpec for a PR whose head branch is in a fork.
 var ErrFork = errors.New("the head branch is in a fork")
+
+var (
+	repoPathPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$`)
+	commitIDPattern = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+)
+
+// CommitLink joins a web base, a repository path, the forge's commit path
+// segment and sha into a commit URL. The URL goes into markdown, so a path
+// or sha with any character outside the plain set gives an empty link.
+func CommitLink(base, repo, segment, sha string) string {
+	if base == "" || !repoPathPattern.MatchString(repo) || !commitIDPattern.MatchString(sha) {
+		return ""
+	}
+	for _, part := range strings.Split(repo, "/") {
+		if part == "." || part == ".." {
+			return ""
+		}
+	}
+	return strings.TrimRight(base, "/") + "/" + repo + segment + sha
+}
