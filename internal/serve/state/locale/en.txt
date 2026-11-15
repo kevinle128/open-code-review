@@ -34,6 +34,7 @@ round.tests_added = Tests added: {tests}
 round.fix_commit = Fix commit: {sha}
 round.other_changes = Other changes in the fix commit
 round.diff_summary = Show the diff ({lines} lines)
+round.diff_shared = The diff of this item is shown with item {items} above.
 round.diff_cut = {count} more lines are not shown here; the fix commit {commit} has the full change.
 round.tests_none = Tests: not run.
 round.tests_passed = Tests: {command} passed.

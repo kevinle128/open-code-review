@@ -33,6 +33,7 @@ round.tests_added = Kiểm thử đã thêm: {tests}
 round.fix_commit = Commit sửa: {sha}
 round.other_changes = Thay đổi khác trong commit sửa
 round.diff_summary = Xem diff ({lines} dòng)
+round.diff_shared = Diff của mục này nằm chung với mục {items} ở trên.
 round.diff_cut = Còn {count} dòng không hiển thị ở đây; xem đầy đủ trong commit sửa {commit}.
 round.tests_none = Kiểm thử: không chạy.
 round.tests_passed = Kiểm thử: {command} đạt.

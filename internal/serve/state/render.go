@@ -212,9 +212,11 @@ func newDiffBlock(text string, proposal bool) *diffBlock {
 
 // roundDiffs holds the diff blocks of a comment, nil where there is none.
 type roundDiffs struct {
-	fixed    []*diffBlock
-	other    *diffBlock
-	reported []*diffBlock
+	fixed        []*diffBlock
+	other        *diffBlock
+	reported     []*diffBlock
+	fixedRefs    [][]int
+	reportedRefs [][]int
 }
 
 func (d *roundDiffs) all() []*diffBlock {
@@ -234,16 +236,22 @@ func (d *roundDiffs) all() []*diffBlock {
 // until it fits, and as a last resort is cut.
 func RenderRound(r RoundReport, loc Locale) string {
 	d := &roundDiffs{fixed: make([]*diffBlock, len(r.Fixed)), reported: make([]*diffBlock, len(r.Reported))}
-	for i := range r.Fixed {
-		if i < len(r.FixDiffs) {
-			d.fixed[i] = newDiffBlock(r.FixDiffs[i], false)
-		}
+	fixTexts := make([]string, len(r.Fixed))
+	copy(fixTexts, r.FixDiffs)
+	fixTexts, d.fixedRefs = dedupeDiffs(fixTexts)
+	for i, t := range fixTexts {
+		d.fixed[i] = newDiffBlock(t, false)
 	}
 	if len(r.Fixed) > 0 {
 		d.other = newDiffBlock(r.OtherDiff, false)
 	}
+	propTexts := make([]string, len(r.Reported))
 	for i, f := range r.Reported {
-		d.reported[i] = newDiffBlock(f.ProposedDiff, true)
+		propTexts[i] = f.ProposedDiff
+	}
+	propTexts, d.reportedRefs = dedupeDiffs(propTexts)
+	for i, t := range propTexts {
+		d.reported[i] = newDiffBlock(t, true)
 	}
 	for {
 		body := renderRound(r, loc, d)
@@ -328,11 +336,13 @@ func renderRound(r RoundReport, loc Locale, d *roundDiffs) string {
 		for i, f := range r.Fixed {
 			fmt.Fprintf(&b, "\n%d. %s: %s\n", i+1, where(f.Path, f.Line, loc), neutralizeTags(f.Problem))
 			writeLine(&b, loc, "round.scenario", "scenario", f.Scenario)
-			if blk := d.fixed[i]; blk != nil {
+			blk, refs := d.fixed[i], d.fixedRefs[i]
+			if blk != nil {
 				writeDiff(&b, blk, loc, commit)
-			} else {
+			} else if len(refs) == 0 {
 				writeLine(&b, loc, "round.how_fixed", "fix", f.Fix)
 			}
+			writeShared(&b, refs, loc)
 			writeLine(&b, loc, "round.tests_added", "tests", f.TestsAdded)
 		}
 		if d.other != nil {
@@ -362,6 +372,7 @@ func renderRound(r RoundReport, loc Locale, d *roundDiffs) string {
 				b.WriteString("\n")
 				writeDiff(&b, blk, loc, "")
 			}
+			writeShared(&b, d.reportedRefs[i], loc)
 		}
 		if r.Report != "" {
 			b.WriteString("\n")
@@ -387,6 +398,21 @@ func writeLine(b *strings.Builder, loc Locale, key, name, v string) {
 		b.WriteString(loc.Text(key, name, v))
 		b.WriteString("\n")
 	}
+}
+
+// writeShared names the items above that show the diff a finding shares
+// with them, or writes nothing.
+func writeShared(b *strings.Builder, refs []int, loc Locale) {
+	if len(refs) == 0 {
+		return
+	}
+	items := make([]string, len(refs))
+	for i, n := range refs {
+		items[i] = strconv.Itoa(n)
+	}
+	b.WriteString("\n")
+	b.WriteString(loc.Text("round.diff_shared", "items", strings.Join(items, ", ")))
+	b.WriteString("\n")
 }
 
 // commitRef links the fix commit, or names it when there is no link.
