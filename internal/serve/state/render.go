@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/review"
@@ -156,7 +157,9 @@ const (
 // round. Report names why the round did not fix (one of the Report
 // constants), or is empty for a fix round. Branch and PushReason fill the
 // text of ReportFork and ReportPush. Next is the round that reviews the fix
-// commit, or 0 when the chain ends with this round.
+// commit, or 0 when the chain ends with this round. FixDiffs holds the
+// part of the fix commit diff of each Fixed entry, by index, and OtherDiff
+// the part no finding claims; CommitURL is the web page of FixCommit.
 type RoundReport struct {
 	N, Max     int
 	From, To   string
@@ -166,16 +169,136 @@ type RoundReport struct {
 	Reported   []review.Reported
 	Tests      review.Tests
 	FixCommit  string
+	CommitURL  string
+	FixDiffs   []string
+	OtherDiff  string
 	Report     string
 	Branch     string
 	PushReason string
 	Next       int
 }
 
+// Bounds of the diffs in a round comment. maxCommentRunes stays under the
+// 65536 characters GitHub takes in one comment; GitLab takes more, but one
+// bound keeps both forges the same.
+const (
+	collapseLines   = 40
+	maxProposalLine = 150
+	maxCommentRunes = 65000
+	minDiffKeep     = 5
+)
+
+// diffBlock is one diff in the comment. keep is how many lines are shown;
+// collapsed puts the diff in a details element.
+type diffBlock struct {
+	lines     []string
+	keep      int
+	collapsed bool
+	proposal  bool
+}
+
+func newDiffBlock(text string, proposal bool) *diffBlock {
+	text = strings.TrimRight(text, "\n")
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	lines := strings.Split(text, "\n")
+	keep := len(lines)
+	if proposal {
+		keep = min(keep, maxProposalLine)
+	}
+	return &diffBlock{lines: lines, keep: keep, collapsed: len(lines) > collapseLines, proposal: proposal}
+}
+
+// roundDiffs holds the diff blocks of a comment, nil where there is none.
+type roundDiffs struct {
+	fixed    []*diffBlock
+	other    *diffBlock
+	reported []*diffBlock
+}
+
+func (d *roundDiffs) all() []*diffBlock {
+	out := make([]*diffBlock, 0, len(d.fixed)+len(d.reported)+1)
+	for _, b := range append(append(slices.Clone(d.fixed), d.other), d.reported...) {
+		if b != nil {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
 // RenderRound builds the comment of one round. Agent text is shown as
-// markdown, with service tags neutralized; a test output tail goes into a
-// fence it cannot close.
+// markdown, with service tags neutralized; a test output tail and each
+// diff go into a fence they cannot close. A comment over maxCommentRunes
+// first collapses every diff, then shows fewer lines of the largest diff
+// until it fits, and as a last resort is cut.
 func RenderRound(r RoundReport, loc Locale) string {
+	d := &roundDiffs{fixed: make([]*diffBlock, len(r.Fixed)), reported: make([]*diffBlock, len(r.Reported))}
+	for i := range r.Fixed {
+		if i < len(r.FixDiffs) {
+			d.fixed[i] = newDiffBlock(r.FixDiffs[i], false)
+		}
+	}
+	if len(r.Fixed) > 0 {
+		d.other = newDiffBlock(r.OtherDiff, false)
+	}
+	for i, f := range r.Reported {
+		d.reported[i] = newDiffBlock(f.ProposedDiff, true)
+	}
+	for {
+		body := renderRound(r, loc, d)
+		if utf8.RuneCountInString(body) <= maxCommentRunes {
+			return body
+		}
+		if !collapseAll(d.all()) && !shrinkLargest(d.all()) {
+			return cutBody(body, loc)
+		}
+	}
+}
+
+// collapseAll collapses every diff; it is false when all were collapsed.
+func collapseAll(blocks []*diffBlock) bool {
+	changed := false
+	for _, b := range blocks {
+		if !b.collapsed {
+			b.collapsed, changed = true, true
+		}
+	}
+	return changed
+}
+
+// shrinkLargest halves the shown lines of the largest diff, dropping a
+// diff whose rest would be too short to read; it is false when no diff
+// shows a line.
+func shrinkLargest(blocks []*diffBlock) bool {
+	var big *diffBlock
+	for _, b := range blocks {
+		if b.keep > 0 && (big == nil || b.keep > big.keep) {
+			big = b
+		}
+	}
+	if big == nil {
+		return false
+	}
+	if big.keep /= 2; big.keep < minDiffKeep {
+		big.keep = 0
+	}
+	return true
+}
+
+// cutBody cuts a comment that is too long even without diffs at a line
+// break and says so.
+func cutBody(body string, loc Locale) string {
+	note := "\n\n" + loc.Text("round.body_cut")
+	r := []rune(body)
+	cut := string(r[:max(0, maxCommentRunes-utf8.RuneCountInString(note))])
+	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
+		cut = cut[:i]
+	}
+	return cut + note
+}
+
+func renderRound(r RoundReport, loc Locale, d *roundDiffs) string {
 	var b strings.Builder
 	b.WriteString("### ")
 	b.WriteString(loc.Text("round.title", "round", RoundLabel(r.N, r.Max, loc)))
@@ -197,21 +320,30 @@ func RenderRound(r RoundReport, loc Locale) string {
 		b.WriteString(loc.Text("round.clean"))
 		b.WriteString("\n")
 	}
+	commit := commitRef(r.FixCommit, r.CommitURL)
 	if len(r.Fixed) > 0 {
 		b.WriteString("\n**")
 		b.WriteString(loc.Text("round.fixed_title", "count", strconv.Itoa(len(r.Fixed))))
 		b.WriteString("**\n")
 		for i, f := range r.Fixed {
 			fmt.Fprintf(&b, "\n%d. %s: %s\n", i+1, where(f.Path, f.Line, loc), neutralizeTags(f.Problem))
-			if fix := neutralizeTags(f.Fix); fix != "" {
-				b.WriteString("\n")
-				b.WriteString(loc.Text("round.how_fixed", "fix", fix))
-				b.WriteString("\n")
+			writeLine(&b, loc, "round.scenario", "scenario", f.Scenario)
+			if blk := d.fixed[i]; blk != nil {
+				writeDiff(&b, blk, loc, commit)
+			} else {
+				writeLine(&b, loc, "round.how_fixed", "fix", f.Fix)
 			}
+			writeLine(&b, loc, "round.tests_added", "tests", f.TestsAdded)
+		}
+		if d.other != nil {
+			b.WriteString("\n**")
+			b.WriteString(loc.Text("round.other_changes"))
+			b.WriteString("**\n")
+			writeDiff(&b, d.other, loc, commit)
 		}
 		if r.FixCommit != "" {
 			b.WriteString("\n")
-			b.WriteString(loc.Text("round.fix_commit", "sha", "`"+short(r.FixCommit)+"`"))
+			b.WriteString(loc.Text("round.fix_commit", "sha", commit))
 			b.WriteString("\n")
 		}
 		writeTests(&b, r.Tests, loc)
@@ -222,15 +354,13 @@ func RenderRound(r RoundReport, loc Locale) string {
 		b.WriteString("**\n")
 		for i, f := range r.Reported {
 			fmt.Fprintf(&b, "\n%d. %s: %s\n", i+1, where(f.Path, f.Line, loc), neutralizeTags(f.Problem))
-			if s := neutralizeTags(f.Scenario); s != "" {
+			writeLine(&b, loc, "round.scenario", "scenario", f.Scenario)
+			writeLine(&b, loc, "round.proposed_fix", "fix", f.ProposedFix)
+			if blk := d.reported[i]; blk != nil {
 				b.WriteString("\n")
-				b.WriteString(loc.Text("round.scenario", "scenario", s))
+				b.WriteString(loc.Text("round.proposed_diff"))
 				b.WriteString("\n")
-			}
-			if p := neutralizeTags(f.ProposedFix); p != "" {
-				b.WriteString("\n")
-				b.WriteString(loc.Text("round.proposed_fix", "fix", p))
-				b.WriteString("\n")
+				writeDiff(&b, blk, loc, "")
 			}
 		}
 		if r.Report != "" {
@@ -247,6 +377,64 @@ func RenderRound(r RoundReport, loc Locale) string {
 		b.WriteString(loc.Text("round.end"))
 	}
 	return b.String()
+}
+
+// writeLine writes the locale text key with agent text v as its value, or
+// nothing when v is empty.
+func writeLine(b *strings.Builder, loc Locale, key, name, v string) {
+	if v = neutralizeTags(v); v != "" {
+		b.WriteString("\n")
+		b.WriteString(loc.Text(key, name, v))
+		b.WriteString("\n")
+	}
+}
+
+// commitRef links the fix commit, or names it when there is no link.
+func commitRef(sha, url string) string {
+	if sha == "" {
+		return ""
+	}
+	if url == "" {
+		return "`" + short(sha) + "`"
+	}
+	return "[`" + short(sha) + "`](" + url + ")"
+}
+
+// writeDiff writes a diff block in a fence it cannot close. A collapsed
+// block goes in a details element; the blank lines around the fence make
+// GitHub and GitLab render it as code inside the HTML block.
+func writeDiff(b *strings.Builder, blk *diffBlock, loc Locale, commit string) {
+	var note string
+	if hidden := len(blk.lines) - blk.keep; hidden > 0 {
+		if blk.proposal {
+			note = loc.Text("round.proposal_cut", "count", strconv.Itoa(hidden))
+		} else {
+			note = loc.Text("round.diff_cut", "count", strconv.Itoa(hidden), "commit", commit)
+		}
+	}
+	var code string
+	if blk.keep > 0 {
+		text := neutralizeTags(strings.Join(blk.lines[:blk.keep], "\n"))
+		fence := safeFence(text)
+		code = fence + "diff\n" + text + "\n" + fence + "\n"
+	}
+	b.WriteString("\n")
+	if blk.collapsed {
+		b.WriteString("<details><summary>")
+		b.WriteString(loc.Text("round.diff_summary", "lines", strconv.Itoa(len(blk.lines))))
+		b.WriteString("</summary>\n\n")
+	}
+	b.WriteString(code)
+	if note != "" {
+		if code != "" {
+			b.WriteString("\n")
+		}
+		b.WriteString(note)
+		b.WriteString("\n")
+	}
+	if blk.collapsed {
+		b.WriteString("\n</details>\n")
+	}
 }
 
 // where names the place of a finding, or the PR as a whole.

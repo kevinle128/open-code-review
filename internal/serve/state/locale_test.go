@@ -59,7 +59,8 @@ func TestLocaleFiles_SameKeys(t *testing.T) {
 func TestLocale_EveryKeyTheServiceUsesExists(t *testing.T) {
 	en := mustLocale(t, "en")
 	keys := []string{"summary.status." + ChainRunning, "summary.status." + ChainSuccess, "summary.status." + ChainFailure,
-		"status." + ChainSuccess, "status." + ChainFailure}
+		"status." + ChainSuccess, "status." + ChainFailure, "round.scenario", "round.how_fixed", "round.tests_added",
+		"round.other_changes", "round.diff_summary", "round.diff_cut", "round.proposed_diff", "round.proposal_cut", "round.body_cut"}
 	for _, r := range []string{ReportLimit, ReportFork, ReportPush, ReportEngine, ReportNoEdit} {
 		keys = append(keys, "round.report."+r)
 	}
