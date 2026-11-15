@@ -486,7 +486,7 @@ type harness struct {
 
 func testConfig(t *testing.T) *serveconfig.Config {
 	return &serveconfig.Config{
-		MaxRounds: 3, ReviewTimeout: time.Minute, Workers: 2,
+		MaxRounds: 3, ReviewTimeout: time.Minute, FixTimeout: time.Minute, Workers: 2,
 		MaxBodyBytes: 1 << 10, DataDir: t.TempDir(), WorkDir: t.TempDir(),
 	}
 }

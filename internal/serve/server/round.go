@@ -231,7 +231,10 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 		s.commandFailed(f, ref, j.cmd, s.failureReason("wait for worker", j.requestID), log)
 		return s.runCtx.Err()
 	}
-	ctx, cancel := context.WithTimeout(s.runCtx, s.cfg.ReviewTimeout)
+	// The round context has no deadline of its own: run gives the review
+	// and the fix each their limit. cancel stops the round when a newer
+	// review replaces its chain.
+	ctx, cancel := context.WithCancel(s.runCtx)
 	defer cancel()
 	if !s.begin(ref, rj.gen, cancel) {
 		log.Info("round skipped: a newer review replaced its chain")
@@ -256,8 +259,10 @@ type roundRun struct {
 	limit  int
 }
 
-func (r *roundRun) run(ctx context.Context) error {
+func (r *roundRun) run(round context.Context) error {
 	s, f, rj := r.s, r.f, r.rj
+	ctx, cancel := context.WithTimeout(round, s.cfg.ReviewTimeout)
+	defer cancel()
 	pr, m, _, err := s.readChain(ctx, f, r.ref, r.log)
 	if err != nil {
 		return r.fail("read", err)
@@ -343,9 +348,12 @@ func (r *roundRun) run(ctx context.Context) error {
 		out.From, out.To = "", req.Commit
 	}
 	if findings := roundFindings(res.Findings); len(findings) > 0 {
-		if err := r.fix(ctx, ws, findings, report, &out); err != nil {
+		fctx, fcancel := context.WithTimeout(round, s.cfg.FixTimeout)
+		defer fcancel()
+		if err := r.fix(fctx, ws, findings, report, &out); err != nil {
 			return r.fail("fix", err)
 		}
+		ctx = fctx
 	}
 	return r.finish(ctx, out)
 }

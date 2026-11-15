@@ -153,7 +153,7 @@ func TestCLIFixTimeoutCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := newHarness(t, func(c *serveconfig.Config) { c.ReviewTimeout = 500 * time.Millisecond })
+	h := newHarness(t, func(c *serveconfig.Config) { c.FixTimeout = 500 * time.Millisecond })
 	engine := &clireview.Fixer{CLI: agentcli.Claude{Bin: claude, SettingsFile: settings},
 		Homes: homes, SkillDir: skillDir, Grace: 100 * time.Millisecond}
 	repo := t.TempDir()

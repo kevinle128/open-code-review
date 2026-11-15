@@ -71,7 +71,7 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &Config{
-		Addr: DefaultAddr, MaxRounds: 3, ReviewTimeout: 2 * time.Hour,
+		Addr: DefaultAddr, MaxRounds: 3, ReviewTimeout: 2 * time.Hour, FixTimeout: time.Hour,
 		Workers: 2, MaxBodyBytes: 10485760, DataDir: "/data", WorkDir: "/work", BotIndicators: []string{"bot"},
 		Exclude: DefaultExcludes, ReviewConcurrency: 5, BundleLines: 300,
 		Engine: EngineCLI,
@@ -105,7 +105,7 @@ func TestLoad_NilFuncsUseProcessEnv(t *testing.T) {
 func TestLoad_Overrides(t *testing.T) {
 	testKeys(t)
 	c, err := Load(env(map[string]string{
-		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvReviewTimeout: "3h",
+		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvReviewTimeout: "3h", EnvFixTimeout: "45m",
 		EnvWorkers: "4", EnvMaxBodyBytes: "2048", EnvDataDir: "/d", EnvWorkDir: "/w",
 		EnvReviewConcurrency: "12", EnvBundleLines: "450",
 		EnvIgnoreRepos: "^infra/, sandbox$", EnvIgnoreAuthors: "renovate", EnvIgnoreTitles: `(?i)^\[wip\]`,
@@ -120,7 +120,7 @@ func TestLoad_Overrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.ReviewTimeout != 3*time.Hour ||
+	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.ReviewTimeout != 3*time.Hour || c.FixTimeout != 45*time.Minute ||
 		c.Workers != 4 || c.MaxBodyBytes != 2048 || c.DataDir != "/d" || c.WorkDir != "/w" ||
 		c.ReviewConcurrency != 12 || c.BundleLines != 450 {
 		t.Fatalf("scalars %+v", c)
@@ -204,6 +204,7 @@ func TestLoad_InvalidValues(t *testing.T) {
 		{"body bytes zero", map[string]string{EnvMaxBodyBytes: "0"}, EnvMaxBodyBytes},
 		{"timeout zero", map[string]string{EnvReviewTimeout: "0s"}, EnvReviewTimeout},
 		{"timeout garbage", map[string]string{EnvReviewTimeout: "soon"}, EnvReviewTimeout},
+		{"fix timeout zero", map[string]string{EnvFixTimeout: "0s"}, EnvFixTimeout},
 		{"bad regex", map[string]string{EnvIgnoreTitles: "([a-"}, EnvIgnoreTitles},
 		{"mention with at sign", map[string]string{EnvMentions: "ok, @ocr"}, EnvMentions},
 		{"mention with space", map[string]string{EnvMentions: "ocr bot"}, EnvMentions},

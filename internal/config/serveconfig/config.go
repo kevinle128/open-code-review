@@ -29,6 +29,7 @@ const (
 	EnvMaxRounds           = "OCR_SERVE_MAX_ROUNDS"
 	EnvWorkers             = "OCR_SERVE_WORKERS"
 	EnvReviewTimeout       = "OCR_SERVE_REVIEW_TIMEOUT"
+	EnvFixTimeout          = "OCR_SERVE_FIX_TIMEOUT"
 	EnvReviewConcurrency   = "OCR_SERVE_REVIEW_CONCURRENCY"
 	EnvBundleLines         = "OCR_SERVE_BUNDLE_LINES"
 	EnvMaxBodyBytes        = "OCR_SERVE_MAX_BODY_BYTES"
@@ -61,6 +62,7 @@ const (
 	DefaultMaxRounds     = 3
 	DefaultWorkers       = 2
 	DefaultReviewTimeout = 2 * time.Hour
+	DefaultFixTimeout    = time.Hour
 	DefaultMaxBodyBytes  = 10 << 20
 	// DefaultDataDir and DefaultWorkDir apply only when HOME is not set;
 	// otherwise the directories default to ~/ocr-review/data and
@@ -89,9 +91,14 @@ const (
 
 // Config is the global service configuration.
 type Config struct {
-	Addr          string
-	MaxRounds     int
+	Addr      string
+	MaxRounds int
+	// ReviewTimeout bounds the part of a round up to the end of the review;
+	// FixTimeout bounds the fix run, its commit and push, which start only
+	// after the review. A long review therefore cannot use up the time of
+	// the fix.
 	ReviewTimeout time.Duration
+	FixTimeout    time.Duration
 	Workers       int
 	MaxBodyBytes  int64
 	// ReviewConcurrency is the number of LLM subtasks one review runs at the
@@ -218,6 +225,7 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		Addr:          l.str(EnvAddr, DefaultAddr),
 		MaxRounds:     l.intIn(EnvMaxRounds, DefaultMaxRounds, MinRounds, MaxRounds),
 		ReviewTimeout: l.duration(EnvReviewTimeout, DefaultReviewTimeout),
+		FixTimeout:    l.duration(EnvFixTimeout, DefaultFixTimeout),
 		Workers:       l.intIn(EnvWorkers, DefaultWorkers, MinWorkers, MaxWorkers),
 		MaxBodyBytes:  int64(l.intIn(EnvMaxBodyBytes, DefaultMaxBodyBytes, 1, MaxBodyBytesHigh)),
 		ReviewConcurrency: l.intIn(EnvReviewConcurrency, DefaultReviewConcurrency,

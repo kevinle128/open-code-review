@@ -81,6 +81,7 @@ OCR_SERVE_GITLAB_WEBHOOK_SECRET=[[OCR_SERVE_GITLAB_WEBHOOK_SECRET]]
 OCR_SERVE_IGNORE_AUTHORS=
 OCR_SERVE_MAX_ROUNDS=
 OCR_SERVE_REVIEW_TIMEOUT=
+OCR_SERVE_FIX_TIMEOUT=
 OCR_SERVE_WORKERS=
 OCR_SERVE_REVIEW_CONCURRENCY=
 OCR_SERVE_BUNDLE_LINES=
@@ -253,7 +254,8 @@ setting both forms is an error.
 | `OCR_SERVE_ADDR` | `127.0.0.1:3012` | The image sets `0.0.0.0:3012`. The health check uses port 3012. |
 | `OCR_SERVE_MAX_ROUNDS` | `3` | Fix rounds per chain, 1..10. One report-only round follows them; see [Review rounds](#review-rounds). |
 | `OCR_SERVE_WORKERS` | `2` | Concurrent rounds, 1..16; also the number of checkout slots. |
-| `OCR_SERVE_REVIEW_TIMEOUT` | `2h` | Limit for one round (the review and the fix run together), timed from when a worker takes it. Each file group in the review has a limit of 120 minutes per round. |
+| `OCR_SERVE_REVIEW_TIMEOUT` | `2h` | Limit for the review part of one round (read, checkout, review), timed from when a worker takes it. Each file group in the review has a limit of 120 minutes per round. |
+| `OCR_SERVE_FIX_TIMEOUT` | `1h` | Limit for the fix run of one round with its commit and push. It starts when the review ends, so a long review does not take time from the fix. |
 | `OCR_SERVE_REVIEW_CONCURRENCY` | `5` | LLM subtasks that one review runs at the same time, 1..32. `ocr review --concurrency` keeps its default of 8. |
 | `OCR_SERVE_BUNDLE_LINES` | `300` | A PR with fewer files than the grouping minimum (4) and fewer changed lines than this value is reviewed as one group; otherwise each file is a separate group. 50..5000. Replaces the template value of 200 for serve reviews only. |
 | `OCR_SERVE_MAX_BODY_BYTES` | `10485760` | Webhook body limit. |
@@ -588,7 +590,7 @@ directory level below it (monorepos), not in hidden directories. When
 several match, the first row of the table wins: Go, .NET, Rust, Node,
 Python. Use Debian (glibc) images only: the Claude Code binary does not
 start on Alpine (musl). An image missing on the host is pulled before the
-run (`docker pull`, bounded by `OCR_SERVE_REVIEW_TIMEOUT`); the log line
+run (`docker pull`, bounded by the limit of the step that runs it); the log line
 `sandbox image` names the image and whether it was pulled.
 
 Each run is:

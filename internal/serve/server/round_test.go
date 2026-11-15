@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/model"
@@ -821,5 +822,44 @@ func TestPushReason(t *testing.T) {
 	}
 	if got := pushReason(errors.New(strings.Repeat("y", 400))); len(got) != maxPushReason+3 {
 		t.Fatalf("reason length %d", len(got))
+	}
+}
+
+// TestFixHasItsOwnTimeLimit gives the fix run its own limit: a review that
+// uses up most of its limit leaves the fix the full fix limit, and a fix
+// that runs past that limit fails the round.
+func TestFixHasItsOwnTimeLimit(t *testing.T) {
+	const reviewLimit = 300 * time.Millisecond
+	h := newHarness(t, func(c *serveconfig.Config) { c.ReviewTimeout, c.FixTimeout = reviewLimit, 400*time.Millisecond })
+	ref := ghRef(31)
+	chainPR(h, ref)
+	h.rev.set(func(ctx context.Context, _ review.Request) (review.Result, error) {
+		time.Sleep(reviewLimit - 100*time.Millisecond)
+		return findingsResult(comment("a.go", 3))(ctx, review.Request{})
+	})
+	var left time.Duration
+	h.fix.set(func(ctx context.Context, _ review.FixRequest) (review.FixResult, error) {
+		if d, ok := ctx.Deadline(); ok {
+			left = time.Until(d)
+		}
+		return review.FixResult{}, nil
+	})
+	h.opened(ref)
+	h.drain()
+	if left < 300*time.Millisecond {
+		t.Fatalf("fix got %v of its 400ms limit", left)
+	}
+
+	h2 := newHarness(t, func(c *serveconfig.Config) { c.FixTimeout = 50 * time.Millisecond })
+	chainPR(h2, ref)
+	h2.rev.set(findingsResult(comment("a.go", 3)))
+	h2.fix.set(func(ctx context.Context, _ review.FixRequest) (review.FixResult, error) {
+		<-ctx.Done()
+		return review.FixResult{}, ctx.Err()
+	})
+	h2.opened(ref)
+	h2.drain()
+	if got := lastStatus(h2.gh); got != "1:failure" {
+		t.Fatalf("status %s", got)
 	}
 }

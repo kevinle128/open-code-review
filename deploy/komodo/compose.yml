@@ -47,7 +47,8 @@
 #   OCR_SERVE_IGNORE_AUTHORS         Comma-separated RE2 patterns.
 #   OCR_SERVE_MAX_ROUNDS             Fix rounds before the report-only
 #                                    round; default 3, 1..10.
-#   OCR_SERVE_REVIEW_TIMEOUT         Default 2h per round.
+#   OCR_SERVE_REVIEW_TIMEOUT         Default 2h for the review part of a round.
+#   OCR_SERVE_FIX_TIMEOUT            Default 1h for the fix run of a round.
 #   OCR_SERVE_WORKERS                Default 2, 1..16.
 #   OCR_SERVE_REVIEW_CONCURRENCY     LLM subtasks per review at the same time;
 #                                    default 5, 1..32.
@@ -126,6 +127,7 @@ services:
       OCR_SERVE_IGNORE_AUTHORS: ${OCR_SERVE_IGNORE_AUTHORS:-}
       OCR_SERVE_MAX_ROUNDS: ${OCR_SERVE_MAX_ROUNDS:-}
       OCR_SERVE_REVIEW_TIMEOUT: ${OCR_SERVE_REVIEW_TIMEOUT:-}
+      OCR_SERVE_FIX_TIMEOUT: ${OCR_SERVE_FIX_TIMEOUT:-}
       OCR_SERVE_WORKERS: ${OCR_SERVE_WORKERS:-}
       OCR_SERVE_REVIEW_CONCURRENCY: ${OCR_SERVE_REVIEW_CONCURRENCY:-}
       OCR_SERVE_BUNDLE_LINES: ${OCR_SERVE_BUNDLE_LINES:-}
