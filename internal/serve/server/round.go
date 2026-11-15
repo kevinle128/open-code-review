@@ -225,12 +225,17 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 	}
 	select {
 	case s.workers <- struct{}{}:
-		defer func() { <-s.workers }()
-	case <-s.runCtx.Done():
-		log.Error("review round failed", "stage", "wait for worker", "error", s.runCtx.Err().Error())
-		s.commandFailed(f, ref, j.cmd, s.failureReason("wait for worker", j.requestID), log)
-		return s.runCtx.Err()
+	default:
+		s.markQueued(f, ref, log)
+		select {
+		case s.workers <- struct{}{}:
+		case <-s.runCtx.Done():
+			log.Error("review round failed", "stage", "wait for worker", "error", s.runCtx.Err().Error())
+			s.commandFailed(f, ref, j.cmd, s.failureReason("wait for worker", j.requestID), log)
+			return s.runCtx.Err()
+		}
 	}
+	defer func() { <-s.workers }()
 	// The round context has no deadline of its own: run gives the review
 	// and the fix each their limit. cancel stops the round when a newer
 	// review replaces its chain.
@@ -243,6 +248,29 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 	defer s.end(ref, rj.gen)
 	r := &roundRun{s: s, f: f, ref: ref, rj: rj, j: j, log: log}
 	return r.run(ctx)
+}
+
+// markQueued sets a pending status on the PR head while the round waits
+// for a free worker. Without it a GitLab project whose CI pipeline passes
+// first could merge before the review starts, because "Pipelines must
+// succeed" sees no ocr-review status yet.
+func (s *Server) markQueued(f forge.Forge, ref forge.PRRef, log *slog.Logger) {
+	ctx, cancel := s.sideContext()
+	defer cancel()
+	c := s.chain(ref)
+	c.status.Lock()
+	defer c.status.Unlock()
+	pr, err := f.GetPR(ctx, ref)
+	if err != nil {
+		log.Warn("read pull request for the queued status", "error", err.Error())
+		return
+	}
+	if pr.State != forge.StateOpen {
+		return
+	}
+	pr.Ref = ref
+	s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusPending, s.loc.Text("status.queued"), log)
+	log.Info("round queued", "head", pr.HeadSHA)
 }
 
 // roundRun holds the state of one round while it runs.

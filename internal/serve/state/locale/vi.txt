@@ -54,6 +54,7 @@ round.end = Chuỗi review kết thúc ở vòng này; được phép merge.
 round.body_cut = ⚠️ Bình luận này bị cắt vì vượt giới hạn độ dài bình luận của forge.
 
 status.running = Đang chạy review OCR {round}
+status.queued = Review OCR đang chờ tới lượt chạy
 status.success = Chuỗi review OCR đã kết thúc
 status.failure = Review OCR bị lỗi; bình luận review để chạy lại
 

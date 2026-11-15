@@ -55,6 +55,7 @@ round.end = The review chain ends with this round; merge is allowed.
 round.body_cut = ⚠️ This comment was cut at the comment size limit of the forge.
 
 status.running = OCR review {round} is running
+status.queued = OCR review is waiting for a free worker
 status.success = OCR review chain ended
 status.failure = OCR review failed; comment review to run it again
 
