@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/review"
 )
@@ -176,8 +177,10 @@ func TestHealthAndShutdown(t *testing.T) {
 	}
 }
 
+// TestShutdownDeadline runs without a data directory, so there is no round
+// journal and a cut round fails the chain.
 func TestShutdownDeadline(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, func(c *serveconfig.Config) { c.DataDir = "" })
 	ref := ghRef(1)
 	h.gh.setPR(openPR(ref, sha1))
 	started := make(chan struct{})

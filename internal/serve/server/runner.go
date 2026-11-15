@@ -20,6 +20,10 @@ import (
 // checkout was fetched, so the round would cover the wrong commit.
 var errHeadMoved = errors.New("head moved during checkout")
 
+// errShutdown ends a round that a shutdown cut; the journal keeps it, so it
+// runs again after the restart.
+var errShutdown = errors.New("round cut by shutdown")
+
 // process runs one job and reports whether the queue should run it again.
 func (s *Server) process(ref forge.PRRef, j job) bool {
 	log := withPR(withRequest(s.log, j.requestID), ref)

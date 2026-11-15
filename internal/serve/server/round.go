@@ -223,6 +223,27 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 		log.Info("round skipped: a newer review replaced its chain")
 		return nil
 	}
+	token := s.record(ref, rj, log)
+	err := s.runRound(f, ref, rj, j, log)
+	if !errors.Is(err, errShutdown) && !errors.Is(err, errHeadMoved) {
+		if rerr := s.journal.remove(ref, token); rerr != nil {
+			log.Error("update the round journal", "error", rerr.Error())
+		}
+	}
+	return err
+}
+
+// record writes rj to the journal, so a restart or a crash before the round
+// ends runs it again.
+func (s *Server) record(ref forge.PRRef, rj roundJob, log *slog.Logger) string {
+	token, err := s.journal.put(ref, rj)
+	if err != nil {
+		log.Error("update the round journal", "error", err.Error())
+	}
+	return token
+}
+
+func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *slog.Logger) error {
 	select {
 	case s.workers <- struct{}{}:
 	default:
@@ -271,10 +292,15 @@ func (s *Server) markQueued(f forge.Forge, ref forge.PRRef, log *slog.Logger) {
 	log.Info("round queued", "head", pr.HeadSHA)
 }
 
-// failQueued marks the chain failed when a shutdown stops a round that
-// still waits for a worker. Without it the PR keeps the pending status of
-// that round and stays blocked with no message to its author.
+// failQueued handles a shutdown that stops a round still waiting for a
+// worker. With a journal the round runs again after the restart, so the PR
+// keeps its pending status. Without one the chain is marked failed, or the
+// PR would stay blocked with no message to its author.
 func (s *Server) failQueued(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *slog.Logger) error {
+	if s.journal != nil {
+		log.Info("round cut by shutdown; it runs again after the restart", "stage", "wait for worker")
+		return errShutdown
+	}
 	r := &roundRun{s: s, f: f, ref: ref, rj: rj, j: j, log: log,
 		marker: state.Marker{Max: s.cfg.MaxRounds}}
 	ctx, cancel := s.sideContext()
@@ -538,8 +564,9 @@ func (r *roundRun) finish(ctx context.Context, out state.RoundReport) error {
 		Real: len(out.Fixed) + len(out.Reported), Fixed: len(out.Fixed), Fix: out.FixCommit})
 	if next > 0 {
 		r.publish(ctx, out.FixCommit, next, "", false)
-		s.queue.submit(r.ref, job{round: &roundJob{n: next, scope: state.ScopeCommit, commit: out.FixCommit,
-			fixCommit: true, gen: rj.gen, effort: rj.effort}, requestID: r.j.requestID})
+		nj := roundJob{n: next, scope: state.ScopeCommit, commit: out.FixCommit, fixCommit: true, gen: rj.gen, effort: rj.effort}
+		s.record(r.ref, nj, r.log)
+		s.queue.submit(r.ref, job{round: &nj, requestID: r.j.requestID})
 	} else {
 		r.marker.Status = state.ChainSuccess
 		r.publish(ctx, r.pr.HeadSHA, rj.n, "", false)
@@ -560,6 +587,10 @@ func (r *roundRun) fail(stage string, err error) error {
 	if !r.s.current(r.ref, r.rj.gen) {
 		r.log.Info("round cancelled: a newer review replaced its chain", "stage", stage)
 		return nil
+	}
+	if r.s.runCtx.Err() != nil && r.s.journal != nil {
+		r.log.Info("round cut by shutdown; it runs again after the restart", "stage", stage)
+		return errShutdown
 	}
 	r.log.Error("review round failed", "stage", stage, "error", err.Error())
 	side, cancel := r.s.sideContext()

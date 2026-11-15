@@ -803,7 +803,7 @@ func TestRoundCommentShowsMergeBaseAndCoverage(t *testing.T) {
 }
 
 func TestWorkerWaitCancelled(t *testing.T) {
-	h := newHarness(t, func(c *serveconfig.Config) { c.Workers = 1 })
+	h := newHarness(t, func(c *serveconfig.Config) { c.Workers = 1; c.DataDir = "" })
 	ref := ghRef(25)
 	h.gh.setPR(openPR(ref, sha1))
 	h.srv.workers <- struct{}{}

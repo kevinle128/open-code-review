@@ -836,8 +836,8 @@ The service sets the commit status `ocr-review` on the PR head:
 When the chain ends, the current head gets the status too, in case a person
 pushed while the round ran. A round that waits for a worker sets `pending`
 on the head first, so a merge cannot pass before the review starts. A
-service restart that cuts a running or waiting round sets `failure` until
-someone comments `review`.
+service restart or crash that cuts a running or waiting round leaves the
+status `pending`, and the next start runs that round again.
 
 - GitHub: the Statuses API. Make `ocr-review` a required status check in the
   branch protection of each repository, for example:
@@ -911,14 +911,15 @@ push, otherwise the round only reports and its comment quotes the refusal.
 - Logs: JSON lines on stdout with `request_id`; OCR progress lines on stderr
   are plain text prefixed with `[ocr]`.
 - `docker compose stop` sends SIGTERM: the service stops taking webhooks and
-  waits up to 60 seconds for running rounds. A round cut short fails and
-  sets the `failure` status. `stop_grace_period` in the example is 75
+  waits up to 60 seconds for running rounds. A round cut short runs again
+  after the restart (see `/data/rounds.json` below). `stop_grace_period` in the example is 75
   seconds.
 - The chain state lives in the PR summary comment, so `/data` and `/work` can
-  be dropped without losing it. Queued rounds live only in memory: a restart
-  between a fix push and the next round marks the chain failed (status
-  `failure`) until someone comments `review`. After the drain time the
-  service waits up to 10 more seconds for these status writes.
+  be dropped without losing it. `/data/rounds.json` lists the rounds that
+  started or were queued and have not ended. A round cut by a restart or a
+  crash stays in it, keeps the status `pending`, and runs again when the
+  service starts. Without a data directory there is no such list: a cut
+  round fails and sets `failure` until someone comments `review`.
 
 ## Upgrade from the thread flow
 

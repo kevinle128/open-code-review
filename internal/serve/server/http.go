@@ -55,6 +55,7 @@ type Server struct {
 	seen    *dedupe
 	queue   *queue
 	workers chan struct{}
+	journal *journal
 
 	chainMu sync.Mutex
 	chains  map[string]*chainCtl
@@ -113,6 +114,11 @@ func New(d Deps) (*Server, error) {
 		workers: make(chan struct{}, d.Config.Workers),
 		chains:  map[string]*chainCtl{},
 	}
+	jr, err := openJournal(d.Config.DataDir)
+	if err != nil {
+		s.log.Error("round journal unreadable; starting with an empty one", "error", err.Error())
+	}
+	s.journal = jr
 	s.runCtx, s.cancelRun = context.WithCancel(context.Background())
 	s.queue = newQueue(&s.wg, s.process)
 	return s, nil
@@ -127,18 +133,30 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// Start marks the server started. Reviews run on demand, so there is no
-// worker pool or poller to start.
+// Start marks the server started and queues again the rounds that the
+// last run did not end: a restart or a crash cut them.
 func (s *Server) Start(context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	switch {
 	case s.closing:
+		s.mu.Unlock()
 		return errors.New("server: already shut down")
 	case s.started:
+		s.mu.Unlock()
 		return errors.New("server: already started")
 	}
 	s.started = true
+	s.mu.Unlock()
+	for _, e := range s.journal.pending() {
+		ref := e.ref()
+		if s.forges[ref.Platform] == nil {
+			continue
+		}
+		rj := e.roundJob()
+		rj.gen = s.restartChain(ref)
+		withPR(s.log, ref).Info("round resumed after a restart", "round", rj.n, "scope", rj.scope)
+		s.queue.submit(ref, job{round: &rj, requestID: "resume-" + newRequestID()})
+	}
 	return nil
 }
 
