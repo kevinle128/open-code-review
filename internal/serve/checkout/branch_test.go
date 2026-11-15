@@ -206,3 +206,40 @@ func TestCommitRefusesTamperedCheckout(t *testing.T) {
 		}
 	})
 }
+
+func TestCommitDiff(t *testing.T) {
+	r := newRemote(t)
+	ws := fetchBranch(t, r)
+	ctx := context.Background()
+	write(t, ws.Dir(), "a.txt", "fixed\n")
+	sha, changed, err := ws.Commit(ctx, botIdent, "fix: a")
+	if err != nil || !changed {
+		t.Fatalf("commit: %v %v", changed, err)
+	}
+	diff, err := ws.CommitDiff(ctx, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff, "+++ b/a.txt") || !strings.Contains(diff, "+fixed") || !strings.Contains(diff, "@@ ") {
+		t.Fatalf("diff:\n%s", diff)
+	}
+	if _, err := ws.CommitDiff(ctx, "HEAD"); err == nil {
+		t.Fatal("a ref name was accepted")
+	}
+	if _, err := ws.CommitDiff(ctx, strings.Repeat("0", 40)); err == nil {
+		t.Fatal("a missing commit gave a diff")
+	}
+	// Commit refuses a branch that moved since the fetch, so the large
+	// commit needs a fresh checkout.
+	ws = fetchBranch(t, r)
+	big := strings.Repeat("line of a large generated file\n", maxCommitDiff/30+100)
+	write(t, ws.Dir(), "big.txt", big)
+	sha, _, err = ws.Commit(ctx, botIdent, "fix: big")
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff, err = ws.CommitDiff(ctx, sha)
+	if err != nil || len(diff) > maxCommitDiff || !strings.HasSuffix(diff, "\n") {
+		t.Fatalf("large diff: %d bytes, err %v", len(diff), err)
+	}
+}

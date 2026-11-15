@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -78,7 +79,7 @@ func TestFixWritesInputsAndParsesTheAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Fixed) != 1 || res.Fixed[0] != (review.Fixed{ID: "F1", Path: "a.go", Line: 3, Problem: "A returns nothing.", Fix: "Return the value."}) {
+	if len(res.Fixed) != 1 || !reflect.DeepEqual(res.Fixed[0], review.Fixed{ID: "F1", Path: "a.go", Line: 3, Problem: "A returns nothing.", Fix: "Return the value."}) {
 		t.Fatalf("fixed %+v", res.Fixed)
 	}
 	if len(res.Reported) != 1 || res.Reported[0] != (review.Reported{ID: "F3", Problem: "No test plan.", Scenario: "A reviewer cannot check it.", ProposedFix: "Add a test plan."}) {

@@ -159,3 +159,27 @@ func (w *workspace) Push(ctx context.Context, spec forge.CloneSpec, sha string) 
 	}
 	return nil
 }
+
+// maxCommitDiff bounds the diff CommitDiff returns. The round comment
+// shows only a part of a larger diff and links the commit for the rest.
+const maxCommitDiff = 1 << 20
+
+// CommitDiff returns the diff of sha against its first parent. A diff over
+// maxCommitDiff bytes is cut at the last line break before the bound.
+func (w *workspace) CommitDiff(ctx context.Context, sha string) (string, error) {
+	if !shaPattern.MatchString(sha) {
+		return "", fmt.Errorf("commit diff: %q is not a commit id", sha)
+	}
+	out, err := runGit(ctx, w.dir, gitEnv(), "-c", "core.quotePath=false", "diff", "-U3", "--no-color",
+		"--no-ext-diff", "--no-textconv", "--end-of-options", sha+"^1", sha)
+	if err != nil {
+		return "", fmt.Errorf("git diff: %w", err)
+	}
+	if len(out) > maxCommitDiff {
+		out = out[:maxCommitDiff]
+		if i := bytes.LastIndexByte(out, '\n'); i >= 0 {
+			out = out[:i+1]
+		}
+	}
+	return string(out), nil
+}

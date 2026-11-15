@@ -335,6 +335,9 @@ type fakeWorkspaces struct {
 	pushed        []string // spec.HeadRef + "@" + sha
 	// onPush runs after a push, so a test can move the PR head to the fix.
 	onPush func(sha string)
+	// diff and diffErr answer CommitDiff.
+	diff    string
+	diffErr error
 }
 
 // fixSHA is the commit the n-th fix makes: f, e, d, ... repeated.
@@ -382,6 +385,12 @@ func (w fakeWorkspace) Push(_ context.Context, spec forge.CloneSpec, sha string)
 }
 
 type fakeWorkspace struct{ w *fakeWorkspaces }
+
+func (w fakeWorkspace) CommitDiff(context.Context, string) (string, error) {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	return w.w.diff, w.w.diffErr
+}
 
 func (w fakeWorkspace) Dir() string { return "/work/slot-0" }
 

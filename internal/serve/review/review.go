@@ -104,6 +104,9 @@ type Workspace interface {
 	Commit(ctx context.Context, ident forge.Identity, message string) (sha string, changed bool, err error)
 	// Push pushes sha to the checked out branch without force.
 	Push(ctx context.Context, spec forge.CloneSpec, sha string) error
+	// CommitDiff returns the unified diff of sha against its first parent,
+	// with three lines of context.
+	CommitDiff(ctx context.Context, sha string) (string, error)
 }
 
 // Workspaces hands out checkout slots. The release func empties the slot and
@@ -138,24 +141,41 @@ type FixRequest struct {
 	ReportOnly bool
 }
 
-// Fixed is a finding the fix run judged real and fixed.
+// Fixed is a finding the fix run judged real and fixed. Scenario is how
+// the code failed; TestsAdded names the tests the fix added, if any.
+// Changes are the places the fix edited, which tie the hunks of the fix
+// commit to this finding.
 type Fixed struct {
-	ID      string
-	Path    string
-	Line    int
-	Problem string
-	Fix     string
+	ID         string
+	Path       string
+	Line       int
+	Problem    string
+	Scenario   string
+	Fix        string
+	TestsAdded string
+	Changes    []Change
+}
+
+// Change is a line range of the new file that a fix edited. A range with
+// StartLine 0 covers the whole file, as for a deleted file.
+type Change struct {
+	Path      string
+	StartLine int
+	EndLine   int
 }
 
 // Reported is a real finding the run did not fix: in a report-only run,
 // for a finding about the PR as a whole, or when no safe fix exists.
+// ProposedDiff is a unified diff against the reviewed head that was not
+// applied; it is empty when the run gave none.
 type Reported struct {
-	ID          string
-	Path        string
-	Line        int
-	Problem     string
-	Scenario    string
-	ProposedFix string
+	ID           string
+	Path         string
+	Line         int
+	Problem      string
+	Scenario     string
+	ProposedFix  string
+	ProposedDiff string
 }
 
 // Tests is the test run after the fix. Command is empty when no test ran.
