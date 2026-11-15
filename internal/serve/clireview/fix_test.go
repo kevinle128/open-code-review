@@ -253,3 +253,51 @@ func TestReviewOfAFixCommit(t *testing.T) {
 		t.Fatalf("prompt\n%s", cli.inv.Prompt)
 	}
 }
+
+func TestFixParsesChangesAndProposedDiff(t *testing.T) {
+	changes := `[{"path": " a.go ", "start_line": 3, "end_line": 1}, {"path": "", "start_line": 1, "end_line": 2},
+ {"path": "gone.go", "start_line": -4, "end_line": -1}, {"path": "a_test.go", "start_line": 10, "end_line": 20}]`
+	diff := "Here is the change:\n```diff\n--- a/a.go\n+++ b/a.go\n@@ -5 +5,2 @@\n-x\n+y\n\n+z\n```\nThat is all."
+	diffJSON, _ := json.Marshal(diff)
+	cli := &fixCLI{msg: `{"fixed": [{"id": "F1", "path": "a.go", "line": 3, "problem": "p", "scenario": " A caller reads zero. ", "fix": "f",
+ "changes": ` + changes + `, "tests_added": " TestA "}],
+ "report_only": [{"id": "F2", "path": "a.go", "line": 5, "problem": "q", "scenario": "s", "proposed_fix": "g", "proposed_diff": ` + string(diffJSON) + `}],
+ "tests": {"command": "go test ./...", "passed": true, "output_tail": ""}, "summary": "", "commit_message": "fix: a"}`}
+	fx, _ := newFixer(t, cli)
+	res, err := fx.Fix(context.Background(), fixRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := review.Fixed{ID: "F1", Path: "a.go", Line: 3, Problem: "p", Scenario: "A caller reads zero.", Fix: "f", TestsAdded: "TestA",
+		Changes: []review.Change{{Path: "a.go", StartLine: 3, EndLine: 3}, {Path: "gone.go"}, {Path: "a_test.go", StartLine: 10, EndLine: 20}}}
+	if len(res.Fixed) != 1 || !reflect.DeepEqual(res.Fixed[0], want) {
+		t.Fatalf("fixed %+v", res.Fixed)
+	}
+	if len(res.Reported) != 1 || res.Reported[0].ProposedDiff != "--- a/a.go\n+++ b/a.go\n@@ -5 +5,2 @@\n-x\n+y\n\n+z" {
+		t.Fatalf("reported %+v", res.Reported)
+	}
+	for _, want := range []string{"`changes`", "`tests_added`", "`proposed_diff`", "real `git diff`"} {
+		if !strings.Contains(cli.inv.Prompt, want) {
+			t.Fatalf("prompt lacks %q", want)
+		}
+	}
+}
+
+func TestProposedDiff(t *testing.T) {
+	cases := map[string]string{
+		"":                                 "",
+		"Change x to y.":                   "",
+		"@@ -1 +1 @@\r\n-a\r\n+b\r\n":      "@@ -1 +1 @@\n-a\n+b",
+		"diff --git a/x b/x\nindex 1..2\n": "diff --git a/x b/x\nindex 1..2",
+		"--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\nProse after.\n+not kept": "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b",
+	}
+	for in, want := range cases {
+		if got := proposedDiff(in); got != want {
+			t.Fatalf("proposedDiff(%q) = %q, want %q", in, got, want)
+		}
+	}
+	big := "@@ -1 +1 @@\n" + strings.Repeat("+"+strings.Repeat("x", 99)+"\n", maxProposedDiff/100+10)
+	if got := proposedDiff(big); len(got) > maxProposedDiff || !strings.HasSuffix(got, "x") {
+		t.Fatalf("big diff: %d bytes", len(got))
+	}
+}
