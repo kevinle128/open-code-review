@@ -530,7 +530,14 @@ findings without a safe fix, go to `report_only` with the failing scenario
 and the proposed fix.
 
 The answer is one JSON object:
-`{fixed: [{id, path, line, problem, fix}], report_only: [{id, path, line, problem, scenario, proposed_fix}], tests: {command, passed, output_tail}, summary, commit_message}`.
+`{fixed: [{id, path, line, problem, scenario, fix, changes: [{path, start_line, end_line}], tests_added}], report_only: [{id, path, line, problem, scenario, proposed_fix, proposed_diff}], tests: {command, passed, output_tail}, summary, commit_message}`.
+`changes` lists the line ranges of the new files that the fix of that
+finding edited (test files included; 0 and 0 for a deleted file). The
+service does not take the diff from the agent: it runs `git diff -U3` on the
+fix commit against its parent and gives each finding the hunks that its
+ranges overlap, so one hunk can serve two findings. `proposed_diff` is a
+unified diff against the reviewed head that is not applied; the service
+keeps only its diff lines, at most 40000 bytes.
 The service keeps only ids of the request, each once; an id in both lists
 counts as reported, and a `fixed` entry of a report-only run becomes a
 reported one with its fix as the proposal. The texts are in the `language`
@@ -760,11 +767,22 @@ the comment says so with the end of the test output.
 
 The round comment has the title "OCR review, round k/N" (or "round N+1
 (report only)"), the reviewed range, and for each fixed finding the file and
-line, the problem and how it was fixed, then the fix commit and the test
-command with its result. Real findings that were not fixed, PR-level ones
-included, are listed under "Real findings, not fixed" with the scenario and
-the proposed fix, and, when the round could not fix at all, why. Findings the
-fix run dropped are not shown. The texts come from the service locale.
+line, the problem, the failing scenario, a `diff` block with the hunks of the
+fix commit for that finding and the tests added. A diff over 40 lines is
+collapsed in a `<details>` element. A finding that matches no hunk shows how
+it was fixed in prose instead, and the service logs a warning. Hunks that no
+finding claims are listed under "Other changes in the fix commit", so the
+comment hides no part of the commit. Then come a link to the fix commit
+(`<web>/<repo>/commit/<sha>` on GitHub, `<GitLab URL>/<project>/-/commit/<sha>`
+on GitLab) and the test command with its result. Real findings that were not
+fixed, PR-level ones included, are listed under "Real findings, not fixed"
+with the scenario, the proposed fix and the proposed diff (at most 150
+lines), and, when the round could not fix at all, why. When a push is
+rejected, the proposed diff of each finding is its part of the commit that
+was not pushed. A comment over 65000 characters first collapses every diff,
+then shows fewer lines of the largest diffs with a note, and is cut only as a
+last resort. Findings the fix run dropped are not shown. The texts come from
+the service locale.
 
 A push by a person, or a reopened PR, never starts a round: it copies the
 chain's current status to the new head (see [Merge gate](#merge-gate)). The
