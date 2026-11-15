@@ -200,7 +200,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 		log.Error("http shutdown", "error", err.Error())
 	}
 	if err := srv.Shutdown(drainCtx); err != nil {
-		log.Error("review drain cut short; unfinished rounds failed", "error", err.Error())
+		log.Error("review drain cut short; unfinished rounds run again after the restart", "error", err.Error())
 	}
 	log.Info("stopped")
 	return runErr
