@@ -230,9 +230,7 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 		select {
 		case s.workers <- struct{}{}:
 		case <-s.runCtx.Done():
-			log.Error("review round failed", "stage", "wait for worker", "error", s.runCtx.Err().Error())
-			s.commandFailed(f, ref, j.cmd, s.failureReason("wait for worker", j.requestID), log)
-			return s.runCtx.Err()
+			return s.failQueued(f, ref, rj, j, log)
 		}
 	}
 	defer func() { <-s.workers }()
@@ -271,6 +269,25 @@ func (s *Server) markQueued(f forge.Forge, ref forge.PRRef, log *slog.Logger) {
 	pr.Ref = ref
 	s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusPending, s.loc.Text("status.queued"), log)
 	log.Info("round queued", "head", pr.HeadSHA)
+}
+
+// failQueued marks the chain failed when a shutdown stops a round that
+// still waits for a worker. Without it the PR keeps the pending status of
+// that round and stays blocked with no message to its author.
+func (s *Server) failQueued(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *slog.Logger) error {
+	r := &roundRun{s: s, f: f, ref: ref, rj: rj, j: j, log: log,
+		marker: state.Marker{Max: s.cfg.MaxRounds}}
+	ctx, cancel := s.sideContext()
+	defer cancel()
+	if pr, m, _, err := s.readChain(ctx, f, ref, log); err != nil {
+		log.Warn("read pull request for the failed status", "error", err.Error())
+	} else if pr.State == forge.StateOpen {
+		r.pr = pr
+		if m != nil {
+			r.marker.Max, r.marker.Rounds = m.Max, m.Rounds
+		}
+	}
+	return r.fail("wait for worker", s.runCtx.Err())
 }
 
 // roundRun holds the state of one round while it runs.
