@@ -215,6 +215,10 @@ func (f *fakeForge) CommitURL(ref forge.PRRef, sha string) string {
 	return forge.CommitLink("https://forge.test", ref.Repo, "/commit/", sha)
 }
 
+func (f *fakeForge) LineURL(ref forge.PRRef, sha, path string, line int) string {
+	return forge.LineLink("https://forge.test", ref.Repo, "/blob/", sha, path, line)
+}
+
 func (f *fakeForge) setPR(pr forge.PR) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -508,7 +512,7 @@ func newHarness(t *testing.T, tweak ...func(*serveconfig.Config)) *harness {
 	}
 	srv, err := New(Deps{
 		Config: cfg, Forges: map[forge.Platform]forge.Forge{forge.GitHub: h.gh, forge.GitLab: h.gl},
-		Reviewer: h.rev, Fixer: h.fix, Workspaces: h.ws, Locale: loc, Logger: NewLogger(h.logs),
+		Reviewer: h.rev, Fixer: h.fix, Workspaces: h.ws, Locales: testLocales(loc), Languages: testLanguages, Logger: NewLogger(h.logs),
 		Now: func() time.Time { return h.clock }, Version: "test",
 	})
 	if err != nil {
@@ -521,6 +525,13 @@ func newHarness(t *testing.T, tweak ...func(*serveconfig.Config)) *harness {
 		_ = srv.Shutdown(ctx)
 	})
 	return h
+}
+
+// testLanguages are the output languages the harness gives each platform.
+var testLanguages = map[forge.Platform]string{forge.GitHub: "English", forge.GitLab: "Vietnamese"}
+
+func testLocales(loc state.Locale) map[forge.Platform]state.Locale {
+	return map[forge.Platform]state.Locale{forge.GitHub: loc, forge.GitLab: loc}
 }
 
 func (h *harness) forgeFor(p forge.Platform) *fakeForge {

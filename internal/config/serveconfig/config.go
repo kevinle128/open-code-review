@@ -126,6 +126,11 @@ type Config struct {
 
 	GitHub *GitHubConfig // nil = disabled
 	GitLab *GitLabConfig // nil = disabled
+
+	// GitHubLanguage and GitLabLanguage are the output languages of the
+	// PRs of each platform, one of the Language constants.
+	GitHubLanguage string
+	GitLabLanguage string
 }
 
 // GitHubConfig holds the GitHub App settings.
@@ -245,6 +250,9 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		Mentions:      l.mentions(),
 		Exclude:       l.excludes(),
 		Engine:        l.engine(),
+
+		GitHubLanguage: l.language(EnvGitHubLanguage, DefaultGitHubLanguage),
+		GitLabLanguage: l.language(EnvGitLabLanguage, DefaultGitLabLanguage),
 	}
 	c.CLI = l.cli(c.DataDir)
 	c.Verify = l.verify()

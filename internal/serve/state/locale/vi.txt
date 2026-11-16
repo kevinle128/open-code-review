@@ -1,66 +1,120 @@
-# Văn bản do `ocr serve` đăng lên. Mỗi dòng một cặp `key = value`; `\n` là xuống dòng.
-# Phần trong ngoặc nhọn do dịch vụ điền. Phải có đủ mọi key của en.txt.
+# Văn bản do `ocr serve` đăng lên, bằng tiếng Việt. File gốc là en.txt: mọi
+# key đều có ở đó. File này có thể thiếu key; key thiếu, hoặc văn bản có các
+# {placeholder} khác với bản tiếng Anh, sẽ dùng văn bản tiếng Anh.
+#
+# Mỗi dòng một cặp `key = value`; `\n` là xuống dòng. Dòng `[section]` làm các
+# key sau nó thành `section.key`. Phần trong ngoặc nhọn do dịch vụ điền.
 
-summary.title = Review code bằng OCR
-summary.status.running = Trạng thái: chuỗi review đang chạy; merge phải chờ chuỗi kết thúc.
-summary.status.success = Trạng thái: chuỗi review đã kết thúc; được phép merge.
-summary.status.failure = Trạng thái: vòng gần nhất bị lỗi; merge bị chặn cho tới khi một lần review mới thành công.
-summary.rounds_header = | Vòng | Phạm vi | Vấn đề thật | Đã sửa | Commit sửa |
-summary.hint = Mỗi vòng review, giữ lại các vấn đề thật, sửa chúng rồi push; vòng sau review commit sửa đó. Lệnh: `/review` (chạy lại trên toàn bộ PR), `/review-commit` (chạy lại trên commit mới nhất).
-summary.hint_mention = Mỗi vòng review, giữ lại các vấn đề thật, sửa chúng rồi push; vòng sau review commit sửa đó. Lệnh: `@{bot} review` (chạy lại trên toàn bộ PR), `@{bot} review-commit` (chạy lại trên commit mới nhất); `/review` và `/review-commit` cũng dùng được.
+[summary]
+title = Review code bằng OCR
+status.running = Trạng thái: chuỗi review đang chạy; merge phải chờ chuỗi kết thúc.
+status.success = Trạng thái: chuỗi review đã kết thúc; được phép merge.
+status.failure = Trạng thái: vòng gần nhất bị lỗi; merge bị chặn cho tới khi một lần review mới thành công.
+rounds_header = | Vòng | Phạm vi | Vấn đề thật | Đã sửa | Commit sửa |
+hint = Mỗi vòng review, giữ lại các vấn đề thật, sửa chúng rồi push; vòng sau review commit sửa đó. Lệnh: `/review` (chạy lại trên toàn bộ PR), `/review-commit` (chạy lại trên commit mới nhất).
+hint_mention = Mỗi vòng review, giữ lại các vấn đề thật, sửa chúng rồi push; vòng sau review commit sửa đó. Lệnh: `@{bot} review` (chạy lại trên toàn bộ PR), `@{bot} review-commit` (chạy lại trên commit mới nhất); `/review` và `/review-commit` cũng dùng được.
 
-coverage.partial = ⚠️ Lần review chưa đầy đủ: đã review {reviewed}/{total} file. Các file sau chưa được review:
-coverage.more = và {count} file khác (xem log của dịch vụ)
+[coverage]
+partial = ⚠️ Lần review chưa đầy đủ: đã review {reviewed}/{total} file. Các file sau chưa được review:
+more = và {count} file khác (xem log của dịch vụ)
 
-failure.provider = nhà cung cấp LLM trả về lỗi
-failure.timeout = review file này bị quá thời gian
-failure.cancelled = review bị hủy
-failure.configuration = lỗi cấu hình
-failure.input = không đọc được file hoặc file quá lớn
-failure.budget = đã hết ngân sách review
-failure.panic = lỗi nội bộ
-failure.unknown = lỗi không xác định
+[failure]
+provider = nhà cung cấp LLM trả về lỗi
+timeout = review file này bị quá thời gian
+cancelled = review bị hủy
+configuration = lỗi cấu hình
+input = không đọc được file hoặc file quá lớn
+budget = đã hết ngân sách review
+panic = lỗi nội bộ
+unknown = lỗi không xác định
 
-round.label = vòng {round}/{max}
-round.label_report = vòng {round} (chỉ báo cáo)
-round.title = Review OCR, {round}
-round.range = Phạm vi review: {range}
-round.skipped = Không có thay đổi nào cần review (ví dụ mọi file thay đổi đều bị loại trừ).
-round.clean = Không có vấn đề thật nào.
-round.fixed_title = Đã sửa ({count})
-round.how_fixed = Cách sửa: {fix}
-round.tests_added = Kiểm thử đã thêm: {tests}
-round.fix_commit = Commit sửa: {sha}
-round.other_changes = Thay đổi khác trong commit sửa
-round.diff_summary = Xem diff ({lines} dòng)
-round.diff_shared = Diff của mục này nằm chung với mục {items} ở trên.
-round.diff_cut = Còn {count} dòng không hiển thị ở đây; xem đầy đủ trong commit sửa {commit}.
-round.tests_none = Kiểm thử: không chạy.
-round.tests_passed = Kiểm thử: {command} đạt.
-round.tests_failed = ⚠️ Kiểm thử: {command} không đạt hoặc không chạy được. Bản sửa vẫn được push; phần cuối của output:
-round.reported_title = Vấn đề thật chưa sửa ({count})
-round.scenario = Tình huống lỗi: {scenario}
-round.proposed_fix = Cách sửa đề xuất: {fix}
-round.proposed_diff = Diff đề xuất (chưa áp dụng):
-round.proposal_cut = Còn {count} dòng của diff đề xuất không hiển thị.
-round.pr_level = Toàn bộ PR
-round.report.limit = Đã dùng hết {max} vòng sửa, nên các vấn đề này chỉ được báo cáo. Bạn tự quyết định cách xử lý.
-round.report.fork = Bot không thể push lên nhánh {branch}: nhánh head nằm ở một fork. Bạn tự áp dụng bản sửa.
-round.report.push = Bot không thể push lên nhánh {branch}: {reason}. Bạn tự áp dụng bản sửa.
-round.report.engine = Engine review này không sửa lỗi. Bạn tự áp dụng bản sửa.
-round.report.no-edit = Lần sửa không thay đổi file nào nên không có gì được push. Bạn tự áp dụng bản sửa.
-round.next = Commit sửa sẽ được review tiếp ở {round}.
-round.end = Chuỗi review kết thúc ở vòng này; được phép merge.
-round.body_cut = ⚠️ Bình luận này bị cắt vì vượt giới hạn độ dài bình luận của forge.
+[round]
+label = vòng {round}/{max}
+label_report = vòng {round} (chỉ báo cáo)
+title = Review OCR {round}
+range_full = Review toàn bộ PR: {range}
+range_fix = Review commit sửa {sha}
+range_commit = Review commit {sha}
+skipped = Không có thay đổi nào cần review (ví dụ mọi file thay đổi đều bị loại trừ).
+end_text = Chuỗi review kết thúc ở vòng này; được phép merge.
+found = Tìm được
+found_value = {count} vấn đề → {real} lỗi thật, {skipped} bị loại
+found_value_one = 1 vấn đề → {real} lỗi thật, {skipped} bị loại
+found_zero = không có vấn đề nào
+fixed = Đã sửa
+fixed_value = {count} lỗi, commit {commit}
+fixed_count = {count} lỗi
+fixed_nothing = không có gì để sửa
+needs_you = Cần bạn xử lý
+tests = Kiểm thử sau khi sửa
+tests_none = không chạy
+tests_passed = {command} đạt
+tests_failed = {command} không đạt hoặc không chạy được; bản sửa vẫn được push
+tests_output = Phần cuối output
+scope = Phạm vi
+scope_value = đã review {reviewed}/{total} file
+next = Tiếp theo
+next_value = {round} review commit {sha}
+end = Kết thúc
+end_value = chuỗi review dừng ở vòng này; được phép merge
+other_changes = Thay đổi khác trong commit sửa
+diff_summary = Xem diff ({lines} dòng)
+diff_shared = Diff của mục này nằm chung với mục {items} ở trên.
+diff_cut = Còn {count} dòng không hiển thị ở đây; xem đầy đủ trong commit sửa {commit}.
+proposed_diff = Diff đề xuất (chưa áp dụng):
+proposal_cut = Còn {count} dòng của diff đề xuất không hiển thị.
+report.limit = Đã dùng hết {max} vòng sửa, nên các vấn đề này chỉ được báo cáo. Bạn tự quyết định cách xử lý.
+report.fork = Bot không thể push lên nhánh {branch}: nhánh head nằm ở một fork. Bạn tự áp dụng bản sửa.
+report.push = Bot không thể push lên nhánh {branch}: {reason}. Bạn tự áp dụng bản sửa.
+report.engine = Engine review này không sửa lỗi. Bạn tự áp dụng bản sửa.
+report.no-edit = Lần sửa không thay đổi file nào nên không có gì được push. Bạn tự áp dụng bản sửa.
+body_cut = ⚠️ Bình luận này bị cắt vì vượt giới hạn độ dài bình luận của forge.
 
-status.running = Đang chạy review OCR {round}
-status.queued = Review OCR đang chờ tới lượt chạy
-status.success = Chuỗi review OCR đã kết thúc
-status.failure = Review OCR bị lỗi; bình luận review để chạy lại
+[finding]
+section_title = Tìm được gì và xử lý ra sao ({count})
+col_number = #
+col_issue = Vấn đề
+col_severity = Mức độ
+col_result = Kết quả
+location = {path} L{line}
+whole_pr = Toàn bộ PR
+problem = Lỗi
+scenario = Tình huống lỗi
+fixed = Đã sửa
+proposed_fix = Đề xuất
+why_skipped = Lý do bỏ qua
+tests_added = Kiểm thử đã thêm
+result.fixed = Đã sửa
+result.reported = Cần bạn xử lý
+result.dropped = Bỏ qua
 
-pending.round = Đang chạy {round}...
-pending.failed = Vòng gần nhất bị lỗi. Bình luận `/review` để chạy lại chuỗi review.
+[severity]
+critical = Nghiêm trọng
+high = Cao
+medium = Trung bình
+low = Thấp
 
-command.error = Lệnh thất bại: {reason}
-command.help = Lệnh hỗ trợ: `/review [--effort=low|medium|high]` (chạy lại chuỗi review trên toàn bộ PR) và `/review-commit` (chạy lại trên commit mới nhất).
-command.help_mention = Lệnh hỗ trợ: `@{bot} review [--effort=low|medium|high]` (chạy lại chuỗi review trên toàn bộ PR) và `@{bot} review-commit` (chạy lại trên commit mới nhất); `/review` và `/review-commit` cũng dùng được.
+[category]
+bug = Lỗi
+security = Bảo mật
+performance = Hiệu năng
+maintainability = Dễ bảo trì
+test = Kiểm thử
+style = Phong cách
+documentation = Tài liệu
+other = Khác
+
+[status]
+running = Đang chạy review OCR {round}
+queued = Review OCR đang chờ tới lượt chạy
+success = Chuỗi review OCR đã kết thúc
+failure = Review OCR bị lỗi; bình luận review để chạy lại
+
+[pending]
+round = Đang chạy {round}...
+failed = Vòng gần nhất bị lỗi. Bình luận `/review` để chạy lại chuỗi review.
+
+[command]
+error = Lệnh thất bại: {reason}
+help = Lệnh hỗ trợ: `/review [--effort=low|medium|high]` (chạy lại chuỗi review trên toàn bộ PR) và `/review-commit` (chạy lại trên commit mới nhất).
+help_mention = Lệnh hỗ trợ: `@{bot} review [--effort=low|medium|high]` (chạy lại chuỗi review trên toàn bộ PR) và `@{bot} review-commit` (chạy lại trên commit mới nhất); `/review` và `/review-commit` cũng dùng được.

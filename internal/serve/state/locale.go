@@ -9,6 +9,8 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -18,13 +20,15 @@ import (
 //go:embed locale/*.txt
 var localeFS embed.FS
 
+var sectionPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$`)
+
 const fallbackLocale = "en"
 
 // Locale maps text keys to translated text.
 type Locale map[string]string
 
-// LoadLocale loads locale/<name>.txt on top of the English file, so a key
-// missing from a translation falls back to English.
+// LoadLocale loads locale/<name>.txt on top of the English file. English is
+// the source of every key; see merge for how a translation falls back.
 func LoadLocale(name string) (Locale, error) {
 	base, err := readLocale(fallbackLocale)
 	if err != nil {
@@ -37,10 +41,32 @@ func LoadLocale(name string) (Locale, error) {
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range over {
-		base[k] = v
+	return merge(base, over), nil
+}
+
+// merge lays a translation over the English base. A key the translation
+// lacks keeps the English text, and so does a translated text whose
+// placeholders differ from the English ones: a missing or misspelled
+// placeholder would post a raw "{name}" or drop a value. A key English
+// does not have is not used by the service, so it is left out.
+func merge(base, over Locale) Locale {
+	out := make(Locale, len(base))
+	for k, v := range base {
+		out[k] = v
+		if t, ok := over[k]; ok && slices.Equal(placeholders(t), placeholders(v)) {
+			out[k] = t
+		}
 	}
-	return base, nil
+	return out
+}
+
+var placeholderPattern = regexp.MustCompile(`\{[A-Za-z0-9_]+\}`)
+
+// placeholders lists the distinct placeholders of s, sorted.
+func placeholders(s string) []string {
+	found := placeholderPattern.FindAllString(s, -1)
+	slices.Sort(found)
+	return slices.Compact(found)
 }
 
 func readLocale(name string) (Locale, error) {
@@ -54,12 +80,24 @@ func readLocale(name string) (Locale, error) {
 	return parseLocale(name, raw)
 }
 
+// parseLocale reads `key = value` lines. A `[section]` line, as in a TOML
+// table, makes the keys after it `section.key`; keys before the first
+// section line have no prefix.
 func parseLocale(name string, raw []byte) (Locale, error) {
 	out := Locale{}
+	prefix := ""
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	for n := 1; sc.Scan(); n++ {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			section, ok := strings.CutSuffix(strings.TrimPrefix(line, "["), "]")
+			if section = strings.TrimSpace(section); !ok || !sectionPattern.MatchString(section) {
+				return nil, fmt.Errorf("locale %s line %d: want [section]", name, n)
+			}
+			prefix = section + "."
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
@@ -67,6 +105,7 @@ func parseLocale(name string, raw []byte) (Locale, error) {
 		if !ok || key == "" {
 			return nil, fmt.Errorf("locale %s line %d: want key = value", name, n)
 		}
+		key = prefix + key
 		if _, dup := out[key]; dup {
 			return nil, fmt.Errorf("locale %s line %d: duplicate key %q", name, n, key)
 		}

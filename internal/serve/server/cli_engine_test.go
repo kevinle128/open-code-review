@@ -120,7 +120,8 @@ cp ` + answer + ` "$out"
 	if m.Status != state.ChainSuccess || len(m.Rounds) != 1 || m.Rounds[0].Real != 0 {
 		t.Fatalf("marker %+v", m)
 	}
-	mustContain(t, strings.Join(h.gh.noteList(), "\n"), h.loc.Text("round.clean"))
+	mustContain(t, strings.Join(h.gh.noteList(), "\n"), "2 issues → 0 real, 2 skipped")
+	mustContain(t, strings.Join(h.gh.noteList(), "\n"), "<summary>B is unused</summary>")
 	if entries, _ := os.ReadDir(homeRoot); len(entries) != 0 {
 		t.Fatal("run dir left after the review")
 	}

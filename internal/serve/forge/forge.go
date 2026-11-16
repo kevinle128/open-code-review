@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -169,6 +171,9 @@ type Forge interface {
 	// CommitURL is the web page of commit sha in the PR repository, or
 	// empty when the repository path or sha cannot form a safe link.
 	CommitURL(ref PRRef, sha string) string
+	// LineURL is the web page of line of path at commit sha, or of the
+	// whole file when line is 0; empty as for CommitURL.
+	LineURL(ref PRRef, sha, path string, line int) string
 	// SetStatus sets the StatusContext commit status of sha, a commit of
 	// the PR head branch. description is one short line.
 	SetStatus(ctx context.Context, pr PR, sha string, st CommitState, description string) error
@@ -210,4 +215,30 @@ func CommitLink(base, repo, segment, sha string) string {
 		}
 	}
 	return strings.TrimRight(base, "/") + "/" + repo + segment + sha
+}
+
+// markdownSafe escapes what url.PathEscape keeps but a markdown link
+// target cannot hold.
+var markdownSafe = strings.NewReplacer("(", "%28", ")", "%29", "<", "%3C", ">", "%3E")
+
+// LineLink is CommitLink for line of path at sha, with the forge's file
+// path segment. Each path segment is escaped; a path with an empty, "." or
+// ".." segment gives an empty link, since the web page would be another file.
+func LineLink(base, repo, segment, sha, path string, line int) string {
+	commit := CommitLink(base, repo, segment, sha)
+	if commit == "" || path == "" {
+		return ""
+	}
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return ""
+		}
+		parts[i] = markdownSafe.Replace(url.PathEscape(part))
+	}
+	link := commit + "/" + strings.Join(parts, "/")
+	if line > 0 {
+		link += "#L" + strconv.Itoa(line)
+	}
+	return link
 }

@@ -47,6 +47,11 @@ func (f *Forge) CommitURL(ref forge.PRRef, sha string) string {
 	return forge.CommitLink(f.webURL, ref.Repo, "/commit/", sha)
 }
 
+// LineURL implements forge.Forge.
+func (f *Forge) LineURL(ref forge.PRRef, sha, path string, line int) string {
+	return forge.LineLink(f.webURL, ref.Repo, "/blob/", sha, path, line)
+}
+
 func (f *Forge) botUserID(ctx context.Context, installationID int64, login string) (int64, error) {
 	f.botMu.Lock()
 	id := f.botID

@@ -177,7 +177,7 @@ func (s *Server) commandFailed(f forge.Forge, ref forge.PRRef, cmd *cmdJob, reas
 	if err := f.React(ctx, ref, cmd.commentID, forge.ReactionFailure); err != nil {
 		log.Warn("reaction failed", "reaction", string(forge.ReactionFailure), "error", err.Error())
 	}
-	if err := f.PostNote(ctx, ref, state.RenderCommandError(reason, s.mention(ref.Platform), s.loc)); err != nil {
+	if err := f.PostNote(ctx, ref, state.RenderCommandError(reason, s.mention(ref.Platform), s.locales[ref.Platform])); err != nil {
 		log.Error("post command reply", "error", err.Error())
 	}
 }

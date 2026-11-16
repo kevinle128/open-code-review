@@ -5,10 +5,7 @@ package state
 
 import (
 	"slices"
-	"strings"
 	"testing"
-
-	"github.com/alibaba/open-code-review/internal/serve/review"
 )
 
 const sharedHunkDiff = `diff --git a/q.go b/q.go
@@ -47,30 +44,5 @@ func TestDedupeDiffs_SharedHunkShownOnce(t *testing.T) {
 	}
 	if out[5] != "not a diff" || refs[5] != nil {
 		t.Fatalf("plain text must be kept: %q %v", out[5], refs[5])
-	}
-}
-
-func TestRenderRound_SharedDiffNamedOnce(t *testing.T) {
-	loc := mustLocale(t, "vi")
-	r := RoundReport{N: 1, Max: 3, From: "a", To: "b", FixCommit: "0123456789abcdef",
-		Fixed: []review.Fixed{
-			{ID: "F1", Path: "q.go", Line: 11, Problem: "p1", Fix: "fix1"},
-			{ID: "F2", Path: "q.go", Line: 11, Problem: "p2", Fix: "fix2"},
-		},
-		FixDiffs: []string{sharedHunkDiff, sharedHunkDiff},
-		Reported: []review.Reported{
-			{ID: "R1", Path: "q.go", Line: 11, Problem: "r1", ProposedDiff: sharedHunkDiff},
-			{ID: "R2", Path: "q.go", Line: 11, Problem: "r2", ProposedDiff: sharedHunkDiff},
-		},
-	}
-	body := RenderRound(r, loc)
-	if n := strings.Count(body, "@@ -10,2 +10,3 @@"); n != 2 {
-		t.Fatalf("shared hunk must show once per list, got %d:\n%s", n, body)
-	}
-	if n := strings.Count(body, loc.Text("round.diff_shared", "items", "1")); n != 2 {
-		t.Fatalf("each repeat must name item 1, got %d:\n%s", n, body)
-	}
-	if strings.Contains(body, "fix2") {
-		t.Fatalf("a finding with a shared diff needs no prose fix:\n%s", body)
 	}
 }

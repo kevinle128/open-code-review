@@ -25,6 +25,23 @@ import (
 // none; serve refuses to start without one, so it only fills a gap.
 const defaultServeLanguage = "Vietnamese"
 
+// serveLanguage is the output language of a request: its own, or else the
+// one of the app config, or else defaultServeLanguage. The app config is
+// read either way, so its MCP check still stops the review.
+func serveLanguage(requested string) (string, error) {
+	lang, err := serveAppLanguage()
+	if err != nil {
+		return "", err
+	}
+	if requested = strings.TrimSpace(requested); requested != "" {
+		return requested, nil
+	}
+	if lang == "" {
+		return defaultServeLanguage, nil
+	}
+	return lang, nil
+}
+
 // serveSelector picks the files of a CLI review through the same path the
 // OCR engine takes: the request checks, the project rule read at the PR
 // base, the request and service excludes, the serve filter, and the
@@ -62,12 +79,9 @@ func (s serveSelector) Select(ctx context.Context, req review.Request) (clirevie
 	if err != nil {
 		return sel, fmt.Errorf("select review files: %w", err)
 	}
-	lang, err := serveAppLanguage()
+	lang, err := serveLanguage(req.Language)
 	if err != nil {
 		return sel, err
-	}
-	if lang == "" {
-		lang = defaultServeLanguage
 	}
 	sel = clireview.Selection{Base: in.ResolvedBase, Head: in.ResolvedHead,
 		Background: opts.background, Language: lang}
@@ -127,12 +141,9 @@ func buildServeEngines(ctx context.Context, cfg *serveconfig.Config, getenv func
 	if err := homes.Sweep(); err != nil {
 		return nil, nil, fmt.Errorf("%s: remove stale run dirs: %w", serveconfig.EnvCLIHome, err)
 	}
-	lang, err := serveAppLanguage()
+	lang, err := serveLanguage("")
 	if err != nil {
 		return nil, nil, err
-	}
-	if lang == "" {
-		lang = defaultServeLanguage
 	}
 	rev := &clireview.Reviewer{
 		Selector: serveSelector{ocr: ocr}, CLI: reviewCLI, Homes: homes,
