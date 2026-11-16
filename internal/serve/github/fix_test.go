@@ -107,14 +107,32 @@ func TestBotPushIsBotSender(t *testing.T) {
 	if err := json.Unmarshal(withAction(t, fixture(t, "pull_request_opened.json"), "synchronize"), &p); err != nil {
 		t.Fatal(err)
 	}
-	p["sender"] = map[string]any{"login": testBot, "type": "Bot"}
-	body, _ := json.Marshal(p)
-	ev, err := parse(t, f, "pull_request", body)
-	if err != nil {
+	push := func(login, typ string) forge.Event {
+		t.Helper()
+		p["sender"] = map[string]any{"login": login, "type": typ}
+		body, _ := json.Marshal(p)
+		ev, err := parse(t, f, "pull_request", body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ev
+	}
+	// Before BotLogin reads the slug, every bot counts as the App.
+	if ev := push("renovate[bot]", "Bot"); !ev.SenderIsBot || !ev.SenderIsSelf {
+		t.Fatalf("bot before slug %+v", ev)
+	}
+	if _, err := f.BotLogin(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if ev.Kind != forge.EventPush || !ev.SenderIsBot || ev.Sender != testBot {
-		t.Fatalf("bot push %+v", ev)
+	ev := push(testBot, "Bot")
+	if ev.Kind != forge.EventPush || !ev.SenderIsBot || !ev.SenderIsSelf || ev.Sender != testBot {
+		t.Fatalf("own push %+v", ev)
+	}
+	if ev := push("renovate[bot]", "Bot"); !ev.SenderIsBot || ev.SenderIsSelf {
+		t.Fatalf("other bot push %+v", ev)
+	}
+	if ev := push(testBot, "User"); ev.SenderIsBot || ev.SenderIsSelf {
+		t.Fatalf("user push %+v", ev)
 	}
 }
 

@@ -106,7 +106,7 @@ func TestBotPushIsBotSender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ev.Kind != forge.EventPush || !ev.SenderIsBot {
+	if ev.Kind != forge.EventPush || !ev.SenderIsBot || !ev.SenderIsSelf {
 		t.Fatalf("bot push %+v", ev)
 	}
 }

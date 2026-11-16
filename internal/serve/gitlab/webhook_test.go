@@ -240,23 +240,24 @@ func TestSenderIsBot(t *testing.T) {
 	body := func(id int, name string) []byte {
 		return []byte(fmt.Sprintf(`{"object_kind":"merge_request","project":{"id":1},"user":{"id":%d,"username":%q},"object_attributes":{"iid":3,"action":"open"}}`, id, name))
 	}
-	check := func(id int, name string, want bool) {
+	check := func(id int, name string, want, self bool) {
 		t.Helper()
 		ev, err := f.ParseEvent(nil, body(id, name))
-		if err != nil || ev.SenderIsBot != want || ev.Sender != name {
-			t.Fatalf("%d %q: bot=%v err=%v", id, name, ev.SenderIsBot, err)
+		if err != nil || ev.SenderIsBot != want || ev.SenderIsSelf != self || ev.Sender != name {
+			t.Fatalf("%d %q: bot=%v self=%v err=%v", id, name, ev.SenderIsBot, ev.SenderIsSelf, err)
 		}
 	}
-	check(7, "dev", false)
-	check(7, "PR-Review", true)
-	check(7, "renovate-bot", true)
-	check(7, "", false)
+	check(7, "dev", false, false)
+	check(7, "PR-Review", true, true)
+	check(7, "renovate-bot", true, false)
+	check(7, "", false, false)
 	f.mu.Lock()
 	f.botID, f.botName = 55, "svc-reviewer"
 	f.mu.Unlock()
-	check(55, "renamed", true)
-	check(8, "svc-reviewer", true)
+	check(55, "renamed", true, true)
+	check(8, "svc-reviewer", true, true)
+	check(7, "archon-bot", true, false)
 	f.SetBotIndicators([]string{" Robot ", ""})
-	check(7, "renovate-bot", false)
-	check(7, "my-robot", true)
+	check(7, "renovate-bot", false, false)
+	check(7, "my-robot", true, false)
 }
