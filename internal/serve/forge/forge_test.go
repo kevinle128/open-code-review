@@ -31,3 +31,20 @@ func TestCommitLink(t *testing.T) {
 		}
 	}
 }
+
+func TestLineLink(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	if got := LineLink("https://github.com", "o/r", "/blob/", sha, "a b/c#d.go", 88); got != "https://github.com/o/r/blob/"+sha+"/a%20b/c%23d.go#L88" {
+		t.Fatalf("link %q", got)
+	}
+	if got := LineLink("https://git.example/", "g/p", "/-/blob/", sha, "README.md", 0); got != "https://git.example/g/p/-/blob/"+sha+"/README.md" {
+		t.Fatalf("link %q", got)
+	}
+	for _, c := range []struct{ repo, sha, path string }{
+		{"o/r", sha, ""}, {"o/r", sha, "a/../b"}, {"o/r", sha, "a//b"}, {"o/r", sha, "./a"}, {"o/r", "HEAD", "a"}, {"o", sha, "a"},
+	} {
+		if got := LineLink("https://x", c.repo, "/blob/", c.sha, c.path, 1); got != "" {
+			t.Fatalf("LineLink(%q, %q, %q) = %q", c.repo, c.sha, c.path, got)
+		}
+	}
+}

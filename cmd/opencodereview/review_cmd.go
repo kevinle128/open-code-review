@@ -51,6 +51,9 @@ type reviewOptions struct {
 	effort                string
 	noFilter              bool
 	preview               bool
+	// language replaces the app config language when set; `ocr serve`
+	// sets it from the platform of the PR.
+	language string
 }
 
 var reviewOpts reviewOptions
@@ -273,11 +276,11 @@ func prepareReviewAgent(ctx context.Context, cc *commonContext, opts reviewOptio
 			return nil, fmt.Errorf("PLAN_TASK.tool_references: %w", err)
 		}
 	}
-	rt, err := loadLLMRuntime(cc.Template, llm.ResolveOptions{
+	rt, err := loadLLMRuntimeLang(cc.Template, llm.ResolveOptions{
 		Provider: opts.provider,
 		Model:    opts.model,
 		Context:  ctx,
-	})
+	}, opts.language)
 	if err != nil {
 		return nil, err
 	}

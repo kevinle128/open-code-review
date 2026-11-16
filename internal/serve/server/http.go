@@ -27,14 +27,18 @@ import (
 
 // Deps are the collaborators of the server. A nil entry in Forges disables
 // that platform, and its webhook route answers 404. A nil Fixer makes every
-// round report-only, with the review findings as they are.
+// round report-only, with the review findings as they are. Locales holds
+// the text of each enabled platform, and Languages the output language the
+// engines get for its PRs; a platform without a language leaves the choice
+// to the engines.
 type Deps struct {
 	Config     *serveconfig.Config
 	Forges     map[forge.Platform]forge.Forge
 	Reviewer   review.Reviewer
 	Fixer      review.Fixer
 	Workspaces review.Workspaces
-	Locale     state.Locale
+	Locales    map[forge.Platform]state.Locale
+	Languages  map[forge.Platform]string
 	Logger     *slog.Logger
 	Now        func() time.Time
 	Version    string
@@ -47,7 +51,8 @@ type Server struct {
 	reviewer   review.Reviewer
 	fixer      review.Fixer
 	workspaces review.Workspaces
-	loc        state.Locale
+	locales    map[forge.Platform]state.Locale
+	languages  map[forge.Platform]string
 	log        *slog.Logger
 	now        func() time.Time
 	version    string
@@ -87,8 +92,6 @@ func New(d Deps) (*Server, error) {
 		return nil, errors.New("server: config is required")
 	case d.Reviewer == nil || d.Workspaces == nil:
 		return nil, errors.New("server: reviewer and workspaces are required")
-	case d.Locale == nil:
-		return nil, errors.New("server: locale is required")
 	case d.Config.Workers < 1:
 		return nil, fmt.Errorf("server: workers must be at least 1, got %d", d.Config.Workers)
 	}
@@ -101,6 +104,11 @@ func New(d Deps) (*Server, error) {
 	if len(forges) == 0 {
 		return nil, errors.New("server: no platform is enabled")
 	}
+	for p := range forges {
+		if d.Locales[p] == nil {
+			return nil, fmt.Errorf("server: no locale for %s", p)
+		}
+	}
 	if d.Logger == nil {
 		d.Logger = NewLogger(os.Stdout)
 	}
@@ -109,7 +117,7 @@ func New(d Deps) (*Server, error) {
 	}
 	s := &Server{
 		cfg: d.Config, forges: forges, reviewer: d.Reviewer, fixer: d.Fixer, workspaces: d.Workspaces,
-		loc: d.Locale, log: d.Logger, now: d.Now, version: d.Version,
+		locales: d.Locales, languages: d.Languages, log: d.Logger, now: d.Now, version: d.Version,
 		seen:    newDedupe(d.Now, dedupeTTL, dedupeMaxKeys),
 		workers: make(chan struct{}, d.Config.Workers),
 		chains:  map[string]*chainCtl{},

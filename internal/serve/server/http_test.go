@@ -18,6 +18,7 @@ import (
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/review"
+	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 func post(h http.Handler, path string, body io.Reader, length int64) *httptest.ResponseRecorder {
@@ -69,7 +70,7 @@ func TestWebhookStatusCodes(t *testing.T) {
 func TestWebhookDisabledPlatform(t *testing.T) {
 	h := newHarness(t)
 	srv, err := New(Deps{Config: h.cfg, Forges: map[forge.Platform]forge.Forge{forge.GitHub: h.gh, forge.GitLab: nil},
-		Reviewer: h.rev, Workspaces: h.ws, Locale: h.loc, Logger: NewLogger(h.logs)})
+		Reviewer: h.rev, Workspaces: h.ws, Locales: testLocales(h.loc), Logger: NewLogger(h.logs)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,11 +203,11 @@ func TestShutdownDeadline(t *testing.T) {
 
 func TestNewValidation(t *testing.T) {
 	h := newHarness(t)
-	base := Deps{Config: h.cfg, Forges: map[forge.Platform]forge.Forge{forge.GitHub: h.gh}, Reviewer: h.rev, Workspaces: h.ws, Locale: h.loc}
+	base := Deps{Config: h.cfg, Forges: map[forge.Platform]forge.Forge{forge.GitHub: h.gh}, Reviewer: h.rev, Workspaces: h.ws, Locales: testLocales(h.loc)}
 	cases := map[string]func(d *Deps){
 		"no config":    func(d *Deps) { d.Config = nil },
 		"no reviewer":  func(d *Deps) { d.Reviewer = nil },
-		"no locale":    func(d *Deps) { d.Locale = nil },
+		"no locale":    func(d *Deps) { d.Locales = map[forge.Platform]state.Locale{forge.GitLab: h.loc} },
 		"no forge":     func(d *Deps) { d.Forges = map[forge.Platform]forge.Forge{forge.GitHub: nil} },
 		"zero workers": func(d *Deps) { c := *h.cfg; c.Workers = 0; d.Config = &c },
 	}

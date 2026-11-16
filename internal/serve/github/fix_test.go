@@ -129,3 +129,12 @@ func TestCommitURL(t *testing.T) {
 		t.Fatalf("a ref name gave %q", got)
 	}
 }
+
+func TestLineURL(t *testing.T) {
+	fa := newFakeAPI(t)
+	f, _ := fa.forge(t)
+	sha := strings.Repeat("a", 40)
+	if got := f.LineURL(testRef, sha, "cmd/a b.go", 88); got != f.webURL+"/acme/widgets/blob/"+sha+"/cmd/a%20b.go#L88" {
+		t.Fatalf("line url %q", got)
+	}
+}

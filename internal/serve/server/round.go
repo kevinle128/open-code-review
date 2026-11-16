@@ -215,7 +215,7 @@ func (s *Server) notReviewed(ctx context.Context, f forge.Forge, ref forge.PRRef
 // status. On GitLab "Pipelines must succeed" is on for every project, so
 // without it such a PR could never merge.
 func (s *Server) markNotRequired(ctx context.Context, f forge.Forge, pr forge.PR, log *slog.Logger) {
-	s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusSuccess, s.loc.Text("status.not_required"), log)
+	s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusSuccess, s.locales[pr.Ref.Platform].Text("status.not_required"), log)
 }
 
 // copyStatus sets the chain status on the PR head; without a chain there
@@ -228,7 +228,7 @@ func (s *Server) copyStatus(ctx context.Context, f forge.Forge, ref forge.PRRef,
 	if len(m.Rounds) > 0 {
 		n = m.Rounds[len(m.Rounds)-1].N
 	}
-	s.setStatus(ctx, f, pr, pr.HeadSHA, m.CommitState(), state.StatusText(*m, n, s.loc), log)
+	s.setStatus(ctx, f, pr, pr.HeadSHA, m.CommitState(), state.StatusText(*m, n, s.locales[ref.Platform]), log)
 	log.Info("status copied", "head", pr.HeadSHA, "status", m.Status)
 }
 
@@ -313,7 +313,7 @@ func (s *Server) markQueued(f forge.Forge, ref forge.PRRef, log *slog.Logger) {
 		return
 	}
 	pr.Ref = ref
-	s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusPending, s.loc.Text("status.queued"), log)
+	s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusPending, s.locales[ref.Platform].Text("status.queued"), log)
 	log.Info("round queued", "head", pr.HeadSHA)
 }
 
@@ -355,6 +355,11 @@ type roundRun struct {
 	limit  int
 }
 
+// loc is the text of the PR's platform.
+func (r *roundRun) loc() state.Locale {
+	return r.s.locales[r.ref.Platform]
+}
+
 func (r *roundRun) run(round context.Context) error {
 	s, f, rj := r.s, r.f, r.rj
 	ctx, cancel := context.WithTimeout(round, s.cfg.ReviewTimeout)
@@ -386,7 +391,8 @@ func (r *roundRun) run(round context.Context) error {
 	}
 	r.limit = repo.MaxRounds
 	r.marker.Max = r.limit
-	r.publish(ctx, pr.HeadSHA, rj.n, s.loc.Text("pending.round", "round", state.RoundLabel(rj.n, r.limit, s.loc)), true)
+	loc := r.loc()
+	r.publish(ctx, pr.HeadSHA, rj.n, loc.Text("pending.round", "round", state.RoundLabel(rj.n, r.limit, loc)), true)
 
 	report := ""
 	switch {
@@ -415,7 +421,8 @@ func (r *roundRun) run(round context.Context) error {
 	}
 
 	req := review.Request{RepoDir: ws.Dir(), From: pr.BaseSHA, To: pr.HeadSHA,
-		Background: repo.Background, Effort: repo.Effort, Excludes: repo.Exclude, ProjectRule: rule, PR: pr}
+		Background: repo.Background, Effort: repo.Effort, Excludes: repo.Exclude, ProjectRule: rule, PR: pr,
+		Language: s.languages[r.ref.Platform]}
 	if rj.scope == state.ScopeCommit {
 		req.From, req.To, req.Commit, req.FixCommit = "", "", cmpOr(rj.commit, pr.HeadSHA), rj.fixCommit
 	}
@@ -439,11 +446,13 @@ func (r *roundRun) run(round context.Context) error {
 	}
 
 	out := state.RoundReport{N: rj.n, Max: r.limit, From: cmpOr(res.Base, pr.BaseSHA), To: pr.HeadSHA,
-		Coverage: res.Coverage, Skipped: res.Terminal == review.TerminalSkipped, Branch: pr.SourceBranch}
+		Coverage: res.Coverage, Skipped: res.Terminal == review.TerminalSkipped, Branch: pr.SourceBranch,
+		LineURL: func(sha, path string, line int) string { return f.LineURL(r.ref, sha, path, line) }}
 	if rj.scope == state.ScopeCommit {
-		out.From, out.To = "", req.Commit
+		out.From, out.To, out.FixReview = "", req.Commit, rj.fixCommit
 	}
 	if findings := roundFindings(res.Findings); len(findings) > 0 {
+		out.Findings = findings
 		fctx, fcancel := context.WithTimeout(round, s.cfg.FixTimeout)
 		defer fcancel()
 		if err := r.fix(fctx, ws, findings, report, &out); err != nil {
@@ -486,7 +495,8 @@ func (r *roundRun) fix(ctx context.Context, ws review.Workspace, findings []revi
 		}
 		return nil
 	}
-	req := review.FixRequest{RepoDir: ws.Dir(), PR: r.pr, Base: out.From, Head: out.To, Findings: findings, ReportOnly: report != ""}
+	req := review.FixRequest{RepoDir: ws.Dir(), PR: r.pr, Base: out.From, Head: out.To, Findings: findings, ReportOnly: report != "",
+		Language: s.languages[r.ref.Platform]}
 	if report == "" {
 		files, err := ws.ChangedFiles(ctx, r.pr.BaseSHA)
 		if err != nil {
@@ -501,8 +511,8 @@ func (r *roundRun) fix(ctx context.Context, ws review.Workspace, findings []revi
 	if err != nil {
 		return err
 	}
-	out.Fixed, out.Reported, out.Tests = res.Fixed, res.Reported, res.Tests
-	r.log.Info("fix run", "findings", len(findings), "fixed", len(res.Fixed), "reported", len(res.Reported),
+	out.Fixed, out.Reported, out.Dropped, out.Tests = res.Fixed, res.Reported, res.Dropped, res.Tests
+	r.log.Info("fix run", "findings", len(findings), "fixed", len(res.Fixed), "reported", len(res.Reported), "dropped", len(res.Dropped),
 		"tests", res.Tests.Command, "tests_passed", res.Tests.Passed)
 	if report != "" || len(res.Fixed) == 0 {
 		return nil
@@ -558,7 +568,7 @@ func (r *roundRun) fixDiff(ctx context.Context, ws review.Workspace, sha string,
 // of each fix, by index, or is nil.
 func unfixed(out *state.RoundReport, reason string, diffs []string) {
 	for i, f := range out.Fixed {
-		rep := review.Reported{ID: f.ID, Path: f.Path, Line: f.Line, Problem: f.Problem, Scenario: f.Scenario, ProposedFix: f.Fix}
+		rep := review.Reported{ID: f.ID, Path: f.Path, Line: f.Line, Title: f.Title, Problem: f.Problem, Scenario: f.Scenario, ProposedFix: f.Fix}
 		if i < len(diffs) {
 			rep.ProposedDiff = diffs[i]
 		}
@@ -578,7 +588,7 @@ func (r *roundRun) finish(ctx context.Context, out state.RoundReport) error {
 		next = rj.n + 1
 	}
 	out.Next = next
-	if err := r.f.PostNote(ctx, r.ref, state.RenderRound(out, s.loc)); err != nil {
+	if err := r.f.PostNote(ctx, r.ref, state.RenderRound(out, r.loc())); err != nil {
 		r.log.Error("post round comment", "error", err.Error())
 	}
 	if stale {
@@ -622,7 +632,7 @@ func (r *roundRun) fail(stage string, err error) error {
 	defer cancel()
 	if r.pr.HeadSHA != "" {
 		r.marker.Status = state.ChainFailure
-		r.publish(side, r.pr.HeadSHA, r.rj.n, r.s.loc.Text("pending.failed"), false)
+		r.publish(side, r.pr.HeadSHA, r.rj.n, r.loc().Text("pending.failed"), false)
 	}
 	r.s.commandFailed(r.f, r.ref, r.j.cmd, r.s.failureReason(stage, r.j.requestID), r.log)
 	return err
@@ -637,10 +647,10 @@ func (r *roundRun) publish(ctx context.Context, sha string, round int, line stri
 	c := s.chain(r.ref)
 	c.status.Lock()
 	defer c.status.Unlock()
-	if err := f.UpsertSummary(ctx, r.ref, state.RenderSummary(r.marker, s.loc, line, s.mention(r.ref.Platform))); err != nil {
+	if err := f.UpsertSummary(ctx, r.ref, state.RenderSummary(r.marker, r.loc(), line, s.mention(r.ref.Platform))); err != nil {
 		r.log.Error("write summary", "error", err.Error())
 	}
-	text := state.StatusText(r.marker, round, s.loc)
+	text := state.StatusText(r.marker, round, r.loc())
 	st := r.marker.CommitState()
 	s.setStatus(ctx, f, r.pr, sha, st, text, r.log)
 	if first || r.marker.Status == state.ChainRunning {
