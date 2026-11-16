@@ -56,6 +56,7 @@ round.body_cut = ⚠️ This comment was cut at the comment size limit of the fo
 
 status.running = OCR review {round} is running
 status.queued = OCR review is waiting for a free worker
+status.not_required = OCR review is not required for this PR
 status.success = OCR review chain ended
 status.failure = OCR review failed; comment review to run it again
 

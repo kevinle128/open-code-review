@@ -138,6 +138,9 @@ func (s *Server) evaluate(f forge.Forge, ref forge.PRRef, j job, log *slog.Logge
 	}
 	if reason != "" {
 		log.Info("decided", "trigger", string(j.trigger), "action", "none", "reason", reason)
+		if ignored || strings.HasPrefix(reason, "disabled") {
+			s.markNotRequired(ctx, f, pr, log)
+		}
 		return nil
 	}
 	log.Info("decided", "trigger", string(j.trigger), "action", "start chain")
@@ -187,10 +190,32 @@ func (s *Server) copyStatusAsync(ref forge.PRRef, requestID string) {
 			log.Error("read pull request for a status copy", "error", err.Error())
 			return
 		}
-		if pr.State == forge.StateOpen {
-			s.copyStatus(ctx, f, ref, pr, m, log)
+		if pr.State != forge.StateOpen {
+			return
 		}
+		if m == nil && s.notReviewed(ctx, f, ref, pr, log) {
+			s.markNotRequired(ctx, f, pr, log)
+			return
+		}
+		s.copyStatus(ctx, f, ref, pr, m, log)
 	}()
+}
+
+// notReviewed reports whether the service never reviews pr: an ignore rule
+// matches it or its repository turned the review off.
+func (s *Server) notReviewed(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, log *slog.Logger) bool {
+	if ignored, _ := s.cfg.Ignore.Match(ignoreSubject(ref, pr)); ignored {
+		return true
+	}
+	repo, err := s.repoConfig(ctx, f, ref, pr, log)
+	return err == nil && !repo.Enabled
+}
+
+// markNotRequired gives a PR that the service does not review a success
+// status. On GitLab "Pipelines must succeed" is on for every project, so
+// without it such a PR could never merge.
+func (s *Server) markNotRequired(ctx context.Context, f forge.Forge, pr forge.PR, log *slog.Logger) {
+	s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusSuccess, s.loc.Text("status.not_required"), log)
 }
 
 // copyStatus sets the chain status on the PR head; without a chain there

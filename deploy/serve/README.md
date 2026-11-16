@@ -830,7 +830,7 @@ The service sets the commit status `ocr-review` on the PR head:
 | State | When |
 |---|---|
 | `pending` | the chain runs |
-| `success` | the chain ended: a round had no real finding, a report-only round reported, or the bot cannot push |
+| `success` | the chain ended: a round had no real finding, a report-only round reported, or the bot cannot push; or the PR is not reviewed at all (an ignore rule matches it, or `serve.json` sets `"enabled": false`), set when it opens and on every push |
 | `failure` (GitLab: `failed`) | a round failed (CLI error, quota, timeout, forge error, or a shutdown during the round), until a later `review` succeeds |
 
 When the chain ends, the current head gets the status too, in case a person
