@@ -96,12 +96,32 @@ type hookPayload struct {
 // service does not act on come back as EventIgnored without an error; a body
 // that is not a GitLab event is an error.
 func (f *Forge) ParseEvent(h http.Header, body []byte) (forge.Event, error) {
+	// Decode the kind first: other events use the same keys with other
+	// shapes (a system hook repository_update sends changes as an array),
+	// so the full payload is only decoded for the kinds the service reads.
+	var envelope struct {
+		ObjectKind string `json:"object_kind"`
+		EventName  string `json:"event_name"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return forge.Event{}, fmt.Errorf("gitlab: decode webhook: %w", err)
+	}
+	if strings.TrimSpace(envelope.ObjectKind) == "" {
+		// A system hook also sends instance events (project_update,
+		// user_add_to_team, repository_update, ...) that carry event_name
+		// and no object_kind. Refusing them would make GitLab count the
+		// hook as failing.
+		if strings.TrimSpace(envelope.EventName) != "" {
+			return forge.Event{Kind: forge.EventIgnored, DeliveryID: deliveryID(h)}, nil
+		}
+		return forge.Event{}, errors.New("gitlab: webhook body without object_kind")
+	}
+	if envelope.ObjectKind != "merge_request" && envelope.ObjectKind != "note" {
+		return forge.Event{Kind: forge.EventIgnored, DeliveryID: deliveryID(h)}, nil
+	}
 	var p hookPayload
 	if err := json.Unmarshal(body, &p); err != nil {
 		return forge.Event{}, fmt.Errorf("gitlab: decode webhook: %w", err)
-	}
-	if strings.TrimSpace(p.ObjectKind) == "" {
-		return forge.Event{}, errors.New("gitlab: webhook body without object_kind")
 	}
 	ev := forge.Event{
 		Kind:        forge.EventIgnored,
@@ -112,10 +132,8 @@ func (f *Forge) ParseEvent(h http.Header, body []byte) (forge.Event, error) {
 	switch p.ObjectKind {
 	case "merge_request":
 		return f.parseMergeRequest(p, ev)
-	case "note":
-		return f.parseNote(p, ev)
 	default:
-		return ev, nil
+		return f.parseNote(p, ev)
 	}
 }
 

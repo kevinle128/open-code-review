@@ -141,6 +141,16 @@ func TestParseEventEdgeCases(t *testing.T) {
 			t.Errorf("%s: want error", body)
 		}
 	}
+	// A system hook instance event has event_name and no object_kind.
+	sys, err := f.ParseEvent(nil, []byte(`{"event_name":"project_update","path_with_namespace":"g/app"}`))
+	if err != nil || sys.Kind != forge.EventIgnored {
+		t.Fatalf("system event: %+v %v", sys, err)
+	}
+	// repository_update sends changes as an array, unlike an MR event.
+	sys, err = f.ParseEvent(nil, []byte(`{"event_name":"repository_update","changes":[{"before":"a","after":"b","ref":"refs/heads/main"}]}`))
+	if err != nil || sys.Kind != forge.EventIgnored {
+		t.Fatalf("repository_update: %+v %v", sys, err)
+	}
 	ev, err := f.ParseEvent(nil, []byte(`{"object_kind":"push"}`))
 	if err != nil || ev.Kind != forge.EventIgnored {
 		t.Fatalf("push hook: %+v %v", ev, err)
