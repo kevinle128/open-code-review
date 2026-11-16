@@ -146,6 +146,11 @@ func TestParseEventEdgeCases(t *testing.T) {
 	if err != nil || sys.Kind != forge.EventIgnored {
 		t.Fatalf("system event: %+v %v", sys, err)
 	}
+	// repository_update sends changes as an array, unlike an MR event.
+	sys, err = f.ParseEvent(nil, []byte(`{"event_name":"repository_update","changes":[{"before":"a","after":"b","ref":"refs/heads/main"}]}`))
+	if err != nil || sys.Kind != forge.EventIgnored {
+		t.Fatalf("repository_update: %+v %v", sys, err)
+	}
 	ev, err := f.ParseEvent(nil, []byte(`{"object_kind":"push"}`))
 	if err != nil || ev.Kind != forge.EventIgnored {
 		t.Fatalf("push hook: %+v %v", ev, err)
