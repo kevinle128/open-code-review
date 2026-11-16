@@ -27,7 +27,6 @@ import (
 )
 
 const (
-	serveLocale         = "vi"
 	serveStartupTimeout = 30 * time.Second
 	serveDrainTimeout   = 60 * time.Second
 	// servePathPrefix is where a reverse proxy may mount the service without
@@ -148,13 +147,13 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	if err != nil {
 		return err
 	}
-	loc, err := state.LoadLocale(serveLocale)
+	locales, languages, err := serveLocales(cfg)
 	if err != nil {
 		return err
 	}
 	srv, err := server.New(server.Deps{
 		Config: cfg, Forges: forges, Reviewer: reviewer, Fixer: fixer, Workspaces: workspaces,
-		Locale: loc, Logger: log, Version: Version,
+		Locales: locales, Languages: languages, Logger: log, Version: Version,
 	})
 	if err != nil {
 		return err
@@ -204,6 +203,21 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	}
 	log.Info("stopped")
 	return runErr
+}
+
+// serveLocales gives each platform the locale of its posted text and the
+// output language of its engines, both from the platform's language.
+func serveLocales(cfg *serveconfig.Config) (map[forge.Platform]state.Locale, map[forge.Platform]string, error) {
+	languages := map[forge.Platform]string{forge.GitHub: cfg.GitHubLanguage, forge.GitLab: cfg.GitLabLanguage}
+	locales := map[forge.Platform]state.Locale{}
+	for p, lang := range languages {
+		loc, err := state.LoadLocale(serveconfig.LocaleOf(lang))
+		if err != nil {
+			return nil, nil, fmt.Errorf("locale of %s (%s): %w", p, lang, err)
+		}
+		locales[p] = loc
+	}
+	return locales, languages, nil
 }
 
 // checkServeAppConfig refuses settings that are unsafe or incomplete for a

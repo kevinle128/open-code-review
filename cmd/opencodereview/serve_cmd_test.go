@@ -162,6 +162,9 @@ func TestServeMain_StartupErrors(t *testing.T) {
 		}, "gitlab: read the bot user"},
 		{"mcp servers configured", `{"language": "Vietnamese", "mcp_servers": {"x": {"type": "stdio", "command": "true"}}}`, nil, "mcp_servers is set"},
 		{"empty language", `{"language": " "}`, nil, "language is not set"},
+		{"unknown platform language", okConfig, func(m map[string]string) {
+			m[serveconfig.EnvGitHubLanguage] = "Klingon"
+		}, serveconfig.EnvGitHubLanguage + " must be one of"},
 		{"no app config", "", nil, "language is not set"},
 		{"unreadable app config", `{`, nil, "parse app config"},
 		{"work dir unusable", okConfig, func(m map[string]string) {
@@ -518,5 +521,22 @@ func TestServeHooksGitLabCommand(t *testing.T) {
 				t.Fatalf("output %q writes %v", out.String(), *writes)
 			}
 		})
+	}
+}
+
+func TestServeLocales(t *testing.T) {
+	cfg := &serveconfig.Config{GitHubLanguage: serveconfig.LanguageEnglish, GitLabLanguage: serveconfig.LanguageVietnamese}
+	locales, languages, err := serveLocales(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if languages[forge.GitHub] != "English" || languages[forge.GitLab] != "Vietnamese" {
+		t.Fatalf("languages %v", languages)
+	}
+	if locales[forge.GitHub]["round.found"] != "Found" || locales[forge.GitLab]["round.found"] == locales[forge.GitHub]["round.found"] {
+		t.Fatal("each platform needs the locale of its language")
+	}
+	if _, _, err := serveLocales(&serveconfig.Config{GitHubLanguage: "Klingon", GitLabLanguage: "English"}); err == nil {
+		t.Fatal("an unknown language loaded a locale")
 	}
 }

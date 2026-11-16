@@ -86,6 +86,8 @@ OCR_SERVE_WORKERS=
 OCR_SERVE_REVIEW_CONCURRENCY=
 OCR_SERVE_BUNDLE_LINES=
 OCR_SERVE_EXCLUDE=
+OCR_SERVE_GITHUB_LANGUAGE=
+OCR_SERVE_GITLAB_LANGUAGE=
 OCR_LLM_TIMEOUT=900
 # Review engine; empty uses the default (cli with codex, fix run with claude).
 OCR_SERVE_ENGINE=
@@ -274,9 +276,11 @@ setting both forms is an error.
 | `OCR_SERVE_GITHUB_PRIVATE_KEY` / `_FILE` | | Required with GitHub. The example compose sets `_FILE`. A one-line value with literal `\n` escapes is accepted. |
 | `OCR_SERVE_GITHUB_WEBHOOK_SECRET` / `_FILE` | | Required with GitHub. |
 | `OCR_SERVE_GITHUB_API_URL` | `https://api.github.com` | |
+| `OCR_SERVE_GITHUB_LANGUAGE` | `English` | Language of the comments, summary and status texts on GitHub PRs, and the output language the review and fix runs get for them. `English` or `Vietnamese`, any case; another value stops the service at startup. |
 | `OCR_SERVE_GITLAB_URL` | empty | Enables GitLab, for example `https://git.example.com`. Its scheme and host must match the instance's `external_url`: a project clone URL on another scheme or host is refused, so the token is not sent there. |
 | `OCR_SERVE_GITLAB_TOKEN` / `_FILE` | | Required with GitLab. Token of the bot user that posts reviews. The service reads `GET /user` at startup and fails when the token is rejected. |
 | `OCR_SERVE_GITLAB_WEBHOOK_SECRET` / `_FILE` | | Required with GitLab. |
+| `OCR_SERVE_GITLAB_LANGUAGE` | `Vietnamese` | As `OCR_SERVE_GITHUB_LANGUAGE`, for GitLab merge requests. |
 
 At least one platform must be enabled; otherwise the service stops with
 `no platform enabled: set OCR_SERVE_GITHUB_APP_ID or OCR_SERVE_GITLAB_URL`.
@@ -532,7 +536,10 @@ findings without a safe fix, go to `report_only` with the failing scenario
 and the proposed fix.
 
 The answer is one JSON object:
-`{fixed: [{id, path, line, problem, scenario, fix, changes: [{path, start_line, end_line}], tests_added}], report_only: [{id, path, line, problem, scenario, proposed_fix, proposed_diff}], tests: {command, passed, output_tail}, summary, commit_message}`.
+`{fixed: [{id, path, line, title, problem, scenario, fix, changes: [{path, start_line, end_line}], tests_added}], report_only: [{id, path, line, title, problem, scenario, proposed_fix, proposed_diff}], dropped: [{id, title, reason}], tests: {command, passed, output_tail}, summary, commit_message}`.
+`title` is one line of at most 80 characters that names the problem.
+`dropped` lists the findings judged not real, each with the reason; the round
+comment shows them as skipped.
 `changes` lists the line ranges of the new files that the fix of that
 finding edited (test files included; 0 and 0 for a deleted file). The
 service does not take the diff from the agent: it runs `git diff -U3` on the
@@ -541,9 +548,12 @@ ranges overlap, so one hunk can serve two findings. `proposed_diff` is a
 unified diff against the reviewed head that is not applied; the service
 keeps only its diff lines, at most 40000 bytes.
 The service keeps only ids of the request, each once; an id in both lists
-counts as reported, and a `fixed` entry of a report-only run becomes a
-reported one with its fix as the proposal. The texts are in the `language`
-of `config.json`; `commit_message` is one short English line, cut to its
+counts as reported, an id also in `dropped` keeps its `fixed` or
+`report_only` result, and a `fixed` entry of a report-only run becomes a
+reported one with its fix as the proposal. An answer without `dropped` is
+accepted; a finding in no list shows as skipped without a reason. The texts
+are in the language of the PR's platform (`OCR_SERVE_GITHUB_LANGUAGE`,
+`OCR_SERVE_GITLAB_LANGUAGE`); `commit_message` is one short English line, cut to its
 first line and 100 characters (`fix: address review findings` when empty).
 
 | Variable | Default | Notes |
@@ -649,9 +659,10 @@ Run the service only on repositories whose authors you trust.
 - `config.json` (mounted at `/home/ocr/.opencodereview/config.json`; on a
   host `~/.opencodereview/config.json`, or the absolute path in
   `OCR_CONFIG_FILE`) must set `language`; the service refuses to start
-  without it. Use `"Vietnamese"` for
-  Vietnamese review comments. The summary and labels use the built-in
-  Vietnamese texts.
+  without it. The language of each platform (`OCR_SERVE_GITHUB_LANGUAGE`,
+  default English; `OCR_SERVE_GITLAB_LANGUAGE`, default Vietnamese) replaces
+  it for the PRs of that platform, in the review and fix runs and in the
+  posted texts, which come from the built-in catalog of that language.
 - `config.json` must not contain `mcp_servers`: their setup commands would run
   inside the checkout of an untrusted PR. The service refuses to start, and
   each review refuses to run, when the key is set.
@@ -768,23 +779,46 @@ When the tests fail or cannot run after a fix, the fix is pushed anyway and
 the comment says so with the end of the test output.
 
 The round comment has the title "OCR review, round k/N" (or "round N+1
-(report only)"), the reviewed range, and for each fixed finding the file and
-line, the problem, the failing scenario, a `diff` block with the hunks of the
-fix commit for that finding and the tests added. A diff over 40 lines is
-collapsed in a `<details>` element. A finding that matches no hunk shows how
-it was fixed in prose instead, and the service logs a warning. Hunks that no
-finding claims are listed under "Other changes in the fix commit", so the
-comment hides no part of the commit. Then come a link to the fix commit
-(`<web>/<repo>/commit/<sha>` on GitHub, `<GitLab URL>/<project>/-/commit/<sha>`
-on GitLab) and the test command with its result. Real findings that were not
-fixed, PR-level ones included, are listed under "Real findings, not fixed"
-with the scenario, the proposed fix and the proposed diff (at most 150
-lines), and, when the round could not fix at all, why. When a push is
-rejected, the proposed diff of each finding is its part of the commit that
-was not pushed. A comment over 65000 characters first collapses every diff,
-then shows fewer lines of the largest diffs with a note, and is cut only as a
-last resort. Findings the fix run dropped are not shown. The texts come from
-the service locale.
+(report only)") and the reviewed range: the whole PR, a fix commit, or the
+latest commit. A status table follows, one row each: how many findings the
+review gave and how many were real or skipped; how many were fixed, with a
+link to the fix commit (`<web>/<repo>/commit/<sha>` on GitHub,
+`<GitLab URL>/<project>/-/commit/<sha>` on GitLab); how many need the author,
+with the reason when the round could not fix at all; the test command and its
+result when something was fixed (a failed run shows the end of its output in
+a `<details>` element); the reviewed file count; and the next round or the
+end of the chain.
+
+Then comes one table with a row per finding, every finding the review gave,
+skipped ones included, ordered by severity (critical and high first; equal
+severities keep the review order). Findings with the same path and title are
+merged into one row. Each row holds a collapsed title, the severity and the
+result (fixed, needs you, skipped). The expanded title shows a link to the
+line (`/blob/<sha>/<path>#L<n>` on GitHub, `/-/blob/<sha>/<path>#L<n>` on
+GitLab, at the fix commit for a fixed finding and at the reviewed head
+otherwise), the category, the problem and the failing scenario, and then by
+result: the fix with a `diff` block of the hunks of the fix commit for that
+finding and the tests added; the proposed fix with the proposed diff (at most
+150 lines); or why it was skipped. A finding without a title from the fix run
+takes the title of the review finding, or the first sentence of its text. A
+diff over 40 lines is collapsed in a nested `<details>` element. A hunk that
+two findings share is shown with the first and named from the other. A fixed
+finding that matches no hunk shows only its fix in prose, and the service
+logs a warning. Hunks that no finding claims are listed under "Other changes
+in the fix commit" after the table, so the comment hides no part of the
+commit. When a push is rejected, the proposed diff of each finding is its
+part of the commit that was not pushed. A round without findings has the
+status table only. A comment over 65000 characters first collapses every
+diff, then shows fewer lines of the largest diffs with a note, and is cut
+after the last whole row only as a last resort. The comment uses only HTML
+both forges render (`table`, `details`, `summary`, `strong`, `code`, `sub`,
+`br`, links) and no `style` attribute.
+
+The texts come from the catalog of the platform's language,
+`internal/serve/state/locale/<locale>.txt`. English (`en.txt`) is the source
+of every key; another catalog may leave keys out, and a key it lacks, or a
+text whose `{placeholders}` differ from the English one, falls back to
+English.
 
 A push by a person, or a reopened PR, never starts a round: it copies the
 chain's current status to the new head (see [Merge gate](#merge-gate)). The

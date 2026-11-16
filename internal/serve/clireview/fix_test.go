@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -299,5 +300,55 @@ func TestProposedDiff(t *testing.T) {
 	big := "@@ -1 +1 @@\n" + strings.Repeat("+"+strings.Repeat("x", 99)+"\n", maxProposedDiff/100+10)
 	if got := proposedDiff(big); len(got) > maxProposedDiff || !strings.HasSuffix(got, "x") {
 		t.Fatalf("big diff: %d bytes", len(got))
+	}
+}
+
+// TestFixParsesTitlesAndDropped keeps the titles on one line, reads the
+// dropped findings after the other lists, and takes the language of the
+// request over the one of the Fixer.
+func TestFixParsesTitlesAndDropped(t *testing.T) {
+	long := strings.Repeat("x", 100)
+	cli := &fixCLI{msg: `{"fixed": [{"id": "F1", "path": "a.go", "line": 3, "title": " Missing\n return ", "problem": "p", "fix": "f"}],
+ "report_only": [{"id": "F3", "path": "", "line": 0, "title": "` + long + `", "problem": "q"}],
+ "dropped": [{"id": "F2", "title": "Doc comment", "reason": " Style only. "}, {"id": "F1", "title": "again", "reason": "r"}, {"id": "F9", "reason": "r"}],
+ "tests": {"command": "", "passed": true, "output_tail": ""}, "summary": "", "commit_message": ""}`}
+	fx, _ := newFixer(t, cli)
+	req := fixRequest()
+	req.Language = "English"
+	res, err := fx.Fix(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Fixed[0].Title != "Missing return" || len([]rune(res.Reported[0].Title)) != maxTitle+3 {
+		t.Fatalf("titles %q %q", res.Fixed[0].Title, res.Reported[0].Title)
+	}
+	if len(res.Dropped) != 1 || res.Dropped[0] != (review.Dropped{ID: "F2", Title: "Doc comment", Reason: "Style only."}) {
+		t.Fatalf("dropped %+v", res.Dropped)
+	}
+	if len(res.Warnings) != 2 {
+		t.Fatalf("warnings %v", res.Warnings)
+	}
+	if !strings.Contains(cli.inv.Prompt, "Output language of `title`") || !strings.Contains(cli.inv.Prompt, ": English.") ||
+		!strings.Contains(cli.inv.Prompt, "goes in `dropped`") || !strings.Contains(cli.prJSON, `"language": "English"`) {
+		t.Fatalf("prompt or pr.json lacks the request language:\n%s\n%s", cli.inv.Prompt, cli.prJSON)
+	}
+	var schema struct {
+		Required   []string `json:"required"`
+		Properties map[string]struct {
+			Items struct {
+				Required []string `json:"required"`
+			} `json:"items"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(fixSchema), &schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, list := range []string{"fixed", "report_only", "dropped"} {
+		if !slices.Contains(schema.Properties[list].Items.Required, "title") {
+			t.Fatalf("%s items do not require a title", list)
+		}
+	}
+	if !slices.Contains(schema.Required, "dropped") {
+		t.Fatal("dropped is not required")
 	}
 }

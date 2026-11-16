@@ -68,16 +68,18 @@ func TestChainRunsThreeFixRoundsAndAReport(t *testing.T) {
 			if len(notes) != 4 {
 				t.Fatalf("notes %q", notes)
 			}
-			mustContain(t, notes[0], "### OCR review, round 1/3")
-			mustContain(t, notes[0], "Fix commit: [`fffffff`](https://forge.test/"+ref.Repo+"/commit/"+fixSHA(1)+")")
-			mustContain(t, notes[0], "Tests: `go test ./...` passed.")
-			mustContain(t, notes[0], "reviewed next, in round 2/3")
-			mustContain(t, notes[2], "reviewed next, in round 4 (report only)")
-			mustContain(t, notes[3], "### OCR review, round 4 (report only)")
-			mustContain(t, notes[3], "Reviewed: `ddddddd`")
+			mustContain(t, notes[0], "## 🔍 OCR review, round 1/3")
+			mustContain(t, notes[0], `commit <a href="https://forge.test/`+ref.Repo+"/commit/"+fixSHA(1)+`"><code>fffffff</code></a>`)
+			mustContain(t, notes[0], "<code>go test ./...</code> passed")
+			mustContain(t, notes[0], "round 2/3 reviews commit <code>fffffff</code>")
+			mustContain(t, notes[0], "(https://forge.test/"+ref.Repo+"/blob/"+fixSHA(1)+"/a.go#L3)")
+			mustContain(t, notes[1], "**(Reviewed fix commit `fffffff`)**")
+			mustContain(t, notes[2], "round 4 (report only) reviews commit")
+			mustContain(t, notes[3], "## 🔍 OCR review, round 4 (report only)")
+			mustContain(t, notes[3], "**(Reviewed fix commit `ddddddd`)**")
 			mustContain(t, notes[3], h.loc.Text("round.report.limit", "max", "3"))
-			mustContain(t, notes[3], "Scenario: it fails")
-			mustContain(t, notes[3], h.loc.Text("round.end"))
+			mustContain(t, notes[3], "**Failing scenario**: it fails")
+			mustContain(t, notes[3], h.loc.Text("round.end_value"))
 			m := f.marker(t, ref)
 			if m.Status != state.ChainSuccess || len(m.Rounds) != 4 || m.Rounds[0].Fix != fixSHA(1) || m.Rounds[3].Fix != "" || m.Rounds[3].Real != 1 {
 				t.Fatalf("marker %+v", m)
@@ -104,7 +106,8 @@ func TestChainEndsWithoutARealFinding(t *testing.T) {
 		t.Fatalf("reviews %d pushed %v", len(h.rev.requests()), h.ws.pushed)
 	}
 	notes := h.gh.noteList()
-	if len(notes) != 1 || !strings.Contains(notes[0], h.loc.Text("round.clean")) || !strings.Contains(notes[0], h.loc.Text("round.end")) {
+	if len(notes) != 1 || !strings.Contains(notes[0], "2 issues → 0 real, 2 skipped") || !strings.Contains(notes[0], h.loc.Text("round.end_value")) ||
+		strings.Count(notes[0], "➖ "+h.loc.Text("finding.result.dropped")) != 2 {
 		t.Fatalf("notes %q", notes)
 	}
 	if got := lastStatus(h.gh); got != "1:success" {
@@ -147,9 +150,9 @@ func TestFailingTestsArePushed(t *testing.T) {
 	if len(notes) != 2 {
 		t.Fatalf("notes %q", notes)
 	}
-	mustContain(t, notes[0], h.loc.Text("round.tests_failed", "command", "`go test ./...`"))
+	mustContain(t, notes[0], h.loc.Text("round.tests_failed", "command", "<code>go test ./...</code>"))
 	mustContain(t, notes[0], "--- FAIL: TestA")
-	mustContain(t, notes[1], h.loc.Text("round.clean"))
+	mustContain(t, notes[1], h.loc.Text("round.found_zero"))
 	if got := lastStatus(h.gh); got != "f:success" {
 		t.Fatalf("status %s", got)
 	}
@@ -169,8 +172,8 @@ func TestForkRoundIsReportOnly(t *testing.T) {
 		t.Fatalf("fix %+v fetched %v branch %v", fixes, h.ws.fetched, h.ws.branchFetched)
 	}
 	note := h.gh.noteList()[0]
-	mustContain(t, note, h.loc.Text("round.report.fork", "branch", "`feature`"))
-	mustContain(t, note, "Proposed fix: change it")
+	mustContain(t, note, h.loc.Text("round.report.fork", "branch", "<code>feature</code>"))
+	mustContain(t, note, "**Proposed fix**: change it")
 	if got := lastStatus(h.gh); got != "1:success" {
 		t.Fatalf("status %s", got)
 	}
@@ -203,9 +206,9 @@ func TestPushRejectedReportsTheFixes(t *testing.T) {
 	h.opened(ref)
 	h.drain()
 	note := h.gl.noteList()[0]
-	mustContain(t, note, "The bot cannot push to branch `feature`: `! [remote rejected] feature (protected branch hook declined)`")
-	mustContain(t, note, "Proposed fix: fixed it")
-	if strings.Contains(note, "Fix commit") || len(h.rev.requests()) != 1 || lastStatus(h.gl) != "1:success" {
+	mustContain(t, note, "The bot cannot push to branch <code>feature</code>: <code>! [remote rejected] feature (protected branch hook declined)</code>")
+	mustContain(t, note, "**Proposed fix**: fixed it")
+	if strings.Contains(note, "<code>fffffff</code>") || len(h.rev.requests()) != 1 || lastStatus(h.gl) != "1:success" {
 		t.Fatalf("note:\n%s\nstatus %s", note, lastStatus(h.gl))
 	}
 	if m := h.gl.marker(t, ref); m.Rounds[0].Fixed != 0 || m.Rounds[0].Real != 1 || m.Rounds[0].Fix != "" {
@@ -267,10 +270,9 @@ func TestRoundCommentShowsTheFixDiff(t *testing.T) {
 	mustContain(t, note, "```diff\ndiff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -3 +3 @@\n-func A() {}\n+func A() int { return 1 }\n```")
 	mustContain(t, note, "+b := 2")
 	mustContain(t, note, "**"+h.loc.Text("round.other_changes")+"**\n\n```diff\ndiff --git a/c.go b/c.go")
-	mustContain(t, note, "[`fffffff`](https://forge.test/acme/app/commit/"+fixSHA(1)+")")
-	mustContain(t, note, h.loc.Text("round.how_fixed", "fix", "fixed it"))
-	if strings.Count(note, h.loc.Text("round.how_fixed", "fix", "fixed it")) != 1 {
-		t.Fatalf("prose shown beside a diff:\n%s", note)
+	mustContain(t, note, `<a href="https://forge.test/acme/app/commit/`+fixSHA(1)+`"><code>fffffff</code></a>`)
+	if strings.Count(note, "**Fixed**: fixed it") != 3 {
+		t.Fatalf("each fixed finding names its fix:\n%s", note)
 	}
 	if !h.logs.has("fixed findings match no hunk of the fix commit; the round comment shows them as prose") ||
 		!strings.Contains(h.logs.String(), `"ids":["F3"]`) {
@@ -293,7 +295,7 @@ func TestRoundCommentWithoutTheFixDiff(t *testing.T) {
 	h.opened(ref)
 	h.drain()
 	note := h.gh.noteList()[0]
-	mustContain(t, note, h.loc.Text("round.how_fixed", "fix", "fixed it"))
+	mustContain(t, note, "**Fixed**: fixed it")
 	if strings.Contains(note, "```diff") || !h.logs.has("read the fix commit diff; the round comment shows the fixes as prose") {
 		t.Fatalf("note:\n%s\nlogs:\n%s", note, h.logs.String())
 	}
@@ -316,7 +318,7 @@ func TestPushRejectedShowsTheUnpushedDiff(t *testing.T) {
 	h.drain()
 	note := h.gl.noteList()[0]
 	mustContain(t, note, h.loc.Text("round.proposed_diff")+"\n\n```diff\ndiff --git a/a.go b/a.go")
-	mustContain(t, note, h.loc.Text("round.scenario", "scenario", "it fails"))
+	mustContain(t, note, "**Failing scenario**: it fails")
 	if strings.Contains(note, "c.go") || strings.Contains(note, h.loc.Text("round.other_changes")) {
 		t.Fatalf("note:\n%s", note)
 	}
@@ -346,7 +348,9 @@ func TestWithoutFixerEveryRoundReports(t *testing.T) {
 	h.opened(ref)
 	h.drain()
 	note := h.gh.noteList()[0]
-	mustContain(t, note, "1. `a.go` L3: problem at a.go")
+	mustContain(t, note, "<summary>problem at a.go</summary>")
+	mustContain(t, note, "**Problem**: problem at a.go")
+	mustContain(t, note, "⚠️ "+h.loc.Text("finding.result.reported"))
 	mustContain(t, note, h.loc.Text("round.report.engine"))
 	if len(h.ws.branchFetched) != 0 || lastStatus(h.gh) != "1:success" {
 		t.Fatal("a report-only round must not check out the branch")
@@ -781,7 +785,7 @@ func TestRoundCommentShowsMergeBaseAndCoverage(t *testing.T) {
 	})
 	h.opened(ref)
 	note := h.gh.noteList()[0]
-	mustContain(t, note, "Reviewed: `bbbbbbb...1111111`")
+	mustContain(t, note, "**(Reviewed the whole PR: `bbbbbbb...1111111`)**")
 	mustContain(t, note, state.RenderCoverage(cov, h.loc))
 	if m := h.gh.marker(t, ref); m.Rounds[0].From != strings.Repeat("b", 40) {
 		t.Fatalf("marker %+v", m)
@@ -861,5 +865,62 @@ func TestFixHasItsOwnTimeLimit(t *testing.T) {
 	h2.drain()
 	if got := lastStatus(h2.gh); got != "1:failure" {
 		t.Fatalf("status %s", got)
+	}
+}
+
+// TestPlatformLanguageAndLocale gives each platform its own output language
+// in the engine requests and its own locale in the posted text.
+func TestPlatformLanguageAndLocale(t *testing.T) {
+	h := newHarness(t)
+	vi, err := state.LoadLocale("vi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := New(Deps{Config: h.cfg, Forges: map[forge.Platform]forge.Forge{forge.GitHub: h.gh, forge.GitLab: h.gl},
+		Reviewer: h.rev, Fixer: h.fix, Workspaces: h.ws, Logger: NewLogger(h.logs), Now: func() time.Time { return h.clock },
+		Locales:   map[forge.Platform]state.Locale{forge.GitHub: h.loc, forge.GitLab: vi},
+		Languages: map[forge.Platform]string{forge.GitHub: "English", forge.GitLab: "Vietnamese"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := h.srv
+	h.srv = srv
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	_ = old.Shutdown(context.Background())
+	h.rev.set(findingsResult(comment("a.go", 3), comment("b.go", 4)))
+	h.fix.set(func(_ context.Context, req review.FixRequest) (review.FixResult, error) {
+		return review.FixResult{Reported: []review.Reported{{ID: "F1", Path: "a.go", Line: 3, Title: "t", Problem: "p"}},
+			Dropped: []review.Dropped{{ID: "F2", Reason: "not real"}}}, nil
+	})
+	gh, gl := ghRef(40), glRef(41)
+	for _, ref := range []forge.PRRef{gh, gl} {
+		pr := openPR(ref, sha1)
+		pr.Fork = true
+		h.forgeFor(ref.Platform).setPR(pr)
+		h.opened(ref)
+	}
+	h.drain()
+	langs := map[string]bool{}
+	for _, r := range h.rev.requests() {
+		langs[r.Language] = true
+	}
+	fixes := h.fix.requests()
+	if !langs["English"] || !langs["Vietnamese"] || len(fixes) != 2 || fixes[0].Language == fixes[1].Language {
+		t.Fatalf("languages %v fixes %+v", langs, fixes)
+	}
+	for _, x := range fixes {
+		if want := map[forge.Platform]string{forge.GitHub: "English", forge.GitLab: "Vietnamese"}[x.PR.Ref.Platform]; x.Language != want {
+			t.Fatalf("%s fix language %q", x.PR.Ref.Platform, x.Language)
+		}
+	}
+	ghNote, glNote := h.gh.noteList()[0], h.gl.noteList()[0]
+	mustContain(t, ghNote, "<strong>"+h.loc.Text("round.found")+"</strong>")
+	mustContain(t, ghNote, "**"+h.loc.Text("finding.why_skipped")+"**: not real")
+	mustContain(t, glNote, "<strong>"+vi.Text("round.found")+"</strong>")
+	mustContain(t, glNote, "**"+vi.Text("finding.why_skipped")+"**: not real")
+	mustContain(t, glNote, vi.Text("round.report.fork", "branch", "<code>feature</code>"))
+	mustContain(t, h.gl.summary(gl), vi.Text("summary.title"))
+	if strings.Contains(glNote, h.loc.Text("finding.why_skipped")) {
+		t.Fatalf("English text in a GitLab note:\n%s", glNote)
 	}
 }

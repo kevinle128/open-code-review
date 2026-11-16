@@ -123,3 +123,12 @@ func TestCommitURL(t *testing.T) {
 		t.Fatalf("no repository path gave %q", got)
 	}
 }
+
+func TestLineURL(t *testing.T) {
+	fg := newTestForge(t, newFake(t), nil)
+	sha := strings.Repeat("b", 40)
+	ref := forge.PRRef{Platform: forge.GitLab, Repo: "group/sub/svc", ProjectID: 42, Number: 3}
+	if got := fg.LineURL(ref, sha, "internal/job/stall.go", 88); got != fg.cfg.URL+"/group/sub/svc/-/blob/"+sha+"/internal/job/stall.go#L88" {
+		t.Fatalf("line url %q", got)
+	}
+}

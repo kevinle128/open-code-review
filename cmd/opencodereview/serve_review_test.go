@@ -662,3 +662,36 @@ func TestServeReviewLimits(t *testing.T) {
 		t.Errorf("ocr review bundle lines = %d, want the template value 200", got)
 	}
 }
+
+// TestServeReviewUsesTheRequestLanguage lets the language of the request,
+// set from the platform of the PR, replace the app config language in both
+// the system prompt and the review background.
+func TestServeReviewUsesTheRequestLanguage(t *testing.T) {
+	directive := "Write every review comment, explanation and suggestion text in Vietnamese."
+	cases := []struct {
+		name, config, lang string
+		vietnamese         bool
+	}{
+		{"english over vietnamese config", vietnameseConfig, "English", false},
+		{"vietnamese over english config", `{"language":"English"}`, "Vietnamese", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			llm := &serveFakeLLM{}
+			startServeFakeLLM(t, llm, tc.config)
+			repo := newServeRepo(t)
+			_, err := testServeReviewer(t).Review(context.Background(), review.Request{
+				RepoDir: repo.dir, From: repo.base, To: repo.head, Language: tc.lang,
+			})
+			if err != nil {
+				t.Fatalf("Review: %v", err)
+			}
+			if llm.sawLanguage != tc.vietnamese || llm.sawText(directive) != tc.vietnamese {
+				t.Errorf("vietnamese system prompt %v, directive %v, want %v", llm.sawLanguage, llm.sawText(directive), tc.vietnamese)
+			}
+			if !tc.vietnamese && !llm.sawText("Always respond in English") {
+				t.Error("the request language never reached the system prompt")
+			}
+		})
+	}
+}

@@ -29,6 +29,9 @@ import (
 // round. An agent engine then reviews only what that commit changed and
 // does not check the PR description or scope again, which the first round
 // already did. The OCR engine ignores it.
+//
+// Language is the output language of the review text, such as English or
+// Vietnamese; empty means the language of the app config.
 type Request struct {
 	RepoDir     string
 	From        string
@@ -40,6 +43,7 @@ type Request struct {
 	ProjectRule *rules.ProjectRule
 	PR          forge.PR
 	FixCommit   bool
+	Language    string
 }
 
 // Terminal states of a review run.
@@ -130,7 +134,8 @@ type Finding struct {
 // FixRequest is one fix run on a checkout of the PR head branch. Files are
 // the files the PR changes. Base and Head are the reviewed range; Base is
 // empty when one commit, Head, was reviewed. ReportOnly asks for no edit:
-// the run only judges the findings and proposes fixes.
+// the run only judges the findings and proposes fixes. Language is as in
+// Request.
 type FixRequest struct {
 	RepoDir    string
 	PR         forge.PR
@@ -139,9 +144,11 @@ type FixRequest struct {
 	Head       string
 	Findings   []Finding
 	ReportOnly bool
+	Language   string
 }
 
-// Fixed is a finding the fix run judged real and fixed. Scenario is how
+// Fixed is a finding the fix run judged real and fixed. Title is one short
+// line that names the problem, empty when the run gave none. Scenario is how
 // the code failed; TestsAdded names the tests the fix added, if any.
 // Changes are the places the fix edited, which tie the hunks of the fix
 // commit to this finding.
@@ -149,6 +156,7 @@ type Fixed struct {
 	ID         string
 	Path       string
 	Line       int
+	Title      string
 	Problem    string
 	Scenario   string
 	Fix        string
@@ -167,11 +175,12 @@ type Change struct {
 // Reported is a real finding the run did not fix: in a report-only run,
 // for a finding about the PR as a whole, or when no safe fix exists.
 // ProposedDiff is a unified diff against the reviewed head that was not
-// applied; it is empty when the run gave none.
+// applied; it is empty when the run gave none. Title is as in Fixed.
 type Reported struct {
 	ID           string
 	Path         string
 	Line         int
+	Title        string
 	Problem      string
 	Scenario     string
 	ProposedFix  string
@@ -185,12 +194,21 @@ type Tests struct {
 	OutputTail string
 }
 
-// FixResult is what the agent reports. Fixed and Reported hold only ids
-// from the request, each once; findings in neither were judged not real.
-// CommitMessage is one line.
+// Dropped is a finding the fix run judged not real. Reason says why; Title
+// is as in Fixed. Both may be empty.
+type Dropped struct {
+	ID     string
+	Title  string
+	Reason string
+}
+
+// FixResult is what the agent reports. Fixed, Reported and Dropped hold
+// only ids from the request, each once; a finding in none of them was
+// judged not real without a reason. CommitMessage is one line.
 type FixResult struct {
 	Fixed         []Fixed
 	Reported      []Reported
+	Dropped       []Dropped
 	Tests         Tests
 	Summary       string
 	CommitMessage string
