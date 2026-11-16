@@ -270,7 +270,7 @@ setting both forms is an error.
 | `OCR_SERVE_IGNORE_TARGET_BRANCHES` | empty | Same format. |
 | `OCR_SERVE_IGNORE_LABELS` | empty | Comma-separated, exact match. |
 | `OCR_SERVE_EXCLUDE` | empty | Comma-separated globs added to the serve file filter for every repository; see [File filter](#file-filter). |
-| `OCR_SERVE_BOT_INDICATORS` | `bot` | Substrings that mark a GitLab sender as a bot. |
+| `OCR_SERVE_BOT_INDICATORS` | `bot` | Substrings that mark a GitLab sender as a bot. The service ignores comments from a bot; PR events from a bot that is not the service run as usual. |
 | `OCR_SERVE_MENTIONS` | empty | Comma-separated extra names users may tag the bot with to run a command (`@<name> review`), on top of the GitHub App slug and the GitLab bot username. Letters, digits, `-`, `_` and `.` only, without `@`. |
 | `OCR_SERVE_GITHUB_APP_ID` | empty | Enables GitHub. |
 | `OCR_SERVE_GITHUB_PRIVATE_KEY` / `_FILE` | | Required with GitHub. The example compose sets `_FILE`. A one-line value with literal `\n` escapes is accepted. |
@@ -822,8 +822,11 @@ English.
 
 A push by a person, or a reopened PR, never starts a round: it copies the
 chain's current status to the new head (see [Merge gate](#merge-gate)). The
-bot's own push is filtered as a bot event; the round that pushed queues the
-next round. One chain runs per PR, and the rounds of a PR run one at a time.
+service's own push is dropped; the round that pushed queues the next round.
+A PR that another bot opens (an agent, a dependency updater) is reviewed like
+any PR, and that bot's push copies the status like a person's push; use
+`OCR_SERVE_IGNORE_AUTHORS` to skip such a bot. Comments from any bot are
+ignored. One chain runs per PR, and the rounds of a PR run one at a time.
 
 The summary comment holds the chain state: the status and a table with one
 row per round (round, reviewed range, real findings, fixed, fix commit). The

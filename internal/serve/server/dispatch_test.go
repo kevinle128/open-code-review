@@ -40,7 +40,9 @@ func TestDispatchFilters(t *testing.T) {
 		want string
 	}{
 		{"ignored kind", forge.Event{Kind: forge.EventIgnored, Ref: ghRef(1)}, "ignored event"},
-		{"bot sender", forge.Event{Kind: forge.EventPush, Ref: ghRef(1), SenderIsBot: true}, "bot sender"},
+		{"own push", forge.Event{Kind: forge.EventPush, Ref: ghRef(1), SenderIsBot: true, SenderIsSelf: true}, "bot sender"},
+		{"other bot comment", forge.Event{Kind: forge.EventCommand, Ref: ghRef(1), SenderIsBot: true}, "bot sender"},
+		{"other bot opened", forge.Event{Kind: forge.EventOpened, Ref: ghRef(5), DeliveryID: "b1", SenderIsBot: true}, "queued opened"},
 		{"unsupported", forge.Event{Kind: "label", Ref: ghRef(1), DeliveryID: "u"}, "unsupported event"},
 		{"draft", withPR(ghRef(1), "d", func(p *forge.PR) { p.Draft = true }), "draft"},
 		{"repo rule", withPR(skipRef, "r1", func(*forge.PR) {}), "ignore rule repo:^skip/"},

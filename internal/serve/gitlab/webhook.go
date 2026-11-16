@@ -124,10 +124,11 @@ func (f *Forge) ParseEvent(h http.Header, body []byte) (forge.Event, error) {
 		return forge.Event{}, fmt.Errorf("gitlab: decode webhook: %w", err)
 	}
 	ev := forge.Event{
-		Kind:        forge.EventIgnored,
-		DeliveryID:  deliveryID(h),
-		Sender:      p.User.Username,
-		SenderIsBot: f.isBotSender(p.User),
+		Kind:         forge.EventIgnored,
+		DeliveryID:   deliveryID(h),
+		Sender:       p.User.Username,
+		SenderIsBot:  f.isBotSender(p.User),
+		SenderIsSelf: f.isBotUser(p.User.ID, p.User.Username),
 	}
 	switch p.ObjectKind {
 	case "merge_request":

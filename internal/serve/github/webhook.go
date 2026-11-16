@@ -87,10 +87,11 @@ func (f *Forge) ParseEvent(h http.Header, body []byte) (forge.Event, error) {
 		return forge.Event{}, fmt.Errorf("github: decode webhook: %w", err)
 	}
 	ev := forge.Event{
-		Kind:        forge.EventIgnored,
-		DeliveryID:  h.Get("X-GitHub-Delivery"),
-		Sender:      p.Sender.Login,
-		SenderIsBot: p.Sender.Type == "Bot",
+		Kind:         forge.EventIgnored,
+		DeliveryID:   h.Get("X-GitHub-Delivery"),
+		Sender:       p.Sender.Login,
+		SenderIsBot:  p.Sender.Type == "Bot",
+		SenderIsSelf: f.isSelf(p.Sender.Type, p.Sender.Login),
 	}
 	switch h.Get("X-GitHub-Event") {
 	case "pull_request":
@@ -104,6 +105,17 @@ func (f *Forge) ParseEvent(h http.Header, body []byte) (forge.Event, error) {
 	default:
 		return ev, nil
 	}
+}
+
+// isSelf reports whether a sender is the App's own bot account. Before
+// BotLogin has read the App slug, every bot counts as the App, so the
+// service never reacts to its own push.
+func (f *Forge) isSelf(senderType, login string) bool {
+	if senderType != "Bot" {
+		return false
+	}
+	slug := f.slug.Load()
+	return slug == nil || strings.EqualFold(login, *slug+"[bot]")
 }
 
 func withPull(ev forge.Event, kind forge.EventKind, p webhookPayload) (forge.Event, error) {
