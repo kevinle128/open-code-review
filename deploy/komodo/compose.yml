@@ -57,6 +57,10 @@
 #                                    300, 50..5000.
 #   OCR_SERVE_EXCLUDE                Comma-separated globs added to the serve
 #                                    file filter (deploy/serve/README.md).
+#   OCR_SERVE_GITHUB_LANGUAGE        English (default) or Vietnamese: language
+#                                    of the comments on GitHub PRs.
+#   OCR_SERVE_GITLAB_LANGUAGE        Vietnamese (default) or English: language
+#                                    of the comments on GitLab merge requests.
 #   OCR_LLM_TIMEOUT                  Seconds per LLM request; default 300.
 #                                    The stack sets 900.
 #   OCR_VERSION, OCR_GIT_COMMIT, OCR_BUILD_DATE
@@ -132,6 +136,8 @@ services:
       OCR_SERVE_REVIEW_CONCURRENCY: ${OCR_SERVE_REVIEW_CONCURRENCY:-}
       OCR_SERVE_BUNDLE_LINES: ${OCR_SERVE_BUNDLE_LINES:-}
       OCR_SERVE_EXCLUDE: ${OCR_SERVE_EXCLUDE:-}
+      OCR_SERVE_GITHUB_LANGUAGE: ${OCR_SERVE_GITHUB_LANGUAGE:-}
+      OCR_SERVE_GITLAB_LANGUAGE: ${OCR_SERVE_GITLAB_LANGUAGE:-}
       OCR_SERVE_ENGINE: ${OCR_SERVE_ENGINE:-}
       OCR_SERVE_REVIEW_CLI: ${OCR_SERVE_REVIEW_CLI:-}
       OCR_SERVE_CODEX_MODEL: ${OCR_SERVE_CODEX_MODEL:-}
