@@ -287,6 +287,16 @@ func TestRenderRound_SizeCap(t *testing.T) {
 	if strings.Count(cut, "<details>") != strings.Count(cut, "</details>") {
 		t.Fatal("the cut left a details element open")
 	}
+	// A cut in the other diff after the finding table ends after the table.
+	tail := "<table>\n<tr><td>s</td></tr>\n</table>\n" + strings.Repeat("y", 100) + "\n<details><summary>d</summary>\n\n" + strings.Repeat("z\n", maxCommentRunes)
+	if got := cutBody(tail, en); got != "<table>\n<tr><td>s</td></tr>\n</table>\n\n"+en["round.body_cut"] {
+		t.Fatalf("other diff cut tail %q", got[max(0, len(got)-200):])
+	}
+	// A cut in the first finding row does not close the status table again.
+	first := "<table>\n<tr><td>s</td></tr>\n</table>\n\n<table><thead><tr><td>#</td></tr></thead>\n<tr><td>1</td><td>\n\n<details><summary>t</summary>\n\n" + strings.Repeat("w\n", maxCommentRunes)
+	if got := cutBody(first, en); got != "<table>\n<tr><td>s</td></tr>\n</table>\n\n\n"+en["round.body_cut"] {
+		t.Fatalf("first row cut tail %q", got[max(0, len(got)-200):])
+	}
 	plain := cutBody(strings.Repeat("x\n", maxCommentRunes), en)
 	if !strings.HasSuffix(plain, "x\n\n"+en["round.body_cut"]) || utf8.RuneCountInString(plain) > maxCommentRunes {
 		t.Fatalf("plain cut tail %q", plain[len(plain)-100:])
@@ -312,6 +322,9 @@ func TestTitleHelpers(t *testing.T) {
 	if summaryText("a `b` <c> `d") != "a <code>b</code> &lt;c&gt; `d" {
 		t.Fatal(summaryText("a `b` <c> `d"))
 	}
+	if got := fallbackTitle("", "**Nil `*Server` in `locale/*.txt`** body"); got != "Nil `*Server` in `locale/*.txt`" {
+		t.Fatalf("star title %q", got)
+	}
 	row := &findingRow{problem: "**Lead**\n\nBody text."}
 	fillTitle(row, "")
 	if row.title != "Lead" || row.problem != "Body text." {
@@ -329,5 +342,24 @@ func TestShrinkHelpers(t *testing.T) {
 	}
 	if newDiffBlock(" \n", false) != nil {
 		t.Fatal("blank diff gave a block")
+	}
+}
+
+func TestWriteField_Fences(t *testing.T) {
+	en := mustLocale(t, "en")
+	var b strings.Builder
+	writeField(&b, en, "finding.proposed_fix", "```go\nif x == nil {\n\treturn nil\n}\n```")
+	if got := b.String(); !strings.Contains(got, "**:\n\n```go\n") || strings.Count(got, "```") != 2 {
+		t.Fatalf("leading fence %q", got)
+	}
+	b.Reset()
+	writeField(&b, en, "finding.fixed", "Do this:\n~~~~\ncode")
+	if got := b.String(); !strings.Contains(got, "**: Do this:") || !strings.HasSuffix(got, "code\n~~~~\n") {
+		t.Fatalf("open fence %q", got)
+	}
+	b.Reset()
+	writeField(&b, en, "finding.fixed", "Use ```x``` inline.")
+	if got := b.String(); !strings.HasSuffix(got, "**: Use ```x``` inline.\n") {
+		t.Fatalf("inline code %q", got)
 	}
 }

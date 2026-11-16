@@ -304,7 +304,9 @@ func severityRank(s string) int {
 	return len(severityOrder)
 }
 
-var boldLead = regexp.MustCompile(`^\*\*([^*\n]+)\*\*`)
+// boldLead takes a title that holds a star, as a Go pointer type does, up
+// to the first closing pair on its line.
+var boldLead = regexp.MustCompile(`^\*\*([^\n]+?)\*\*`)
 
 // fillTitle names a finding the fix run gave no title. The review writes
 // a bold title before the body of a finding, which names it best. A problem
@@ -388,15 +390,26 @@ func shrinkLargest(blocks []*diffBlock) bool {
 const rowEnd = "</td></tr>\n"
 
 // cutBody cuts a comment that is too long even without diffs and says so.
-// Inside the finding table it cuts after the last whole row and closes the
-// table, so the note does not end up in a collapsed element; elsewhere it
-// cuts at a line break.
+// Inside a table it cuts after the last whole row and closes the table, so
+// the note does not end up in a collapsed element; after the last table it
+// cuts before a details element it would leave open; elsewhere it cuts at
+// a line break.
 func cutBody(body string, loc Locale) string {
 	note := "\n" + loc.Text("round.body_cut")
 	r := []rune(body)
 	cut := string(r[:max(0, maxCommentRunes-utf8.RuneCountInString(note)-len("</table>\n"))])
-	if i := strings.LastIndex(cut, rowEnd); i > 0 && !strings.Contains(cut[i:], "</table>") {
-		return cut[:i+len(rowEnd)] + "</table>\n" + note
+	if t := strings.LastIndex(cut, "<table>"); t >= 0 && !strings.Contains(cut[t:], "</table>") {
+		// Only a row of the open table counts; with no whole row yet the
+		// cut goes before the table.
+		if i := strings.LastIndex(cut[t:], rowEnd); i >= 0 {
+			return cut[:t+i+len(rowEnd)] + "</table>\n" + note
+		}
+		return cut[:t] + note
+	}
+	if i := strings.LastIndex(cut, "</table>\n"); i >= 0 && strings.Contains(cut[i:], "<details>") {
+		// What follows the last table is the other diff, in a details
+		// element the cut would leave open.
+		return cut[:i+len("</table>\n")] + note
 	}
 	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
 		cut = cut[:i]
@@ -636,15 +649,56 @@ func severityCell(s string, loc Locale) string {
 }
 
 // writeField writes "**label**: text" as its own paragraph, or nothing when
-// the agent text is empty.
+// the agent text is empty. Text that opens with a code fence starts on its
+// own line, where the fence opens a block, and a fence left open is closed
+// so it does not take in the rest of the comment.
 func writeField(b *strings.Builder, loc Locale, key, text string) {
 	if text = prose(text); text != "" {
 		b.WriteString("\n**")
 		b.WriteString(loc.Text(key))
-		b.WriteString("**: ")
+		if fenceOf(strings.SplitN(text, "\n", 2)[0]) != "" {
+			b.WriteString("**:\n\n")
+		} else {
+			b.WriteString("**: ")
+		}
 		b.WriteString(text)
+		if open := openFence(text); open != "" {
+			b.WriteString("\n")
+			b.WriteString(open)
+		}
 		b.WriteString("\n")
 	}
+}
+
+// fenceOf returns the fence run a line opens or closes a code block with,
+// or "" when the line is no fence.
+func fenceOf(line string) string {
+	s := strings.TrimLeft(line, " ")
+	if len(line)-len(s) > 3 || s == "" || (s[0] != '`' && s[0] != '~') {
+		return ""
+	}
+	n := len(s) - len(strings.TrimLeft(s, s[:1]))
+	if n < 3 || (s[0] == '`' && strings.Contains(s[n:], "`")) {
+		return ""
+	}
+	return s[:n]
+}
+
+// openFence returns the fence that closes the code block text leaves open,
+// or "" when text closes every block it opens.
+func openFence(text string) string {
+	open := ""
+	for _, line := range strings.Split(text, "\n") {
+		f := fenceOf(line)
+		switch {
+		case f == "":
+		case open == "":
+			open = f
+		case f[0] == open[0] && len(f) >= len(open) && strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), f[:1])) == "":
+			open = ""
+		}
+	}
+	return open
 }
 
 // layoutTag matches the HTML tags the comment layout is made of.
