@@ -141,6 +141,20 @@ func TestServeSelectorDefaultsTheLanguage(t *testing.T) {
 	}
 }
 
+func TestServeSelectorTakesTheRequestLanguage(t *testing.T) {
+	writeServeAppConfig(t, `{"language": "Vietnamese"}`)
+	noLLMEnv(t)
+	repo := newServeRepo(t)
+	sel, err := testSelector(t).Select(context.Background(), review.Request{RepoDir: repo.dir, From: repo.base, To: repo.head, Language: " English "})
+	if err != nil || sel.Language != "English" {
+		t.Fatalf("selection %+v err %v", sel, err)
+	}
+	writeServeAppConfig(t, `{"language": "Vietnamese", "mcp_servers": {"x": {"type": "stdio", "command": "true"}}}`)
+	if _, err := serveLanguage("English"); err == nil || !strings.Contains(err.Error(), "mcp_servers") {
+		t.Fatalf("a request language must not skip the MCP check: %v", err)
+	}
+}
+
 // cliEngineConfig is a CLI engine configuration with a fake codex that
 // answers with the content of answer.
 func cliEngineConfig(t *testing.T, answer string) *serveconfig.Config {

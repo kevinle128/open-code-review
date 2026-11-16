@@ -41,4 +41,9 @@ func (f *Forge) CommitURL(ref forge.PRRef, sha string) string {
 	return forge.CommitLink(strings.TrimSpace(f.cfg.URL), ref.Repo, "/-/commit/", sha)
 }
 
+// LineURL implements forge.Forge.
+func (f *Forge) LineURL(ref forge.PRRef, sha, path string, line int) string {
+	return forge.LineLink(strings.TrimSpace(f.cfg.URL), ref.Repo, "/-/blob/", sha, path, line)
+}
+
 var discussionIDRE = regexp.MustCompile(`^[A-Za-z0-9]+$`)

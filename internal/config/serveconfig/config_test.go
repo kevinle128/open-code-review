@@ -85,6 +85,7 @@ func TestLoad_Defaults(t *testing.T) {
 			Mode: SandboxNone, DockerBin: "docker", Memory: "6g", CPUs: "4",
 			Images: DefaultSandboxImages,
 		},
+		GitHubLanguage: LanguageEnglish, GitLabLanguage: LanguageVietnamese,
 	}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v\nwant %+v", c, want)
@@ -312,5 +313,29 @@ func TestLoad_ReviewLimitBounds(t *testing.T) {
 	c, err = Load(env(map[string]string{EnvReviewConcurrency: "1", EnvBundleLines: "5000"}), files(nil))
 	if err != nil || c.ReviewConcurrency != 1 || c.BundleLines != 5000 {
 		t.Fatalf("lower concurrency, upper bundle: c=%+v err=%v", c, err)
+	}
+}
+
+func TestLoad_Languages(t *testing.T) {
+	c, err := Load(env(nil), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GitHubLanguage != LanguageEnglish || c.GitLabLanguage != LanguageVietnamese {
+		t.Fatalf("defaults %q %q", c.GitHubLanguage, c.GitLabLanguage)
+	}
+	c, err = Load(env(map[string]string{EnvGitHubLanguage: " vietnamese ", EnvGitLabLanguage: "ENGLISH"}), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GitHubLanguage != LanguageVietnamese || c.GitLabLanguage != LanguageEnglish {
+		t.Fatalf("set %q %q", c.GitHubLanguage, c.GitLabLanguage)
+	}
+	if LocaleOf(c.GitHubLanguage) != "vi" || LocaleOf(c.GitLabLanguage) != "en" || LocaleOf("French") != "" {
+		t.Fatal("locale mapping")
+	}
+	_, err = Load(env(map[string]string{EnvGitLabLanguage: "French"}), files(nil))
+	if err == nil || !strings.Contains(err.Error(), EnvGitLabLanguage+" must be one of English, Vietnamese") {
+		t.Fatalf("unknown language: %v", err)
 	}
 }

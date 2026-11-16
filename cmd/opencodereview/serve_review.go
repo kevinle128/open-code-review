@@ -97,6 +97,9 @@ func (r serveReviewer) prepare(ctx context.Context, req review.Request) (*common
 	if err != nil {
 		return nil, opts, err
 	}
+	if req.Language != "" {
+		lang = strings.TrimSpace(req.Language)
+	}
 
 	opts = reviewOptions{
 		repoDir:               req.RepoDir,
@@ -110,6 +113,7 @@ func (r serveReviewer) prepare(ctx context.Context, req review.Request) (*common
 		concurrency:           r.concurrency,
 		concurrentTaskTimeout: serveReviewTimeoutMinutes,
 		maxGitProcs:           serveReviewMaxGitProcs,
+		language:              lang,
 	}
 	if err := validateReviewOptions(&opts); err != nil {
 		return nil, opts, err

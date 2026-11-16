@@ -1,68 +1,122 @@
-# Text posted by `ocr serve`. One `key = value` per line; `\n` is a line break.
-# Placeholders in braces are filled by the service. Every key here must also
-# exist in each other locale file.
+# Text posted by `ocr serve`, in English. This file is the source of every
+# key. Other locales may leave keys out: a key a locale lacks, or a text whose
+# {placeholders} differ from the English text, falls back to English.
+#
+# One `key = value` per line; `\n` is a line break. A `[section]` line makes
+# the keys after it `section.key`. Placeholders in braces are filled by the
+# service. Emoji and HTML stay in the code; these files hold the words.
 
-summary.title = OCR code review
-summary.status.running = Status: the review chain is running; merge waits until it ends.
-summary.status.success = Status: the review chain ended; merge is allowed.
-summary.status.failure = Status: the last round failed; merge is blocked until a new review succeeds.
-summary.rounds_header = | Round | Reviewed | Real findings | Fixed | Fix commit |
-summary.hint = Each round reviews, keeps the real findings, fixes them and pushes; the next round reviews the fix commit. Commands: `/review` (restart on the whole PR), `/review-commit` (restart on the latest commit).
-summary.hint_mention = Each round reviews, keeps the real findings, fixes them and pushes; the next round reviews the fix commit. Commands: `@{bot} review` (restart on the whole PR), `@{bot} review-commit` (restart on the latest commit); `/review` and `/review-commit` also work.
+[summary]
+title = OCR code review
+status.running = Status: the review chain is running; merge waits until it ends.
+status.success = Status: the review chain ended; merge is allowed.
+status.failure = Status: the last round failed; merge is blocked until a new review succeeds.
+rounds_header = | Round | Reviewed | Real findings | Fixed | Fix commit |
+hint = Each round reviews, keeps the real findings, fixes them and pushes; the next round reviews the fix commit. Commands: `/review` (restart on the whole PR), `/review-commit` (restart on the latest commit).
+hint_mention = Each round reviews, keeps the real findings, fixes them and pushes; the next round reviews the fix commit. Commands: `@{bot} review` (restart on the whole PR), `@{bot} review-commit` (restart on the latest commit); `/review` and `/review-commit` also work.
 
-coverage.partial = ⚠️ The review was partial: reviewed {reviewed}/{total} files. These files were not reviewed:
-coverage.more = and {count} more (see the service log)
+[coverage]
+partial = ⚠️ The review was partial: reviewed {reviewed}/{total} files. These files were not reviewed:
+more = and {count} more (see the service log)
 
-failure.provider = the LLM provider returned an error
-failure.timeout = the review of this file timed out
-failure.cancelled = the review was cancelled
-failure.configuration = configuration error
-failure.input = the file could not be read or is too large
-failure.budget = the review budget ran out
-failure.panic = internal error
-failure.unknown = unknown error
+[failure]
+provider = the LLM provider returned an error
+timeout = the review of this file timed out
+cancelled = the review was cancelled
+configuration = configuration error
+input = the file could not be read or is too large
+budget = the review budget ran out
+panic = internal error
+unknown = unknown error
 
-round.label = round {round}/{max}
-round.label_report = round {round} (report only)
-round.title = OCR review, {round}
-round.range = Reviewed: {range}
-round.skipped = No reviewable change (for example, every changed file is excluded).
-round.clean = No real finding.
-round.fixed_title = Fixed ({count})
-round.how_fixed = How it was fixed: {fix}
-round.tests_added = Tests added: {tests}
-round.fix_commit = Fix commit: {sha}
-round.other_changes = Other changes in the fix commit
-round.diff_summary = Show the diff ({lines} lines)
-round.diff_shared = The diff of this item is shown with item {items} above.
-round.diff_cut = {count} more lines are not shown here; the fix commit {commit} has the full change.
-round.tests_none = Tests: not run.
-round.tests_passed = Tests: {command} passed.
-round.tests_failed = ⚠️ Tests: {command} failed or could not run. The fix was pushed anyway; the end of the output:
-round.reported_title = Real findings, not fixed ({count})
-round.scenario = Scenario: {scenario}
-round.proposed_fix = Proposed fix: {fix}
-round.proposed_diff = Proposed diff (not applied):
-round.proposal_cut = {count} more lines of the proposed diff are not shown.
-round.pr_level = The PR as a whole
-round.report.limit = The {max} fix rounds are used up, so these findings are reported only. Decide on them yourself.
-round.report.fork = The bot cannot push to branch {branch}: the head branch is in a fork. Apply the fixes yourself.
-round.report.push = The bot cannot push to branch {branch}: {reason}. Apply the fixes yourself.
-round.report.engine = This review engine does not fix findings. Apply the fixes yourself.
-round.report.no-edit = The fix run changed no file, so nothing was pushed. Apply the fixes yourself.
-round.next = The fix commit is reviewed next, in {round}.
-round.end = The review chain ends with this round; merge is allowed.
-round.body_cut = ⚠️ This comment was cut at the comment size limit of the forge.
+[round]
+label = round {round}/{max}
+label_report = round {round} (report only)
+title = OCR review, {round}
+range_full = Reviewed the whole PR: {range}
+range_fix = Reviewed fix commit {sha}
+range_commit = Reviewed commit {sha}
+skipped = No reviewable change (for example, every changed file is excluded).
+end_text = The review chain ends with this round; merge is allowed.
+found = Found
+found_value = {count} issues → {real} real, {skipped} skipped
+found_value_one = 1 issue → {real} real, {skipped} skipped
+found_zero = no issue
+fixed = Fixed
+fixed_value = {count}, commit {commit}
+fixed_count = {count}
+fixed_nothing = nothing to fix
+needs_you = Needs you
+tests = Tests after the fix
+tests_none = not run
+tests_passed = {command} passed
+tests_failed = {command} failed or could not run; the fix was pushed anyway
+tests_output = End of the output
+scope = Scope
+scope_value = reviewed {reviewed}/{total} files
+next = Next
+next_value = {round} reviews commit {sha}
+end = End
+end_value = the review chain stops at this round; merge is allowed
+other_changes = Other changes in the fix commit
+diff_summary = Show the diff ({lines} lines)
+diff_shared = The diff of this item is shown with item {items} above.
+diff_cut = {count} more lines are not shown here; the fix commit {commit} has the full change.
+proposed_diff = Proposed diff (not applied):
+proposal_cut = {count} more lines of the proposed diff are not shown.
+report.limit = The {max} fix rounds are used up, so these findings are reported only. Decide on them yourself.
+report.fork = The bot cannot push to branch {branch}: the head branch is in a fork. Apply the fixes yourself.
+report.push = The bot cannot push to branch {branch}: {reason}. Apply the fixes yourself.
+report.engine = This review engine does not fix findings. Apply the fixes yourself.
+report.no-edit = The fix run changed no file, so nothing was pushed. Apply the fixes yourself.
+body_cut = ⚠️ This comment was cut at the comment size limit of the forge.
 
-status.running = OCR review {round} is running
-status.queued = OCR review is waiting for a free worker
-status.not_required = OCR review is not required for this PR
-status.success = OCR review chain ended
-status.failure = OCR review failed; comment review to run it again
+[finding]
+section_title = What was found and what happened ({count})
+col_number = #
+col_issue = Issue
+col_severity = Severity
+col_result = Result
+location = {path} L{line}
+whole_pr = Whole PR
+problem = Problem
+scenario = Failing scenario
+fixed = Fixed
+proposed_fix = Proposed fix
+why_skipped = Why skipped
+tests_added = Tests added
+result.fixed = Fixed
+result.reported = Needs you
+result.dropped = Skipped
 
-pending.round = Running {round}...
-pending.failed = The last round failed. Comment `/review` to start the chain again.
+[severity]
+critical = Critical
+high = High
+medium = Medium
+low = Low
 
-command.error = Command failed: {reason}
-command.help = Supported commands: `/review [--effort=low|medium|high]` (restart the review chain on the whole PR) and `/review-commit` (restart it on the latest commit).
-command.help_mention = Supported commands: `@{bot} review [--effort=low|medium|high]` (restart the review chain on the whole PR) and `@{bot} review-commit` (restart it on the latest commit); `/review` and `/review-commit` also work.
+[category]
+bug = Bug
+security = Security
+performance = Performance
+maintainability = Maintainability
+test = Tests
+style = Style
+documentation = Documentation
+other = Other
+
+[status]
+running = OCR review {round} is running
+queued = OCR review is waiting for a free worker
+not_required = OCR review is not required for this PR
+success = OCR review chain ended
+failure = OCR review failed; comment review to run it again
+
+[pending]
+round = Running {round}...
+failed = The last round failed. Comment `/review` to start the chain again.
+
+[command]
+error = Command failed: {reason}
+help = Supported commands: `/review [--effort=low|medium|high]` (restart the review chain on the whole PR) and `/review-commit` (restart it on the latest commit).
+help_mention = Supported commands: `@{bot} review [--effort=low|medium|high]` (restart the review chain on the whole PR) and `@{bot} review-commit` (restart it on the latest commit); `/review` and `/review-commit` also work.

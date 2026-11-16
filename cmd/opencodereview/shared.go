@@ -238,6 +238,12 @@ var newRetryCollector = llm.NewRetryCollector
 // endpoint (honoring resolveOpts), and
 // returns the runtime bundle. tpl is mutated in place.
 func loadLLMRuntime(tpl *template.Template, resolveOpts llm.ResolveOptions) (*llmRuntime, error) {
+	return loadLLMRuntimeLang(tpl, resolveOpts, "")
+}
+
+// loadLLMRuntimeLang is loadLLMRuntime with an output language that, when
+// set, replaces the one of the app config.
+func loadLLMRuntimeLang(tpl *template.Template, resolveOpts llm.ResolveOptions, language string) (*llmRuntime, error) {
 	cfgPath, err := defaultConfigPath()
 	if err != nil {
 		return nil, err
@@ -251,6 +257,9 @@ func loadLLMRuntime(tpl *template.Template, resolveOpts llm.ResolveOptions) (*ll
 	var lang string
 	if appCfg != nil {
 		lang = appCfg.Language
+	}
+	if language != "" {
+		lang = language
 	}
 	tpl.ApplyLanguage(lang)
 
