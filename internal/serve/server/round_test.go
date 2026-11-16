@@ -433,8 +433,17 @@ func TestOpenedDecisions(t *testing.T) {
 			h.gh.setPR(openPR(ref, sha1))
 			setup(h, ref)
 			h.opened(ref)
-			if len(h.rev.requests()) != 0 || len(h.gh.statusList()) != 0 {
+			if len(h.rev.requests()) != 0 {
 				t.Fatal("no chain must start")
+			}
+			// A PR the service never reviews gets success, so a merge gate
+			// on every project does not block it.
+			want := 0
+			if name == "disabled" || name == "ignored" {
+				want = 1
+			}
+			if st := h.gh.statusList(); len(st) != want || (want == 1 && st[0] != "1:success") {
+				t.Fatalf("statuses %v", st)
 			}
 		})
 	}
@@ -861,5 +870,30 @@ func TestFixHasItsOwnTimeLimit(t *testing.T) {
 	h2.drain()
 	if got := lastStatus(h2.gh); got != "1:failure" {
 		t.Fatalf("status %s", got)
+	}
+}
+
+// TestPushOnIgnoredPRMarksNotRequired: a push to a PR that the service never
+// reviews gives the new head success, so the merge gate does not block it.
+func TestPushOnIgnoredPRMarksNotRequired(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.Ignore.Labels = []string{"skip"}
+	ref := ghRef(31)
+	pr := openPR(ref, sha2)
+	pr.Labels = []string{"skip"}
+	h.gh.setPR(pr)
+	h.srv.copyStatusAsync(ref, "r-push")
+	h.drain()
+	if got := lastStatus(h.gh); got != "2:success" {
+		t.Fatalf("status %q", got)
+	}
+
+	h2 := newHarness(t)
+	ref2 := ghRef(32)
+	h2.gh.setPR(openPR(ref2, sha2))
+	h2.srv.copyStatusAsync(ref2, "r-push")
+	h2.drain()
+	if n := len(h2.gh.statusList()); n != 0 {
+		t.Fatalf("a reviewed PR without a chain got %d statuses", n)
 	}
 }
