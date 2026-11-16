@@ -23,7 +23,9 @@ import (
 	"time"
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
+	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/gitlab"
+	"github.com/alibaba/open-code-review/internal/serve/server"
 	"github.com/spf13/pflag"
 )
 
@@ -63,9 +65,25 @@ func writeServeAppConfig(t *testing.T, body string) {
 	}
 }
 
+// fakeGitHubApp answers GET /app with status and the slug "ocr-app".
+func fakeGitHubApp(t *testing.T, status int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/app" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, `{"slug": "ocr-app"}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // serveTestEnv is a GitHub-only service environment on a free local port.
 func serveTestEnv(t *testing.T) map[string]string {
 	t.Helper()
+	app := fakeGitHubApp(t, http.StatusOK)
 	keyPath := filepath.Join(t.TempDir(), "app.pem")
 	if err := os.WriteFile(keyPath, serveTestKey(t), 0o600); err != nil {
 		t.Fatal(err)
@@ -77,6 +95,8 @@ func serveTestEnv(t *testing.T) map[string]string {
 		serveconfig.EnvGitHubAppID:                "42",
 		serveconfig.EnvGitHubPrivateKey + "_FILE": keyPath,
 		serveconfig.EnvGitHubWebhookSecret:        "gh-secret",
+		serveconfig.EnvGitHubAPIURL:               app.URL,
+		serveconfig.EnvEngine:                     serveconfig.EngineOCR,
 	}
 }
 
@@ -147,9 +167,16 @@ func TestServeMain_StartupErrors(t *testing.T) {
 		{"work dir unusable", okConfig, func(m map[string]string) {
 			m[serveconfig.EnvWorkDir] = filepath.Join(notADir, "work")
 		}, "checkout work dir"},
-		{"data dir unusable", okConfig, func(m map[string]string) {
-			m[serveconfig.EnvDataDir] = filepath.Join(notADir, "data")
-		}, "store directory"},
+		{"cli engine without its skill", okConfig, func(m map[string]string) {
+			m[serveconfig.EnvEngine] = serveconfig.EngineCLI
+			m[serveconfig.EnvSkillDir] = t.TempDir()
+			m[serveconfig.EnvCodexAuth] = notADir
+			m[serveconfig.EnvClaudeSettings] = notADir
+			m[serveconfig.EnvCodexBin] = "/bin/sh"
+		}, "review engine cli: " + serveconfig.EnvSkillDir},
+		{"cli engine without settings", okConfig, func(m map[string]string) {
+			m[serveconfig.EnvEngine] = serveconfig.EngineCLI
+		}, serveconfig.EnvSkillDir + " is required"},
 		{"address in use", okConfig, func(m map[string]string) {
 			m[serveconfig.EnvAddr] = busy.Addr().String()
 		}, "listen on"},
@@ -178,7 +205,6 @@ func TestServeMain_ServesAndShutsDown(t *testing.T) {
 	m[serveconfig.EnvGitLabURL] = gl.URL
 	m[serveconfig.EnvGitLabToken] = "gl-token"
 	m[serveconfig.EnvGitLabWebhookSecret] = "gl-secret"
-	m[serveconfig.EnvPollInterval] = "1h"
 
 	var logs bytes.Buffer
 	var logMu sync.Mutex
@@ -259,13 +285,49 @@ func TestServeMain_ServesAndShutsDown(t *testing.T) {
 	logMu.Lock()
 	out := logs.String()
 	logMu.Unlock()
-	for _, want := range []string{`"msg":"listening"`, `"platforms":["github","gitlab"]`, `"msg":"stopped"`} {
+	for _, want := range []string{`"msg":"listening"`, `"platforms":["github","gitlab"]`, `"engine":"ocr"`, `"msg":"stopped"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("logs miss %s:\n%s", want, out)
 		}
 	}
 	if _, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
 		t.Error("listener still open after shutdown")
+	}
+}
+
+func TestBuildServeForges_CommandNames(t *testing.T) {
+	gl := fakeGitLabUser(t, http.StatusOK)
+	for _, tc := range []struct {
+		name      string
+		appStatus int
+		github    string
+		warned    bool
+	}{
+		{"slug read at startup", http.StatusOK, "ocr-app,ocr", false},
+		{"slug not readable", http.StatusUnauthorized, "ocr", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := fakeGitHubApp(t, tc.appStatus)
+			cfg := &serveconfig.Config{
+				Mentions: []string{"ocr"},
+				GitHub:   &serveconfig.GitHubConfig{AppID: 42, PrivateKeyPEM: serveTestKey(t), WebhookSecret: "s", APIURL: app.URL},
+				GitLab:   &serveconfig.GitLabConfig{URL: gl.URL, Token: "gl-token", WebhookSecret: "s"},
+			}
+			var logs bytes.Buffer
+			forges, err := buildServeForges(context.Background(), cfg, nil, server.NewLogger(&logs))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(forges[forge.GitHub].CommandNames(), ","); got != tc.github {
+				t.Errorf("github names %q, want %q", got, tc.github)
+			}
+			if got := strings.Join(forges[forge.GitLab].CommandNames(), ","); got != "ocr-bot,ocr" {
+				t.Errorf("gitlab names %q", got)
+			}
+			if warned := strings.Contains(logs.String(), "could not read the app slug"); warned != tc.warned {
+				t.Errorf("warned = %v, logs:\n%s", warned, logs.String())
+			}
+		})
 	}
 }
 
@@ -321,7 +383,7 @@ func fakeGitLabHooks(t *testing.T) (*httptest.Server, *[]string) {
 		}
 		switch r.URL.EscapedPath() {
 		case "/api/v4/projects/group%2Fapp":
-			_, _ = io.WriteString(w, `{"id": 9, "path_with_namespace": "group/app", "only_allow_merge_if_all_discussions_are_resolved": false}`)
+			_, _ = io.WriteString(w, `{"id": 9, "path_with_namespace": "group/app", "only_allow_merge_if_pipeline_succeeds": false}`)
 		case "/api/v4/projects/9/hooks":
 			_, _ = io.WriteString(w, `[]`)
 		default:

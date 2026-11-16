@@ -17,19 +17,17 @@ func TestPRRefKey_IgnoresPlatformIDs(t *testing.T) {
 	}
 }
 
-func TestFindingTag_RoundTrip(t *testing.T) {
-	id := "r1-1a2b3c4d-0f0e0d0c"
-	body := FindingTag(id) + "\n**[bug]** text"
-	got, ok := ParseFindingID(body)
-	if !ok || got != id {
-		t.Fatalf("got %q %v", got, ok)
+func TestCommitLink(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	if got := CommitLink("https://git.example/", "g/p", "/-/commit/", sha); got != "https://git.example/g/p/-/commit/"+sha {
+		t.Fatalf("link %q", got)
 	}
-}
-
-func TestParseFindingID_Absent(t *testing.T) {
-	for _, body := range []string{"", "plain text", "<!-- ocr-finding: -->", "<!-- ocr-finding:bad id -->"} {
-		if id, ok := ParseFindingID(body); ok {
-			t.Fatalf("%q parsed as %q", body, id)
+	for _, c := range []struct{ base, repo, sha string }{
+		{"", "g/p", sha}, {"https://x", "p", sha}, {"https://x", "g/../p", sha},
+		{"https://x", "g/p)](javascript:x", sha}, {"https://x", "g/p", "HEAD"}, {"https://x", "g/p", sha[:39]},
+	} {
+		if got := CommitLink(c.base, c.repo, "/commit/", c.sha); got != "" {
+			t.Fatalf("CommitLink(%q, %q, %q) = %q", c.base, c.repo, c.sha, got)
 		}
 	}
 }

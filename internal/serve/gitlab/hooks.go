@@ -61,8 +61,10 @@ const developerAccess = 30
 //     comment everywhere;
 //   - group hooks with the service URL are deleted, because GitLab sends them
 //     only with a Premium license;
-//   - every project requires all threads to be resolved before merge, which
-//     turns open findings into a merge block.
+//   - every project allows a merge only when its pipeline succeeds; the
+//     service sets the ocr-review commit status, which GitLab counts as an
+//     external pipeline, so a review chain that has not ended blocks the
+//     merge.
 //
 // Hooks are matched by URL, so a run is idempotent. Remove deletes the hooks
 // only; bot membership and the merge setting stay.
@@ -103,7 +105,7 @@ type apiGroup struct {
 type apiHookProject struct {
 	ID                  int64  `json:"id"`
 	PathWithNamespace   string `json:"path_with_namespace"`
-	OnlyAllowIfResolved *bool  `json:"only_allow_merge_if_all_discussions_are_resolved"`
+	OnlyAllowIfPipeline *bool  `json:"only_allow_merge_if_pipeline_succeeds"`
 }
 
 type hookRun struct {
@@ -264,11 +266,11 @@ func (h *hookRun) project(ctx context.Context, p apiHookProject, withMerges bool
 	if err := h.syncHook(ctx, base+"/hooks", "project "+p.PathWithNamespace, hooks, h.projectHookBody(withMerges)); err != nil {
 		return err
 	}
-	if h.mode == HookRemove || (p.OnlyAllowIfResolved != nil && *p.OnlyAllowIfResolved) {
+	if h.mode == HookRemove || (p.OnlyAllowIfPipeline != nil && *p.OnlyAllowIfPipeline) {
 		return nil
 	}
-	change := HookChange{Action: "enable", Target: "project " + p.PathWithNamespace, Detail: "all threads must be resolved"}
-	return h.write(ctx, change, http.MethodPut, base, map[string]bool{"only_allow_merge_if_all_discussions_are_resolved": true})
+	change := HookChange{Action: "enable", Target: "project " + p.PathWithNamespace, Detail: "pipelines must succeed"}
+	return h.write(ctx, change, http.MethodPut, base, map[string]bool{"only_allow_merge_if_pipeline_succeeds": true})
 }
 
 // syncHook creates, refreshes or deletes the hooks under base whose URL is

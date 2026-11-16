@@ -189,21 +189,10 @@ func (f *Forge) parseNote(p hookPayload, ev forge.Event) (forge.Event, error) {
 	ev.CommentID = strconv.FormatInt(note.ID, 10)
 	ev.CommentBody = note.Note
 	ev.Kind = forge.EventNote
-	if isCommand(note.Note) {
+	if forge.IsCommand(note.Note, f.CommandNames()) {
 		ev.Kind = forge.EventCommand
 	}
 	return ev, nil
-}
-
-// isCommand reports whether the first non-empty line starts with "/". The
-// orchestrator parses the command and answers unknown ones with help.
-func isCommand(body string) bool {
-	for _, line := range strings.Split(body, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			return strings.HasPrefix(line, "/")
-		}
-	}
-	return false
 }
 
 func hookRef(p hookProject, iid int) (forge.PRRef, error) {

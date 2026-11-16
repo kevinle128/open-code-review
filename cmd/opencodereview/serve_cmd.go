@@ -40,8 +40,10 @@ var serveCmd = &cobra.Command{
 	Short: "Run the PR review webhook service",
 	Long: `Run the PR review webhook service.
 
-The service receives GitHub App and GitLab webhooks, reviews pull and merge
-requests in bounded rounds, and posts every finding as a resolvable thread.
+The service receives GitHub App and GitLab webhooks and reviews pull and merge
+requests in rounds: each round reviews, keeps the real findings, fixes them,
+pushes the fix and posts one comment; the ocr-review commit status gates the
+merge until the chain of rounds ends.
 It is configured through OCR_SERVE_* environment variables; see
 deploy/serve/README.md.`,
 	Args: cobra.NoArgs,
@@ -63,9 +65,10 @@ var serveHooksGitLabCmd = &cobra.Command{
 	Long: `Register the service webhooks on a GitLab instance.
 
 Without --project the command manages the system hook, a project hook on every
-project, the bot membership in every top-level group, and the "all threads
-must be resolved" merge setting. With --project it manages one project hook
-only. The default is a dry run.
+project, the bot membership in every top-level group, and the "pipelines
+must succeed" merge setting, which makes the ocr-review commit status a merge
+gate. With --project it manages one project hook only. The default is a dry
+run.
 
 Needs OCR_SERVE_GITLAB_URL, OCR_SERVE_GITLAB_ADMIN_TOKEN (api and admin_mode
 scopes; pass it for this run only), OCR_SERVE_GITLAB_HOOK_URL, and for --apply
@@ -133,7 +136,11 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	}
 	log := server.NewLogger(env.logOut)
 
-	forges, err := buildServeForges(ctx, cfg, env.httpc)
+	reviewer, fixer, err := buildServeEngines(ctx, cfg, env.getenv, log)
+	if err != nil {
+		return fmt.Errorf("review engine %s: %w", cfg.Engine, err)
+	}
+	forges, err := buildServeForges(ctx, cfg, env.httpc, log)
 	if err != nil {
 		return err
 	}
@@ -146,7 +153,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 		return err
 	}
 	srv, err := server.New(server.Deps{
-		Config: cfg, Forges: forges, Reviewer: newServeReviewer(cfg), Workspaces: workspaces,
+		Config: cfg, Forges: forges, Reviewer: reviewer, Fixer: fixer, Workspaces: workspaces,
 		Locale: loc, Logger: log, Version: Version,
 	})
 	if err != nil {
@@ -171,7 +178,8 @@ func serveMain(ctx context.Context, env serveEnv) error {
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpSrv.Serve(ln) }()
-	log.Info("listening", "addr", ln.Addr().String(), "version", Version, "platforms", platformNames(forges))
+	log.Info("listening", "addr", ln.Addr().String(), "version", Version, "platforms", platformNames(forges),
+		"engine", engineName(cfg), "fix_cli", fixCLIName(cfg), "sandbox", sandboxName(cfg))
 	if env.ready != nil {
 		env.ready(ln.Addr().String())
 	}
@@ -192,7 +200,7 @@ func serveMain(ctx context.Context, env serveEnv) error {
 		log.Error("http shutdown", "error", err.Error())
 	}
 	if err := srv.Shutdown(drainCtx); err != nil {
-		log.Error("review drain cut short; unfinished reviews consumed no round", "error", err.Error())
+		log.Error("review drain cut short; unfinished rounds run again after the restart", "error", err.Error())
 	}
 	log.Info("stopped")
 	return runErr
@@ -219,12 +227,23 @@ func checkServeAppConfig() error {
 	return nil
 }
 
-func buildServeForges(ctx context.Context, cfg *serveconfig.Config, httpc *http.Client) (map[forge.Platform]forge.Forge, error) {
+func buildServeForges(ctx context.Context, cfg *serveconfig.Config, httpc *http.Client, log *slog.Logger) (map[forge.Platform]forge.Forge, error) {
 	forges := map[forge.Platform]forge.Forge{}
 	if cfg.GitHub != nil {
 		gh, err := github.New(*cfg.GitHub, httpc, nil, nil)
 		if err != nil {
 			return nil, err
+		}
+		gh.SetMentions(cfg.Mentions)
+		// Webhook parsing knows the App slug users tag only once it is
+		// cached. A failure here does not stop the service: the next API
+		// call that reads the slug fills the cache, and the extra mention
+		// names work until then.
+		slugCtx, cancel := context.WithTimeout(ctx, serveStartupTimeout)
+		_, err = gh.BotLogin(slugCtx)
+		cancel()
+		if err != nil {
+			log.Warn("github: could not read the app slug; tagging the app works after a later call reads it", "error", err.Error())
 		}
 		forges[forge.GitHub] = gh
 	}
@@ -234,6 +253,7 @@ func buildServeForges(ctx context.Context, cfg *serveconfig.Config, httpc *http.
 			return nil, err
 		}
 		gl.SetBotIndicators(cfg.BotIndicators)
+		gl.SetMentions(cfg.Mentions)
 		// The bot identity filters the service's own events. Reading it now
 		// also proves the token works before any webhook is accepted.
 		idCtx, cancel := context.WithTimeout(ctx, serveStartupTimeout)
@@ -244,6 +264,30 @@ func buildServeForges(ctx context.Context, cfg *serveconfig.Config, httpc *http.
 		forges[forge.GitLab] = gl
 	}
 	return forges, nil
+}
+
+// engineName names the review engine for the startup log.
+func engineName(cfg *serveconfig.Config) string {
+	if cfg.Engine == serveconfig.EngineCLI {
+		return cfg.Engine + "/" + cfg.CLI.ReviewCLI
+	}
+	return cfg.Engine
+}
+
+// fixCLIName names the CLI of the fix run, or "none" for the OCR engine.
+func fixCLIName(cfg *serveconfig.Config) string {
+	if cfg.Engine == serveconfig.EngineCLI {
+		return cfg.Verify.CLI
+	}
+	return "none"
+}
+
+// sandboxName names where a CLI run happens, or "none" for the OCR engine.
+func sandboxName(cfg *serveconfig.Config) string {
+	if cfg.Engine == serveconfig.EngineCLI && cfg.Sandbox.Mode != "" {
+		return cfg.Sandbox.Mode
+	}
+	return serveconfig.SandboxNone
 }
 
 // serveRoutes serves the handler at the root and under servePathPrefix, so

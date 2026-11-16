@@ -34,17 +34,12 @@ var (
 
 var botUser = apiUser{ID: testBotID, Username: "pr-review"}
 
-// mrFake keeps the notes and discussions of MR team/svc!5 in memory.
+// mrFake keeps the notes of MR team/svc!5 in memory.
 type mrFake struct {
 	*fakeGitLab
-	mu          sync.Mutex
-	nextID      int64
-	notes       []apiNote
-	discussions []apiDiscussion
-	// postScript holds statuses for the next discussion POSTs; a negative
-	// status creates the discussion and then answers with -status.
-	postScript []int
-	posted     []discussionPayload
+	mu     sync.Mutex
+	nextID int64
+	notes  []apiNote
 }
 
 func newMRFake(t *testing.T) *mrFake {
@@ -81,49 +76,7 @@ func newMRFake(t *testing.T) *mrFake {
 		}
 		writeJSON(w, 404, map[string]string{"message": "404 Not found"})
 	})
-	m.handle("GET "+mrBase+"/discussions", func(w http.ResponseWriter, _ *http.Request) {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		writeJSON(w, 200, m.discussions)
-	})
-	m.handle("POST "+mrBase+"/discussions", func(w http.ResponseWriter, r *http.Request) {
-		var p discussionPayload
-		_ = json.NewDecoder(r.Body).Decode(&p)
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		status := 201
-		if len(m.postScript) > 0 {
-			status, m.postScript = m.postScript[0], m.postScript[1:]
-		}
-		if status > 299 {
-			if status == 400 {
-				writeJSON(w, 400, map[string]any{"message": map[string]any{"line_code": []string{"can't be blank", "must be a valid line code"}}})
-				return
-			}
-			if status == 429 {
-				w.Header().Set("Retry-After", "3")
-			}
-			writeJSON(w, status, map[string]string{"message": "error"})
-			return
-		}
-		m.posted = append(m.posted, p)
-		m.addDiscussion(botUser, p.Body)
-		if status < 0 {
-			writeJSON(w, -status, map[string]string{"message": "gateway"})
-			return
-		}
-		writeJSON(w, status, m.discussions[len(m.discussions)-1])
-	})
 	return m
-}
-
-// addDiscussion must be called with m.mu held or before the server is used.
-func (m *mrFake) addDiscussion(author apiUser, body string) {
-	m.nextID++
-	m.discussions = append(m.discussions, apiDiscussion{
-		ID:    "d" + strconv.FormatInt(m.nextID, 10),
-		Notes: []apiNote{{ID: m.nextID, Body: body, Author: author, Resolvable: true}},
-	})
 }
 
 func TestBotUserIDCaches(t *testing.T) {
@@ -156,7 +109,7 @@ func TestBotUserIDCaches(t *testing.T) {
 
 func mrJSON(state string, refs bool) map[string]any {
 	mr := map[string]any{
-		"iid": 5, "title": "Draft: Add", "author": map[string]any{"id": 7, "username": "dev1"},
+		"iid": 5, "title": "Draft: Add", "description": "Adds it.", "author": map[string]any{"id": 7, "username": "dev1"},
 		"labels": []string{"backend"}, "source_branch": "feat/x", "target_branch": "main",
 		"sha": headSHA, "draft": true, "state": state,
 	}
@@ -190,7 +143,7 @@ func TestGetPR(t *testing.T) {
 		Ref: forge.PRRef{Platform: forge.GitLab, ProjectID: 42, Number: 5}, Title: "Draft: Add", Author: "dev1",
 		SourceBranch: "feat/x", TargetBranch: "main", HeadSHA: headSHA, BaseSHA: baseSHA, Draft: true, State: forge.StateOpen,
 	}
-	if pr.Ref != want.Ref || pr.Title != want.Title || pr.Author != want.Author || pr.HeadSHA != want.HeadSHA ||
+	if pr.Ref != want.Ref || pr.Title != want.Title || pr.Description != "Adds it." || pr.Author != want.Author || pr.HeadSHA != want.HeadSHA ||
 		pr.BaseSHA != want.BaseSHA || !pr.Draft || pr.State != want.State || pr.AuthorIsBot || len(pr.Labels) != 1 {
 		t.Fatalf("pr %+v", pr)
 	}
@@ -267,7 +220,7 @@ func TestSummaryLifecycle(t *testing.T) {
 	if err != nil || got != nil {
 		t.Fatalf("no bot summary yet: %+v %v", got, err)
 	}
-	marker := state.Encode(state.Initial(3))
+	marker := state.Encode(state.Marker{Status: state.ChainSuccess, Max: 3})
 	if err := f.UpsertSummary(ctx, testRef, forge.SummaryTag+"\nreviewing\n"+marker); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +257,7 @@ func TestSummaryLifecycle(t *testing.T) {
 func TestSummaryIgnoresFindingNoteQuotingTag(t *testing.T) {
 	m := newMRFake(t)
 	m.notes = []apiNote{
-		{ID: 1, Body: forge.FindingTag("r1-aaaaaaaa-01020304") + "\nconst SummaryTag = \"" + forge.SummaryTag + "\"", Author: botUser},
+		{ID: 1, Body: "<!-- ocr-finding:r1-aaaaaaaa-01020304 -->" + "\nconst SummaryTag = \"" + forge.SummaryTag + "\"", Author: botUser},
 	}
 	f := newTestForge(t, m.fakeGitLab, nil)
 	ctx := context.Background()
@@ -333,32 +286,6 @@ func TestUpsertSummaryDoesNotPostWhenListFails(t *testing.T) {
 	noUser.json("GET /user", 500, map[string]string{})
 	if _, err := newTestForge(t, noUser, nil).GetSummary(context.Background(), testRef); err == nil {
 		t.Fatal("want error")
-	}
-	if _, err := newTestForge(t, noUser, nil).ListOCRThreads(context.Background(), testRef); err == nil {
-		t.Fatal("want error")
-	}
-}
-
-func TestListOCRThreads(t *testing.T) {
-	m := newMRFake(t)
-	human := apiUser{ID: 7, Username: "dev1"}
-	m.addDiscussion(botUser, forge.FindingTag("r1-aaaa-01")+"\nbody")
-	m.addDiscussion(botUser, forge.FindingTag("r1-aaaa-02")+"\nbody")
-	m.discussions[1].Notes[0].Resolved = true
-	m.addDiscussion(human, forge.FindingTag("r1-forged")+"\nbody")
-	m.addDiscussion(botUser, "no tag")
-	m.addDiscussion(botUser, forge.FindingTag("r1-unresolvable"))
-	m.discussions[4].Notes[0].Resolvable = false
-	m.discussions = append(m.discussions, apiDiscussion{ID: "empty"})
-	threads, err := newTestForge(t, m.fakeGitLab, nil).ListOCRThreads(context.Background(), testRef)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(threads) != 2 || threads[0].FindingID != "r1-aaaa-01" || threads[0].Resolved || !threads[1].Resolved || threads[0].ID != m.discussions[0].ID {
-		t.Fatalf("threads %+v", threads)
-	}
-	if _, err := newTestForge(t, m.fakeGitLab, nil).ListOCRThreads(context.Background(), forge.PRRef{}); err == nil {
-		t.Fatal("empty ref: want error")
 	}
 }
 

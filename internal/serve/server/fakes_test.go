@@ -37,19 +37,19 @@ var (
 // calls; Verify and ParseEvent are pure and do not.
 type fakeForge struct {
 	platform forge.Platform
+	names    []string
 
 	mu        sync.Mutex
 	prs       map[string]forge.PR
 	summaries map[string]string
-	threads   map[string][]forge.Thread
 	files     map[string][]byte // sha + ":" + path
 	notes     []string
-	reactions []string // commentID + ":" + reaction
-	posted    [][]forge.Finding
-	rendered  []string
+	reactions []string         // commentID + ":" + reaction
+	statuses  []string         // sha + ":" + state
 	errs      map[string]error // method name -> error to return
 	errOnce   map[string]error // method name -> error for the next call only
 	headAfter map[string]string
+	pushSpecs int
 
 	calls     atomic.Int64
 	gate      chan struct{} // when set, API calls wait for it to close
@@ -59,8 +59,8 @@ type fakeForge struct {
 func newFakeForge(p forge.Platform) *fakeForge {
 	return &fakeForge{
 		platform: p, prs: map[string]forge.PR{}, summaries: map[string]string{},
-		threads: map[string][]forge.Thread{}, files: map[string][]byte{},
-		errs: map[string]error{}, errOnce: map[string]error{}, headAfter: map[string]string{},
+		files: map[string][]byte{},
+		errs:  map[string]error{}, errOnce: map[string]error{}, headAfter: map[string]string{},
 	}
 }
 
@@ -79,6 +79,8 @@ func (f *fakeForge) api(method string) error {
 }
 
 func (f *fakeForge) Platform() forge.Platform { return f.platform }
+
+func (f *fakeForge) CommandNames() []string { return f.names }
 
 func (f *fakeForge) Verify(_ http.Header, _ []byte) error { return f.verifyErr }
 
@@ -134,34 +136,14 @@ func (f *fakeForge) UpsertSummary(_ context.Context, ref forge.PRRef, body strin
 	return nil
 }
 
-func (f *fakeForge) ListOCRThreads(_ context.Context, ref forge.PRRef) ([]forge.Thread, error) {
-	if err := f.api("ListOCRThreads"); err != nil {
-		return nil, err
+func (f *fakeForge) SetStatus(_ context.Context, pr forge.PR, sha string, st forge.CommitState, _ string) error {
+	if err := f.api("SetStatus"); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.threads[ref.Key()]), nil
-}
-
-func (f *fakeForge) PostFindings(_ context.Context, pr forge.PR, fs []forge.Finding, render func(forge.Finding, forge.Placement) string) (forge.PostResult, error) {
-	if err := f.api("PostFindings"); err != nil {
-		return forge.PostResult{}, err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	key := pr.Ref.Key()
-	var res forge.PostResult
-	for _, fd := range fs {
-		if slices.ContainsFunc(f.threads[key], func(t forge.Thread) bool { return t.FindingID == fd.ID }) {
-			res.Skipped++
-			continue
-		}
-		f.rendered = append(f.rendered, render(fd, forge.Placement{Kind: forge.Line, Path: fd.Path, StartLine: fd.StartLine, EndLine: fd.EndLine}))
-		f.threads[key] = append(f.threads[key], forge.Thread{ID: "t-" + fd.ID, FindingID: fd.ID})
-		res.Posted++
-	}
-	f.posted = append(f.posted, slices.Clone(fs))
-	return res, nil
+	f.statuses = append(f.statuses, sha[:1]+":"+string(st))
+	return nil
 }
 
 func (f *fakeForge) PostNote(_ context.Context, _ forge.PRRef, body string) error {
@@ -207,7 +189,31 @@ func (f *fakeForge) ReadFile(_ context.Context, _ forge.PRRef, sha, path string,
 	return raw, ok, nil
 }
 
+func (f *fakeForge) PushSpec(_ context.Context, pr forge.PR) (forge.CloneSpec, error) {
+	if err := f.api("PushSpec"); err != nil {
+		return forge.CloneSpec{}, err
+	}
+	if pr.Fork {
+		return forge.CloneSpec{}, forge.ErrFork
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pushSpecs++
+	return forge.CloneSpec{URL: "file:///" + pr.Ref.Repo, HeadRef: "refs/heads/" + pr.SourceBranch, BaseRef: "refs/heads/" + pr.TargetBranch}, nil
+}
+
+func (f *fakeForge) CommitIdentity(context.Context, forge.PRRef) (forge.Identity, error) {
+	if err := f.api("CommitIdentity"); err != nil {
+		return forge.Identity{}, err
+	}
+	return forge.Identity{Name: "ocr[bot]", Email: "1+ocr[bot]@users.noreply.github.com"}, nil
+}
+
 // Test helpers on the fake.
+
+func (f *fakeForge) CommitURL(ref forge.PRRef, sha string) string {
+	return forge.CommitLink("https://forge.test", ref.Repo, "/commit/", sha)
+}
 
 func (f *fakeForge) setPR(pr forge.PR) {
 	f.mu.Lock()
@@ -221,14 +227,6 @@ func (f *fakeForge) push(ref forge.PRRef, head string) {
 	pr := f.prs[ref.Key()]
 	pr.HeadSHA = head
 	f.prs[ref.Key()] = pr
-}
-
-func (f *fakeForge) resolveAll(ref forge.PRRef) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for i := range f.threads[ref.Key()] {
-		f.threads[ref.Key()][i].Resolved = true
-	}
 }
 
 func (f *fakeForge) setErr(method string, err error) {
@@ -274,10 +272,12 @@ func (f *fakeForge) reactionList() []string {
 	return slices.Clone(f.reactions)
 }
 
-func (f *fakeForge) postedList() [][]forge.Finding {
+// statusList lists the statuses set, each as the first SHA character and
+// the state, in order.
+func (f *fakeForge) statusList() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.posted)
+	return slices.Clone(f.statuses)
 }
 
 // fakeReviewer records requests and answers with fn.
@@ -329,9 +329,72 @@ type fakeWorkspaces struct {
 	acquired   int
 	released   int
 	fetched    []string
+
+	branchFetched []string
+	branchErr     error
+	dirty         bool // Commit finds changes
+	commitErr     error
+	pushErr       error
+	commits       []string // identity name + ":" + message
+	pushed        []string // spec.HeadRef + "@" + sha
+	// onPush runs after a push, so a test can move the PR head to the fix.
+	onPush func(sha string)
+	// diff and diffErr answer CommitDiff.
+	diff    string
+	diffErr error
+}
+
+// fixSHA is the commit the n-th fix makes: f, e, d, ... repeated.
+func fixSHA(n int) string {
+	return strings.Repeat(string(rune('f'-n+1)), 40)
+}
+
+func (w fakeWorkspace) FetchBranch(_ context.Context, spec forge.CloneSpec, head, base string) error {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	w.w.branchFetched = append(w.w.branchFetched, spec.HeadRef+"@"+head+".."+base)
+	return w.w.branchErr
+}
+
+func (w fakeWorkspace) ChangedFiles(context.Context, string) ([]string, error) {
+	return []string{"a.go"}, nil
+}
+
+func (w fakeWorkspace) Commit(_ context.Context, ident forge.Identity, message string) (string, bool, error) {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	if w.w.commitErr != nil {
+		return "", false, w.w.commitErr
+	}
+	if !w.w.dirty {
+		return "", false, nil
+	}
+	w.w.commits = append(w.w.commits, ident.Name+":"+message)
+	return fixSHA(len(w.w.commits)), true, nil
+}
+
+func (w fakeWorkspace) Push(_ context.Context, spec forge.CloneSpec, sha string) error {
+	w.w.mu.Lock()
+	if w.w.pushErr != nil {
+		defer w.w.mu.Unlock()
+		return w.w.pushErr
+	}
+	w.w.pushed = append(w.w.pushed, spec.HeadRef+"@"+sha)
+	onPush := w.w.onPush
+	w.w.mu.Unlock()
+	if onPush != nil {
+		onPush(sha)
+	}
+	return nil
 }
 
 type fakeWorkspace struct{ w *fakeWorkspaces }
+
+func (w fakeWorkspace) CommitDiff(context.Context, string) (string, error) {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	return w.w.diff, w.w.diffErr
+}
 
 func (w fakeWorkspace) Dir() string { return "/work/slot-0" }
 
@@ -413,6 +476,7 @@ type harness struct {
 	gh    *fakeForge
 	gl    *fakeForge
 	rev   *fakeReviewer
+	fix   *fakeFixer
 	ws    *fakeWorkspaces
 	logs  *syncBuffer
 	cfg   *serveconfig.Config
@@ -422,7 +486,7 @@ type harness struct {
 
 func testConfig(t *testing.T) *serveconfig.Config {
 	return &serveconfig.Config{
-		MaxRounds: 3, PollInterval: time.Hour, ReviewTimeout: time.Minute, Workers: 2,
+		MaxRounds: 3, ReviewTimeout: time.Minute, FixTimeout: time.Minute, Workers: 2,
 		MaxBodyBytes: 1 << 10, DataDir: t.TempDir(), WorkDir: t.TempDir(),
 	}
 }
@@ -439,12 +503,12 @@ func newHarness(t *testing.T, tweak ...func(*serveconfig.Config)) *harness {
 	}
 	h := &harness{
 		t: t, gh: newFakeForge(forge.GitHub), gl: newFakeForge(forge.GitLab),
-		rev: &fakeReviewer{}, ws: &fakeWorkspaces{}, logs: &syncBuffer{}, cfg: cfg, loc: loc,
+		rev: &fakeReviewer{}, fix: &fakeFixer{}, ws: &fakeWorkspaces{}, logs: &syncBuffer{}, cfg: cfg, loc: loc,
 		clock: time.Unix(1_800_000_000, 0),
 	}
 	srv, err := New(Deps{
 		Config: cfg, Forges: map[forge.Platform]forge.Forge{forge.GitHub: h.gh, forge.GitLab: h.gl},
-		Reviewer: h.rev, Workspaces: h.ws, Locale: loc, Logger: NewLogger(h.logs),
+		Reviewer: h.rev, Fixer: h.fix, Workspaces: h.ws, Locale: loc, Logger: NewLogger(h.logs),
 		Now: func() time.Time { return h.clock }, Version: "test",
 	})
 	if err != nil {
@@ -479,18 +543,75 @@ func openPR(ref forge.PRRef, head string) forge.PR {
 		HeadSHA: head, BaseSHA: shaBase, State: forge.StateOpen}
 }
 
-// auto runs an automatic evaluation synchronously.
-func (h *harness) auto(ref forge.PRRef, trigger state.Trigger) bool {
-	return h.srv.process(ref, job{trigger: trigger, requestID: "req-" + string(trigger)})
+// opened runs the evaluation of an opened PR synchronously; the rounds it
+// queues run in the background, see drain.
+func (h *harness) opened(ref forge.PRRef) bool {
+	return h.srv.process(ref, job{trigger: triggerOpened, requestID: "req-opened"})
 }
 
-// command runs a command synchronously.
+// command runs a command synchronously, as dispatch would queue it.
 func (h *harness) command(ref forge.PRRef, body, commentID string) bool {
 	cmd, ok, err := ParseCommand(body)
 	if !ok || err != nil {
 		h.t.Fatalf("bad command %q: %v", body, err)
 	}
-	return h.srv.process(ref, job{cmd: &cmdJob{Command: cmd, commentID: commentID}, requestID: "req-cmd"})
+	gen := h.srv.restartChain(ref)
+	return h.srv.process(ref, job{cmd: &cmdJob{Command: cmd, commentID: commentID, gen: gen}, requestID: "req-cmd"})
+}
+
+// followPushes moves the PR head to each fix the bot pushes, as the forge
+// does.
+func (h *harness) followPushes(ref forge.PRRef) {
+	f := h.forgeFor(ref.Platform)
+	h.ws.set(func(w *fakeWorkspaces) { w.onPush = func(sha string) { f.push(ref, sha) } })
+}
+
+// fakeFixer records requests and answers with fn; without fn it fixes every
+// finding and its tests pass.
+type fakeFixer struct {
+	mu   sync.Mutex
+	reqs []review.FixRequest
+	fn   func(context.Context, review.FixRequest) (review.FixResult, error)
+}
+
+func (x *fakeFixer) Fix(ctx context.Context, req review.FixRequest) (review.FixResult, error) {
+	x.mu.Lock()
+	x.reqs = append(x.reqs, req)
+	fn := x.fn
+	x.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return fixAll(req), nil
+}
+
+// fixAll fixes every finding of req, or reports each in a report-only run.
+func fixAll(req review.FixRequest) review.FixResult {
+	res := review.FixResult{Tests: review.Tests{Command: "go test ./...", Passed: true}, CommitMessage: "fix: review findings"}
+	for _, fd := range req.Findings {
+		if req.ReportOnly {
+			res.Reported = append(res.Reported, review.Reported{ID: fd.ID, Path: fd.Path, Line: fd.Line, Problem: fd.Content,
+				Scenario: "it fails", ProposedFix: "change it"})
+			continue
+		}
+		res.Fixed = append(res.Fixed, review.Fixed{ID: fd.ID, Path: fd.Path, Line: fd.Line, Problem: fd.Content, Fix: "fixed it"})
+	}
+	if req.ReportOnly {
+		res.Tests = review.Tests{}
+	}
+	return res
+}
+
+func (x *fakeFixer) requests() []review.FixRequest {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return slices.Clone(x.reqs)
+}
+
+func (x *fakeFixer) set(fn func(context.Context, review.FixRequest) (review.FixResult, error)) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.fn = fn
 }
 
 // drain waits until queued work and background calls finish.

@@ -161,6 +161,30 @@ func TestParseEventEdgeCases(t *testing.T) {
 	}
 }
 
+func TestParseNoteMentions(t *testing.T) {
+	f := offlineForge(t, serveconfig.GitLabConfig{BotUsername: "pr-review"})
+	f.SetMentions([]string{"ocr", "PR-Review"})
+	f.botID, f.botName = 55, "svc-reviewer"
+	if names := f.CommandNames(); strings.Join(names, ",") != "svc-reviewer,pr-review,ocr" {
+		t.Fatalf("names %v", names)
+	}
+	for note, want := range map[string]forge.EventKind{
+		"@svc-reviewer fix":            forge.EventCommand,
+		"@PR-Review: review":           forge.EventCommand,
+		"@ocr, review-commit":          forge.EventCommand,
+		"@pr-review":                   forge.EventCommand,
+		"@someone fix":                 forge.EventNote,
+		"please @pr-review fix":        forge.EventNote,
+		"see below\n@pr-review review": forge.EventNote,
+	} {
+		body := fmt.Sprintf(`{"object_kind":"note","object_attributes":{"id":7,"noteable_type":"MergeRequest","note":%q},"merge_request":{"iid":2},"project":{"id":3}}`, note)
+		ev, err := f.ParseEvent(nil, []byte(body))
+		if err != nil || ev.Kind != want || ev.CommentBody != note {
+			t.Errorf("%q: %+v %v, want %s", note, ev, err, want)
+		}
+	}
+}
+
 func TestParseEventDraftAndReviewer(t *testing.T) {
 	f := offlineForge(t, serveconfig.GitLabConfig{BotUsername: "pr-review"})
 	base := `{"object_kind":"merge_request","project":{"id":1},"user":{"id":7,"username":"dev"},"object_attributes":{"iid":3,"action":"update",%s},"changes":{%s}}`

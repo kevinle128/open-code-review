@@ -14,7 +14,6 @@ import (
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/review"
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 var errTest = errors.New("test failure")
@@ -51,19 +50,19 @@ func TestQueueCoalescesBurst(t *testing.T) {
 		return false
 	})
 	ref := ghRef(1)
-	q.submit(ref, job{trigger: state.TriggerOpened, requestID: "0"})
+	q.submit(ref, job{trigger: triggerOpened, requestID: "0"})
 	<-first
 	for i := range 10 {
-		q.submit(ref, job{trigger: state.TriggerPush, requestID: string(rune('a' + i))})
+		q.submit(ref, job{trigger: triggerOpened, requestID: string(rune('a' + i))})
 	}
-	q.submit(ref, job{trigger: state.TriggerThreadResolved, requestID: "z"})
+	q.submit(ref, job{trigger: triggerReady, requestID: "z"})
 	close(release)
 	waitGroupDone(t, &wg)
 	if len(ran) != 2 {
 		t.Fatalf("want one follow-up evaluation, ran %d", len(ran))
 	}
-	if ran[1].trigger != state.TriggerPush {
-		t.Fatalf("a push must survive a later thread trigger, got %q", ran[1].trigger)
+	if ran[1].trigger != triggerReady || ran[1].requestID != "z" {
+		t.Fatalf("the newest trigger runs, got %+v", ran[1])
 	}
 	if len(q.prs) != 0 {
 		t.Fatal("idle PR entry must be removed")
@@ -84,15 +83,16 @@ func TestQueueCommandsInOrderBeforeEvaluation(t *testing.T) {
 		return false
 	})
 	ref := ghRef(1)
-	q.submit(ref, job{trigger: state.TriggerPush, requestID: "first"})
+	q.submit(ref, job{trigger: triggerOpened, requestID: "first"})
 	<-started
-	q.submit(ref, job{trigger: state.TriggerNote, requestID: "note"})
+	q.submit(ref, job{trigger: triggerOpened, requestID: "opened"})
 	q.submit(ref, job{cmd: &cmdJob{Command: Command{Kind: CommandReview}}, requestID: "cmd1"})
+	q.submit(ref, job{round: &roundJob{n: 2}, requestID: "round2"})
 	q.submit(ref, job{cmd: &cmdJob{Command: Command{Kind: CommandReviewCommit}}, requestID: "cmd2"})
-	q.submit(ref, job{trigger: state.TriggerPoll, requestID: "poll"})
+	q.submit(ref, job{trigger: triggerReady, requestID: "ready"})
 	close(block)
 	waitGroupDone(t, &wg)
-	want := []string{"first", "cmd1", "cmd2", "poll"}
+	want := []string{"first", "cmd1", "round2", "cmd2", "ready"}
 	if len(order) != len(want) {
 		t.Fatalf("order %v", order)
 	}
@@ -111,7 +111,7 @@ func TestQueueRerunsAreCapped(t *testing.T) {
 		return true
 	})
 	q.submit(ghRef(1), job{cmd: &cmdJob{}, requestID: "c"})
-	q.submit(ghRef(2), job{trigger: state.TriggerPush, requestID: "p"})
+	q.submit(ghRef(2), job{trigger: triggerOpened, requestID: "p"})
 	waitGroupDone(t, &wg)
 	if got := runs.Load(); got != 2*(maxReruns+1) {
 		t.Fatalf("runs %d", got)
@@ -133,7 +133,7 @@ func TestQueueNoLostTrigger(t *testing.T) {
 		senders.Add(1)
 		go func() {
 			defer senders.Done()
-			q.submit(ghRef(i%3), job{trigger: state.TriggerPush})
+			q.submit(ghRef(i%3), job{trigger: triggerOpened})
 		}()
 	}
 	senders.Wait()
@@ -164,7 +164,7 @@ func TestReviewsBoundedByWorkers(t *testing.T) {
 	})
 	for i := 1; i <= 4; i++ {
 		h.gh.setPR(openPR(ghRef(i), sha1))
-		h.srv.queue.submit(ghRef(i), job{trigger: state.TriggerOpened, requestID: "r"})
+		h.srv.queue.submit(ghRef(i), job{trigger: triggerOpened, requestID: "r"})
 	}
 	deadline := time.After(5 * time.Second)
 	for peak.Load() < 2 {

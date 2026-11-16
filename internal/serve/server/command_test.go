@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 func TestParseCommand(t *testing.T) {
@@ -31,6 +29,7 @@ func TestParseCommand(t *testing.T) {
 		{"please /review", Command{}, false, ""},
 		{"", Command{}, false, ""},
 		{"/review it's #1", Command{Kind: CommandReview}, true, `unsupported option "it's"`},
+		{"/fix", Command{}, false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.body, func(t *testing.T) {
@@ -43,9 +42,6 @@ func TestParseCommand(t *testing.T) {
 			}
 		})
 	}
-	if (Command{Kind: CommandReviewCommit}).trigger() != state.TriggerCmdReviewCommit || (Command{Kind: CommandReview}).trigger() != state.TriggerCmdReview {
-		t.Fatal("trigger mapping")
-	}
 }
 
 func TestSplitArgs(t *testing.T) {
@@ -55,27 +51,39 @@ func TestSplitArgs(t *testing.T) {
 	}
 }
 
-func TestUnknownSlashCommand(t *testing.T) {
-	cases := map[string]string{
-		"/describe":        "/describe",
-		"/ask what is #1":  "/ask",
-		"/reviewer please": "/reviewer",
-		"/review":          "",
-		"/etc/hosts":       "",
-		"see /describe":    "",
-		"/":                "",
+func TestUnknownCommand(t *testing.T) {
+	cases := []struct {
+		line      string
+		mentioned bool
+		want      string
+		unknown   bool
+	}{
+		{"/describe", false, "/describe", true},
+		{"/ask what is #1", false, "/ask", true},
+		{"/reviewer please", false, "/reviewer", true},
+		{"/review", false, "", false},
+		{"/etc/hosts", false, "", false},
+		{"see /describe", false, "", false},
+		{"/", false, "", false},
+		{"/fix", false, "/fix", true},
+		{"/fix now", true, "/fix", true},
+		{"/review-commit", true, "", false},
+		{"/hello there", true, "/hello", true},
+		{"/etc/hosts", true, "/etc/hosts", true},
+		{"", true, "", true},
 	}
-	for body, want := range cases {
-		got, ok := unknownSlashCommand(body)
-		if got != want || ok != (want != "") {
-			t.Fatalf("%q: got %q %v", body, got, ok)
+	for _, tc := range cases {
+		got, ok := unknownCommand(tc.line, tc.mentioned)
+		if got != tc.want || ok != tc.unknown {
+			t.Fatalf("%q mentioned=%v: got %q %v", tc.line, tc.mentioned, got, ok)
 		}
 	}
 }
 
 func TestCommandAdded(t *testing.T) {
+	names := []string{"ocr-bot"}
 	cases := []struct {
-		body, prev string
+		line, prev string
 		want       bool
 	}{
 		{"/review", "", true},
@@ -83,10 +91,16 @@ func TestCommandAdded(t *testing.T) {
 		{"/review   --effort=high", "note\n/review --effort=high", false},
 		{"/review --effort=high", "/review", true},
 		{"/review-commit", "/review", true},
+		{"/review", "@ocr-bot review", false},
+		{"/review", "@OCR-BOT: /review", false},
+		{"/review", "@ocr-bot review-commit", true},
+		{"/review", "@someone review", true},
+		{"", "@ocr-bot", false},
+		{"", "text\n\n", true},
 	}
 	for _, tc := range cases {
-		if got := commandAdded(tc.body, tc.prev); got != tc.want {
-			t.Fatalf("%q after %q: %v", tc.body, tc.prev, got)
+		if got := commandAdded(tc.line, tc.prev, names); got != tc.want {
+			t.Fatalf("%q after %q: %v", tc.line, tc.prev, got)
 		}
 	}
 }

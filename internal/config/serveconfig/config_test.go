@@ -71,9 +71,20 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &Config{
-		Addr: DefaultAddr, MaxRounds: 3, PollInterval: 2 * time.Minute, ReviewTimeout: 2 * time.Hour,
+		Addr: DefaultAddr, MaxRounds: 3, ReviewTimeout: 2 * time.Hour, FixTimeout: time.Hour,
 		Workers: 2, MaxBodyBytes: 10485760, DataDir: "/data", WorkDir: "/work", BotIndicators: []string{"bot"},
 		Exclude: DefaultExcludes, ReviewConcurrency: 5, BundleLines: 300,
+		Engine: EngineCLI,
+		CLI: CLIConfig{
+			ReviewCLI: CLICodex, CodexBin: "codex", ClaudeBin: "claude", AgyBin: "agy",
+			Home:       "/data/cli-home",
+			BatchLines: 1500, BatchFiles: 25, BatchConcurrency: 1,
+		},
+		Verify: VerifyConfig{CLI: DefaultVerifyCLI},
+		Sandbox: SandboxConfig{
+			Mode: SandboxNone, DockerBin: "docker", Memory: "6g", CPUs: "4",
+			Images: DefaultSandboxImages,
+		},
 	}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v\nwant %+v", c, want)
@@ -94,21 +105,22 @@ func TestLoad_NilFuncsUseProcessEnv(t *testing.T) {
 func TestLoad_Overrides(t *testing.T) {
 	testKeys(t)
 	c, err := Load(env(map[string]string{
-		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvPollInterval: "30s", EnvReviewTimeout: "3h",
+		EnvAddr: "0.0.0.0:3012", EnvMaxRounds: "5", EnvReviewTimeout: "3h", EnvFixTimeout: "45m",
 		EnvWorkers: "4", EnvMaxBodyBytes: "2048", EnvDataDir: "/d", EnvWorkDir: "/w",
 		EnvReviewConcurrency: "12", EnvBundleLines: "450",
 		EnvIgnoreRepos: "^infra/, sandbox$", EnvIgnoreAuthors: "renovate", EnvIgnoreTitles: `(?i)^\[wip\]`,
 		EnvIgnoreSourceBranch: "^release/", EnvIgnoreTargetBranch: "^gh-pages$", EnvIgnoreLabels: "no-review, skip ocr",
-		EnvBotIndicators: "Bot, Automation",
-		EnvGitHubAppID:   "12345", EnvGitHubPrivateKey + "_FILE": "/run/key.pem", EnvGitHubWebhookSecret: "gh-secret",
+		EnvBotIndicators: "Bot, Automation", EnvMentions: "ocr, Review.Bot_2",
+		EnvGitHubAppID: "12345", EnvGitHubPrivateKey + "_FILE": "/run/key.pem", EnvGitHubWebhookSecret: "gh-secret",
 		EnvGitHubAPIURL: "https://ghe.example.com/api/v3/",
 		EnvGitLabURL:    "https://git.example.com/", EnvGitLabToken + "_FILE": "/run/gl", EnvGitLabWebhookSecret: " gl-secret ",
 		EnvGitLabAdminToken: "admin", EnvGitLabHookURL: "https://hooks.example.com/ocr/gitlab/webhook", EnvGitLabBotUsername: "ocr-bot",
+		EnvEngine: "ocr",
 	}), files(map[string]string{"/run/key.pem": pkcs1PEM, "/run/gl": "glpat-x\n"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.PollInterval != 30*time.Second || c.ReviewTimeout != 3*time.Hour ||
+	if c.Addr != "0.0.0.0:3012" || c.MaxRounds != 5 || c.ReviewTimeout != 3*time.Hour || c.FixTimeout != 45*time.Minute ||
 		c.Workers != 4 || c.MaxBodyBytes != 2048 || c.DataDir != "/d" || c.WorkDir != "/w" ||
 		c.ReviewConcurrency != 12 || c.BundleLines != 450 {
 		t.Fatalf("scalars %+v", c)
@@ -119,6 +131,9 @@ func TestLoad_Overrides(t *testing.T) {
 	}
 	if !reflect.DeepEqual(c.BotIndicators, []string{"bot", "automation"}) {
 		t.Fatalf("bots %v", c.BotIndicators)
+	}
+	if !reflect.DeepEqual(c.Mentions, []string{"ocr", "Review.Bot_2"}) {
+		t.Fatalf("mentions %v", c.Mentions)
 	}
 	if c.GitHub == nil || c.GitHub.AppID != 12345 || c.GitHub.WebhookSecret != "gh-secret" ||
 		c.GitHub.APIURL != "https://ghe.example.com/api/v3" || !strings.Contains(string(c.GitHub.PrivateKeyPEM), "RSA PRIVATE KEY") {
@@ -187,10 +202,12 @@ func TestLoad_InvalidValues(t *testing.T) {
 		{"bundle lines too low", map[string]string{EnvBundleLines: "49"}, EnvBundleLines},
 		{"bundle lines too high", map[string]string{EnvBundleLines: "5001"}, EnvBundleLines},
 		{"body bytes zero", map[string]string{EnvMaxBodyBytes: "0"}, EnvMaxBodyBytes},
-		{"poll negative", map[string]string{EnvPollInterval: "-1m"}, EnvPollInterval},
 		{"timeout zero", map[string]string{EnvReviewTimeout: "0s"}, EnvReviewTimeout},
 		{"timeout garbage", map[string]string{EnvReviewTimeout: "soon"}, EnvReviewTimeout},
+		{"fix timeout zero", map[string]string{EnvFixTimeout: "0s"}, EnvFixTimeout},
 		{"bad regex", map[string]string{EnvIgnoreTitles: "([a-"}, EnvIgnoreTitles},
+		{"mention with at sign", map[string]string{EnvMentions: "ok, @ocr"}, EnvMentions},
+		{"mention with space", map[string]string{EnvMentions: "ocr bot"}, EnvMentions},
 		{"bad exclude glob", map[string]string{EnvExclude: "a/**, b/[x"}, EnvExclude},
 		{"github app id", map[string]string{EnvGitHubAppID: "abc", EnvGitHubPrivateKey: pkcs1PEM, EnvGitHubWebhookSecret: "s"}, EnvGitHubAppID},
 		{"github missing key", map[string]string{EnvGitHubAppID: "1", EnvGitHubWebhookSecret: "s"}, EnvGitHubPrivateKey},

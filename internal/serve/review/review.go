@@ -20,6 +20,15 @@ import (
 // ProjectRule is the repository's rule.json as read at the PR base, or nil
 // for none. It replaces the file in the checkout, which the PR controls, so
 // a PR cannot change its own review rules or exclusions.
+//
+// PR is the pull request as read from the forge. Engines that hand the
+// review to an external agent pass its identity and description on; the
+// in-process OCR engine ignores it.
+//
+// FixCommit marks Commit as a fix commit the service pushed in the previous
+// round. An agent engine then reviews only what that commit changed and
+// does not check the PR description or scope again, which the first round
+// already did. The OCR engine ignores it.
 type Request struct {
 	RepoDir     string
 	From        string
@@ -29,6 +38,8 @@ type Request struct {
 	Effort      string
 	Excludes    []string
 	ProjectRule *rules.ProjectRule
+	PR          forge.PR
+	FixCommit   bool
 }
 
 // Terminal states of a review run.
@@ -70,7 +81,7 @@ type FailedItem struct {
 	Reason  string
 }
 
-// Reviewer runs OCR on a checkout.
+// Reviewer runs a review engine on a checkout.
 type Reviewer interface {
 	Review(ctx context.Context, req Request) (Result, error)
 }
@@ -82,10 +93,112 @@ type Workspace interface {
 	// IsAncestor returns the exit code of `git merge-base --is-ancestor a b`:
 	// 0 yes, 1 no, 128 an object is missing, -1 any other failure.
 	IsAncestor(ctx context.Context, a, b string) int
+	// FetchBranch checks out the PR head branch itself (spec.HeadRef is
+	// refs/heads/<branch>) so a fix can be committed and pushed.
+	FetchBranch(ctx context.Context, spec forge.CloneSpec, headSHA, baseSHA string) error
+	// ChangedFiles lists the files the checked out branch changes since its
+	// merge base with base.
+	ChangedFiles(ctx context.Context, base string) ([]string, error)
+	// Commit commits every change as ident; changed is false when there is
+	// nothing to commit.
+	Commit(ctx context.Context, ident forge.Identity, message string) (sha string, changed bool, err error)
+	// Push pushes sha to the checked out branch without force.
+	Push(ctx context.Context, spec forge.CloneSpec, sha string) error
+	// CommitDiff returns the unified diff of sha against its first parent,
+	// with three lines of context.
+	CommitDiff(ctx context.Context, sha string) (string, error)
 }
 
 // Workspaces hands out checkout slots. The release func empties the slot and
 // must be called exactly once.
 type Workspaces interface {
 	Acquire(ctx context.Context) (Workspace, func(), error)
+}
+
+// Finding is one review finding a fix run judges. ID is unique within the
+// run; Path is empty for a finding about the PR as a whole.
+type Finding struct {
+	ID       string `json:"id"`
+	Path     string `json:"path"`
+	Line     int    `json:"line"`
+	EndLine  int    `json:"end_line"`
+	Severity string `json:"severity"`
+	Category string `json:"category"`
+	Content  string `json:"content"`
+}
+
+// FixRequest is one fix run on a checkout of the PR head branch. Files are
+// the files the PR changes. Base and Head are the reviewed range; Base is
+// empty when one commit, Head, was reviewed. ReportOnly asks for no edit:
+// the run only judges the findings and proposes fixes.
+type FixRequest struct {
+	RepoDir    string
+	PR         forge.PR
+	Files      []string
+	Base       string
+	Head       string
+	Findings   []Finding
+	ReportOnly bool
+}
+
+// Fixed is a finding the fix run judged real and fixed. Scenario is how
+// the code failed; TestsAdded names the tests the fix added, if any.
+// Changes are the places the fix edited, which tie the hunks of the fix
+// commit to this finding.
+type Fixed struct {
+	ID         string
+	Path       string
+	Line       int
+	Problem    string
+	Scenario   string
+	Fix        string
+	TestsAdded string
+	Changes    []Change
+}
+
+// Change is a line range of the new file that a fix edited. A range with
+// StartLine 0 covers the whole file, as for a deleted file.
+type Change struct {
+	Path      string
+	StartLine int
+	EndLine   int
+}
+
+// Reported is a real finding the run did not fix: in a report-only run,
+// for a finding about the PR as a whole, or when no safe fix exists.
+// ProposedDiff is a unified diff against the reviewed head that was not
+// applied; it is empty when the run gave none.
+type Reported struct {
+	ID           string
+	Path         string
+	Line         int
+	Problem      string
+	Scenario     string
+	ProposedFix  string
+	ProposedDiff string
+}
+
+// Tests is the test run after the fix. Command is empty when no test ran.
+type Tests struct {
+	Command    string
+	Passed     bool
+	OutputTail string
+}
+
+// FixResult is what the agent reports. Fixed and Reported hold only ids
+// from the request, each once; findings in neither were judged not real.
+// CommitMessage is one line.
+type FixResult struct {
+	Fixed         []Fixed
+	Reported      []Reported
+	Tests         Tests
+	Summary       string
+	CommitMessage string
+	Warnings      []string
+}
+
+// Fixer judges review findings, fixes the real ones in the checkout and
+// runs the tests. It leaves committing and pushing to the caller.
+type Fixer interface {
+	Fix(ctx context.Context, req FixRequest) (FixResult, error)
 }

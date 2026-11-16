@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -26,9 +27,9 @@ import (
 const (
 	EnvAddr                = "OCR_SERVE_ADDR"
 	EnvMaxRounds           = "OCR_SERVE_MAX_ROUNDS"
-	EnvPollInterval        = "OCR_SERVE_POLL_INTERVAL"
 	EnvWorkers             = "OCR_SERVE_WORKERS"
 	EnvReviewTimeout       = "OCR_SERVE_REVIEW_TIMEOUT"
+	EnvFixTimeout          = "OCR_SERVE_FIX_TIMEOUT"
 	EnvReviewConcurrency   = "OCR_SERVE_REVIEW_CONCURRENCY"
 	EnvBundleLines         = "OCR_SERVE_BUNDLE_LINES"
 	EnvMaxBodyBytes        = "OCR_SERVE_MAX_BODY_BYTES"
@@ -42,6 +43,7 @@ const (
 	EnvIgnoreTargetBranch  = "OCR_SERVE_IGNORE_TARGET_BRANCHES"
 	EnvIgnoreLabels        = "OCR_SERVE_IGNORE_LABELS"
 	EnvBotIndicators       = "OCR_SERVE_BOT_INDICATORS"
+	EnvMentions            = "OCR_SERVE_MENTIONS"
 	EnvGitHubAppID         = "OCR_SERVE_GITHUB_APP_ID"
 	EnvGitHubPrivateKey    = "OCR_SERVE_GITHUB_PRIVATE_KEY"
 	EnvGitHubWebhookSecret = "OCR_SERVE_GITHUB_WEBHOOK_SECRET"
@@ -58,13 +60,16 @@ const (
 const (
 	DefaultAddr          = "127.0.0.1:3012"
 	DefaultMaxRounds     = 3
-	DefaultPollInterval  = 2 * time.Minute
 	DefaultWorkers       = 2
 	DefaultReviewTimeout = 2 * time.Hour
+	DefaultFixTimeout    = time.Hour
 	DefaultMaxBodyBytes  = 10 << 20
-	DefaultDataDir       = "/data"
-	DefaultWorkDir       = "/work"
-	DefaultGitHubAPIURL  = "https://api.github.com"
+	// DefaultDataDir and DefaultWorkDir apply only when HOME is not set;
+	// otherwise the directories default to ~/ocr-review/data and
+	// ~/ocr-review/work.
+	DefaultDataDir      = "/data"
+	DefaultWorkDir      = "/work"
+	DefaultGitHubAPIURL = "https://api.github.com"
 
 	// DefaultReviewConcurrency is lower than the `ocr review` default of 8:
 	// several reviews run at the same time against one LLM endpoint.
@@ -86,10 +91,14 @@ const (
 
 // Config is the global service configuration.
 type Config struct {
-	Addr          string
-	MaxRounds     int
-	PollInterval  time.Duration
+	Addr      string
+	MaxRounds int
+	// ReviewTimeout bounds the part of a round up to the end of the review;
+	// FixTimeout bounds the fix run, its commit and push, which start only
+	// after the review. A long review therefore cannot use up the time of
+	// the fix.
 	ReviewTimeout time.Duration
+	FixTimeout    time.Duration
 	Workers       int
 	MaxBodyBytes  int64
 	// ReviewConcurrency is the number of LLM subtasks one review runs at the
@@ -103,7 +112,17 @@ type Config struct {
 	WorkDir       string
 	Ignore        IgnoreRules
 	BotIndicators []string
-	Exclude       []string // DefaultExcludes, then OCR_SERVE_EXCLUDE
+	// Mentions are extra names users may tag the bot with to run a command,
+	// on top of the GitHub App slug and the GitLab bot username.
+	Mentions []string
+	Exclude  []string // DefaultExcludes, then OCR_SERVE_EXCLUDE
+
+	// Engine picks the review engine: EngineCLI runs an agent CLI, EngineOCR
+	// the in-process OCR review.
+	Engine  string
+	CLI     CLIConfig
+	Verify  VerifyConfig
+	Sandbox SandboxConfig
 
 	GitHub *GitHubConfig // nil = disabled
 	GitLab *GitLabConfig // nil = disabled
@@ -117,9 +136,10 @@ type GitHubConfig struct {
 	APIURL        string
 }
 
-// GitLabConfig holds the GitLab settings. AdminToken, HookURL and BotUsername
-// are used only by the hook registration command; the admin token is passed
-// per invocation and never kept in the service environment.
+// GitLabConfig holds the GitLab settings. AdminToken and HookURL are used
+// only by the hook registration command; the admin token is passed per
+// invocation and never kept in the service environment. The service also
+// uses BotUsername to know its own notes and the name users tag.
 type GitLabConfig struct {
 	URL           string
 	Token         string
@@ -204,15 +224,15 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 	c := &Config{
 		Addr:          l.str(EnvAddr, DefaultAddr),
 		MaxRounds:     l.intIn(EnvMaxRounds, DefaultMaxRounds, MinRounds, MaxRounds),
-		PollInterval:  l.duration(EnvPollInterval, DefaultPollInterval),
 		ReviewTimeout: l.duration(EnvReviewTimeout, DefaultReviewTimeout),
+		FixTimeout:    l.duration(EnvFixTimeout, DefaultFixTimeout),
 		Workers:       l.intIn(EnvWorkers, DefaultWorkers, MinWorkers, MaxWorkers),
 		MaxBodyBytes:  int64(l.intIn(EnvMaxBodyBytes, DefaultMaxBodyBytes, 1, MaxBodyBytesHigh)),
 		ReviewConcurrency: l.intIn(EnvReviewConcurrency, DefaultReviewConcurrency,
 			MinReviewConcurrency, MaxReviewConcurrency),
 		BundleLines: l.intIn(EnvBundleLines, DefaultBundleLines, MinBundleLines, MaxBundleLines),
-		DataDir:     l.str(EnvDataDir, DefaultDataDir),
-		WorkDir:     l.str(EnvWorkDir, DefaultWorkDir),
+		DataDir:     l.dir(EnvDataDir, "data", DefaultDataDir),
+		WorkDir:     l.dir(EnvWorkDir, "work", DefaultWorkDir),
 		Ignore: IgnoreRules{
 			Repos:          l.regexps(EnvIgnoreRepos),
 			Authors:        l.regexps(EnvIgnoreAuthors),
@@ -222,8 +242,13 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 			Labels:         splitList(getenv(EnvIgnoreLabels)),
 		},
 		BotIndicators: l.botIndicators(),
+		Mentions:      l.mentions(),
 		Exclude:       l.excludes(),
+		Engine:        l.engine(),
 	}
+	c.CLI = l.cli(c.DataDir)
+	c.Verify = l.verify()
+	c.Sandbox = l.sandbox()
 	c.GitHub = l.github()
 	c.GitLab = l.gitlab()
 	if err := errors.Join(l.errs...); err != nil {
@@ -233,13 +258,19 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 }
 
 // RequireServe checks what the webhook service needs on top of Load: at
-// least one platform, and the GitLab token and webhook secret when GitLab is
-// enabled.
+// least one platform, the GitLab token and webhook secret when GitLab is
+// enabled, and the CLI engine settings when that engine is selected.
 func (c *Config) RequireServe() error {
 	if c.GitHub == nil && c.GitLab == nil {
 		return fmt.Errorf("no platform enabled: set %s or %s", EnvGitHubAppID, EnvGitLabURL)
 	}
 	var errs []error
+	if err := c.requireCLI(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.requireSandbox(); err != nil {
+		errs = append(errs, err)
+	}
 	if c.GitLab != nil {
 		if c.GitLab.Token == "" {
 			errs = append(errs, fmt.Errorf("%s is required when %s is set", EnvGitLabToken, EnvGitLabURL))
@@ -266,6 +297,27 @@ func (l *loader) str(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// dir returns the directory in key as an absolute path. Unset, it is
+// ~/ocr-review/<name> when HOME is set, so a service on a host keeps its
+// files under the service user's home, and fallback otherwise; the image
+// sets both directories explicitly.
+func (l *loader) dir(key, name, fallback string) string {
+	v := l.str(key, "")
+	if v == "" {
+		home := strings.TrimSpace(l.getenv("HOME"))
+		if home == "" || !filepath.IsAbs(home) {
+			return fallback
+		}
+		return filepath.Join(home, "ocr-review", name)
+	}
+	abs, err := filepath.Abs(v)
+	if err != nil {
+		l.fail("%s: %v", key, err)
+		return v
+	}
+	return abs
 }
 
 func (l *loader) intIn(key string, def, lo, hi int) int {
@@ -330,6 +382,20 @@ func (l *loader) botIndicators() []string {
 	var out []string
 	for _, s := range splitList(raw) {
 		out = append(out, strings.ToLower(s))
+	}
+	return out
+}
+
+var mentionRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func (l *loader) mentions() []string {
+	var out []string
+	for _, s := range splitList(l.getenv(EnvMentions)) {
+		if !mentionRE.MatchString(s) {
+			l.fail("%s: invalid name %q (use letters, digits, '-', '_' and '.', without '@')", EnvMentions, s)
+			continue
+		}
+		out = append(out, s)
 	}
 	return out
 }

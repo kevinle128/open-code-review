@@ -7,25 +7,35 @@ import (
 	"sync"
 
 	"github.com/alibaba/open-code-review/internal/serve/forge"
-	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
-// job is one unit of per-PR work: an automatic evaluation (trigger set) or a
-// command (cmd set).
+// trigger is the webhook event that queued an automatic job.
+type trigger string
+
+const (
+	triggerOpened trigger = "opened"
+	triggerReady  trigger = "ready"
+)
+
+// job is one unit of per-PR work: an automatic evaluation (trigger set), a
+// command (cmd set) or a round of a running chain (round set).
 type job struct {
-	trigger   state.Trigger
+	trigger   trigger
 	cmd       *cmdJob
+	round     *roundJob
 	requestID string
 	reruns    int
 }
 
 // cmdJob is a command from a comment. An empty commentID means the platform
 // raised the command itself, so there is nothing to react or reply to. A
-// non-empty reject answers the comment with an error and runs nothing.
+// non-empty reject answers the comment with an error and runs nothing. gen
+// is the chain the command started.
 type cmdJob struct {
 	Command
 	commentID string
 	reject    string
+	gen       uint64
 }
 
 type prWork struct {
@@ -33,12 +43,13 @@ type prWork struct {
 	running bool
 	dirty   bool
 	auto    job
-	cmds    []job
+	ordered []job
 }
 
-// queue runs at most one job per PR at a time. Commands queue in order;
-// automatic triggers that arrive while a PR is busy collapse into one
-// follow-up evaluation, because each evaluation reads the whole state again.
+// queue runs at most one job per PR at a time. Commands and rounds queue in
+// order; automatic triggers that arrive while a PR is busy collapse into
+// one follow-up evaluation, because each evaluation reads the whole state
+// again.
 type queue struct {
 	mu   sync.Mutex
 	prs  map[string]*prWork
@@ -69,29 +80,15 @@ func (q *queue) submit(ref forge.PRRef, j job) {
 }
 
 func (q *queue) addLocked(w *prWork, j job, front bool) {
-	if j.cmd != nil {
+	if j.cmd != nil || j.round != nil {
 		if front {
-			w.cmds = append([]job{j}, w.cmds...)
+			w.ordered = append([]job{j}, w.ordered...)
 		} else {
-			w.cmds = append(w.cmds, j)
+			w.ordered = append(w.ordered, j)
 		}
 		return
 	}
-	if !w.dirty || startsRound(j.trigger) || !startsRound(w.auto.trigger) {
-		w.auto = j
-	}
-	w.dirty = true
-}
-
-// startsRound reports whether a trigger can start round 1. When triggers
-// collapse, such a trigger must survive, or a push followed by a note would
-// lose the first round.
-func startsRound(t state.Trigger) bool {
-	switch t {
-	case state.TriggerOpened, state.TriggerReady, state.TriggerReopened, state.TriggerPush:
-		return true
-	}
-	return false
+	w.auto, w.dirty = j, true
 }
 
 func (q *queue) loop(key string) {
@@ -101,8 +98,8 @@ func (q *queue) loop(key string) {
 		w := q.prs[key]
 		var j job
 		switch {
-		case len(w.cmds) > 0:
-			j, w.cmds = w.cmds[0], w.cmds[1:]
+		case len(w.ordered) > 0:
+			j, w.ordered = w.ordered[0], w.ordered[1:]
 		case w.dirty:
 			j, w.dirty, w.auto = w.auto, false, job{}
 		default:

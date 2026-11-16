@@ -109,6 +109,8 @@ type fakeAPI struct {
 	threads        []map[string]any
 	threadPage     int
 	graphqlVars    []map[string]any
+	mutations      []map[string]any
+	mutationErr    string
 	nextID         int64
 	// reviewReject, when set, decides the status of each createReview call.
 	reviewReject func(comments []any) (int, string)
@@ -128,11 +130,11 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		contents: map[string]map[string]any{},
 		nextID:   1000,
 		pull: map[string]any{
-			"number": 7, "title": "Add retry", "state": "open", "draft": false, "merged": false,
+			"number": 7, "title": "Add retry", "body": "Retries the import.", "state": "open", "draft": false, "merged": false,
 			"user":   map[string]any{"login": "alice", "type": "User"},
 			"labels": []any{map[string]any{"name": "backend"}},
-			"head":   map[string]any{"ref": "feat/retry", "sha": headSHA},
-			"base":   map[string]any{"ref": "main", "sha": baseSHA},
+			"head":   map[string]any{"ref": "feat/retry", "sha": headSHA, "repo": map[string]any{"full_name": "acme/widgets"}},
+			"base":   map[string]any{"ref": "main", "sha": baseSHA, "repo": map[string]any{"full_name": "acme/widgets"}},
 		},
 	}
 	mux := http.NewServeMux()
@@ -178,6 +180,13 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		writeJSON(w, 200, c)
 	}))
 	mux.HandleFunc("POST /graphql", fa.installation(fa.handleGraphQL))
+	mux.HandleFunc("GET /users/{login}", fa.installation(func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("login") != testBot {
+			writeJSON(w, 404, map[string]any{"message": "Not Found"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"id": 98765, "login": testBot})
+	}))
 	fa.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
 		defer fa.mu.Unlock()
@@ -331,6 +340,15 @@ func (fa *fakeAPI) handleSingle(w http.ResponseWriter, r *http.Request) {
 
 func (fa *fakeAPI) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	payload := decodeBody(fa.t, r)
+	if q := payload["query"].(string); strings.HasPrefix(strings.TrimSpace(q), "mutation") {
+		fa.mutations = append(fa.mutations, payload)
+		if fa.mutationErr != "" {
+			writeJSON(w, 200, map[string]any{"errors": []any{map[string]any{"message": fa.mutationErr}}})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"data": map[string]any{}})
+		return
+	}
 	if !strings.Contains(payload["query"].(string), "reviewThreads(first: 100, after: $cursor)") {
 		fa.t.Errorf("unexpected GraphQL query")
 	}
@@ -408,7 +426,7 @@ func TestGetPR(t *testing.T) {
 		t.Fatalf("GetPR: %v", err)
 	}
 	want := forge.PR{
-		Ref: testRef, Title: "Add retry", Author: "alice", Labels: []string{"backend"},
+		Ref: testRef, Title: "Add retry", Description: "Retries the import.", Author: "alice", Labels: []string{"backend"},
 		SourceBranch: "feat/retry", TargetBranch: "main", HeadSHA: headSHA, BaseSHA: baseSHA, State: forge.StateOpen,
 	}
 	if fmt.Sprint(pr) != fmt.Sprint(want) {

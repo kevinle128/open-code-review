@@ -2,8 +2,9 @@
 // Copyright 2026 alibaba/open-code-review Contributors
 
 // Package server is the review service orchestrator: it receives webhooks,
-// serializes work per pull request, runs the round state machine, and drives
-// checkout, review and posting through the forge and review interfaces.
+// serializes work per pull request, runs the review chain of each PR round
+// by round, and drives checkout, review, fix, push and commit status through
+// the forge and review interfaces.
 package server
 
 import (
@@ -15,7 +16,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -26,11 +26,13 @@ import (
 )
 
 // Deps are the collaborators of the server. A nil entry in Forges disables
-// that platform, and its webhook route answers 404.
+// that platform, and its webhook route answers 404. A nil Fixer makes every
+// round report-only, with the review findings as they are.
 type Deps struct {
 	Config     *serveconfig.Config
 	Forges     map[forge.Platform]forge.Forge
 	Reviewer   review.Reviewer
+	Fixer      review.Fixer
 	Workspaces review.Workspaces
 	Locale     state.Locale
 	Logger     *slog.Logger
@@ -43,16 +45,20 @@ type Server struct {
 	cfg        *serveconfig.Config
 	forges     map[forge.Platform]forge.Forge
 	reviewer   review.Reviewer
+	fixer      review.Fixer
 	workspaces review.Workspaces
 	loc        state.Locale
 	log        *slog.Logger
 	now        func() time.Time
 	version    string
 
-	store   *Store
 	seen    *dedupe
 	queue   *queue
 	workers chan struct{}
+	journal *journal
+
+	chainMu sync.Mutex
+	chains  map[string]*chainCtl
 
 	// mu orders intake against Shutdown: work is only added while holding
 	// the read lock and closing is false, so wg never grows after Shutdown
@@ -63,17 +69,18 @@ type Server struct {
 	wg        sync.WaitGroup
 	runCtx    context.Context
 	cancelRun context.CancelFunc
-	pollStop  context.CancelFunc
-	pollDone  chan struct{}
 }
 
 const (
-	waitingFile     = "waiting.json"
 	sideCallTimeout = 30 * time.Second
-	maxReruns       = 3
+	// failWriteGrace bounds the wait after a drain timeout for the failed
+	// status writes of the cut rounds. The drain (60 s) plus this wait stays
+	// below the 75 s stop timeout of the PM2 and compose deploys.
+	failWriteGrace = 10 * time.Second
+	maxReruns      = 3
 )
 
-// New checks d and opens the waiting store under Config.DataDir.
+// New checks d.
 func New(d Deps) (*Server, error) {
 	switch {
 	case d.Config == nil:
@@ -100,18 +107,18 @@ func New(d Deps) (*Server, error) {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	store, err := OpenStore(filepath.Join(d.Config.DataDir, waitingFile))
-	if errors.Is(err, ErrStoreCorrupt) {
-		d.Logger.Error("waiting store reset", "error", err.Error())
-	} else if err != nil {
-		return nil, err
-	}
 	s := &Server{
-		cfg: d.Config, forges: forges, reviewer: d.Reviewer, workspaces: d.Workspaces,
+		cfg: d.Config, forges: forges, reviewer: d.Reviewer, fixer: d.Fixer, workspaces: d.Workspaces,
 		loc: d.Locale, log: d.Logger, now: d.Now, version: d.Version,
-		store: store, seen: newDedupe(d.Now, dedupeTTL, dedupeMaxKeys),
+		seen:    newDedupe(d.Now, dedupeTTL, dedupeMaxKeys),
 		workers: make(chan struct{}, d.Config.Workers),
+		chains:  map[string]*chainCtl{},
 	}
+	jr, err := openJournal(d.Config.DataDir)
+	if err != nil {
+		s.log.Error("round journal unreadable; starting with an empty one", "error", err.Error())
+	}
+	s.journal = jr
 	s.runCtx, s.cancelRun = context.WithCancel(context.Background())
 	s.queue = newQueue(&s.wg, s.process)
 	return s, nil
@@ -126,27 +133,30 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// Start starts the GitLab poller. Reviews run on demand, so there is no
-// worker pool to start.
-func (s *Server) Start(ctx context.Context) error {
+// Start marks the server started and queues again the rounds that the
+// last run did not end: a restart or a crash cut them.
+func (s *Server) Start(context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	switch {
 	case s.closing:
+		s.mu.Unlock()
 		return errors.New("server: already shut down")
 	case s.started:
+		s.mu.Unlock()
 		return errors.New("server: already started")
 	}
 	s.started = true
-	if s.forges[forge.GitLab] == nil {
-		return nil
+	s.mu.Unlock()
+	for _, e := range s.journal.pending() {
+		ref := e.ref()
+		if s.forges[ref.Platform] == nil {
+			continue
+		}
+		rj := e.roundJob()
+		rj.gen = s.restartChain(ref)
+		withPR(s.log, ref).Info("round resumed after a restart", "round", rj.n, "scope", rj.scope)
+		s.queue.submit(ref, job{round: &rj, requestID: "resume-" + newRequestID()})
 	}
-	pctx, stop := context.WithCancel(ctx)
-	s.pollStop, s.pollDone = stop, make(chan struct{})
-	go func() {
-		defer close(s.pollDone)
-		s.poll(pctx, s.cfg.PollInterval)
-	}()
 	return nil
 }
 
@@ -155,24 +165,27 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.closing = true
-	stop, pollDone := s.pollStop, s.pollDone
 	s.mu.Unlock()
-	if stop != nil {
-		stop()
-		<-pollDone
-	}
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
 		close(done)
 	}()
-	defer s.cancelRun()
 	select {
 	case <-done:
+		s.cancelRun()
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
 	}
+	// The cancelled rounds still write their failed status. Give them a
+	// short time to finish, so a PR is not left at the pending status of a
+	// round that will never run.
+	s.cancelRun()
+	select {
+	case <-done:
+	case <-time.After(failWriteGrace):
+	}
+	return ctx.Err()
 }
 
 // intake runs fn only while the server accepts work.

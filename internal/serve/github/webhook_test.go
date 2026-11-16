@@ -4,6 +4,7 @@
 package github
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -141,8 +142,8 @@ func TestParseFixtures(t *testing.T) {
 			}
 		}},
 		{"pull_request_review_thread_resolved.json", "pull_request_review_thread", func(t *testing.T, ev forge.Event) {
-			if ev.Kind != forge.EventThreadResolved || ev.Ref != testRef || !ev.PR.Draft || !ev.PR.AuthorIsBot {
-				t.Fatalf("event = %+v pr = %+v", ev, ev.PR)
+			if ev.Kind != forge.EventIgnored {
+				t.Fatalf("event = %+v", ev)
 			}
 		}},
 		{"issue_comment_created.json", "issue_comment", func(t *testing.T, ev forge.Event) {
@@ -217,6 +218,54 @@ func TestParseCommentVariants(t *testing.T) {
 				t.Fatalf("kind = %s, want %s", ev.Kind, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseCommentMentions(t *testing.T) {
+	fa := newFakeAPI(t)
+	f, _ := fa.forge(t)
+	f.SetMentions([]string{"ocr"})
+	base := fixture(t, "issue_comment_created.json")
+	withBody := func(body string) []byte {
+		var m map[string]any
+		_ = json.Unmarshal(base, &m)
+		m["comment"].(map[string]any)["body"] = body
+		b, _ := json.Marshal(m)
+		return b
+	}
+	kind := func(body string) forge.EventKind {
+		t.Helper()
+		ev, err := parse(t, f, "issue_comment", withBody(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ev.Kind
+	}
+	slugFix := "@" + testSlug + " fix"
+	if got := kind(slugFix); got != forge.EventIgnored {
+		t.Fatalf("slug not known yet: kind = %s", got)
+	}
+	if got := kind("@OCR: review"); got != forge.EventCommand {
+		t.Fatalf("extra name before the slug is known: kind = %s", got)
+	}
+	if _, err := f.BotLogin(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if names := f.CommandNames(); len(names) != 2 || names[0] != testSlug || names[1] != "ocr" {
+		t.Fatalf("names %v", names)
+	}
+	for body, want := range map[string]forge.EventKind{
+		slugFix:                            forge.EventCommand,
+		"@" + testSlug + ", review-commit": forge.EventCommand,
+		"@" + testSlug:                     forge.EventCommand,
+		"@" + testSlug + " hello":          forge.EventCommand,
+		"@someone fix":                     forge.EventIgnored,
+		"thanks @" + testSlug + " fix":     forge.EventIgnored,
+		"see below\n@" + testSlug + " fix": forge.EventIgnored,
+	} {
+		if got := kind(body); got != want {
+			t.Errorf("%q: kind = %s, want %s", body, got, want)
+		}
 	}
 }
 

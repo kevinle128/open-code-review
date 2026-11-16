@@ -56,27 +56,21 @@ func TestLocaleFiles_SameKeys(t *testing.T) {
 	}
 }
 
-func TestLocale_EveryCategoryAndSeverityHasAKey(t *testing.T) {
+func TestLocale_EveryKeyTheServiceUsesExists(t *testing.T) {
 	en := mustLocale(t, "en")
-	for _, c := range []string{"bug", "security", "performance", "maintainability", "test", "style", "documentation", "other"} {
-		if _, ok := en["category."+c]; !ok {
-			t.Fatalf("category.%s missing", c)
-		}
-	}
-	for _, s := range []string{"critical", "high", "medium", "low"} {
-		if _, ok := en["severity."+s]; !ok {
-			t.Fatalf("severity.%s missing", s)
-		}
-	}
-	for _, k := range []string{KindFull, KindIncremental, KindManualFull, KindManualCommit} {
-		if _, ok := en["run.kind."+k]; !ok {
-			t.Fatalf("run.kind.%s missing", k)
-		}
+	keys := []string{"summary.status." + ChainRunning, "summary.status." + ChainSuccess, "summary.status." + ChainFailure,
+		"status." + ChainSuccess, "status." + ChainFailure, "round.scenario", "round.how_fixed", "round.tests_added",
+		"round.other_changes", "round.diff_summary", "round.diff_shared", "round.diff_cut", "round.proposed_diff", "round.proposal_cut", "round.body_cut"}
+	for _, r := range []string{ReportLimit, ReportFork, ReportPush, ReportEngine, ReportNoEdit} {
+		keys = append(keys, "round.report."+r)
 	}
 	// The per-file failure classes of session.FailureClass.
 	for _, c := range []string{"provider", "timeout", "cancelled", "configuration", "input", "budget", "panic", "unknown"} {
-		if _, ok := en["failure."+c]; !ok {
-			t.Fatalf("failure.%s missing", c)
+		keys = append(keys, "failure."+c)
+	}
+	for _, k := range keys {
+		if _, ok := en[k]; !ok {
+			t.Fatalf("%s missing", k)
 		}
 	}
 }

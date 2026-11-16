@@ -8,24 +8,25 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/alibaba/open-code-review/internal/serve/forge"
 )
 
 var (
 	shaA = strings.Repeat("a", 40)
 	shaB = strings.Repeat("b", 40)
 	shaC = strings.Repeat("c", 40)
-	shaD = strings.Repeat("d", 40)
 )
 
 func sampleMarker() Marker {
-	return Marker{V: 1, Auto: 2, Max: 3, Reviewed: shaB, Base: shaA, Runs: []Run{
-		{N: 1, Kind: KindFull, From: shaA, To: shaC, IDs: []string{"r1-cccccccc-01020304"}},
-		{N: 2, Kind: KindIncremental, From: shaC, To: shaB, IDs: []string{}},
+	return Marker{V: 2, Status: ChainRunning, Max: 3, Rounds: []Round{
+		{N: 1, Scope: ScopeFull, From: shaA, To: shaB, Real: 2, Fixed: 2, Fix: shaC},
+		{N: 2, Scope: ScopeCommit, To: shaC},
 	}}
 }
 
-func rawMarker(json string) string {
-	return "<!-- ocr-serve:v1 " + base64.StdEncoding.EncodeToString([]byte(json)) + " -->"
+func rawMarker(version, json string) string {
+	return "<!-- ocr-serve:v" + version + " " + base64.StdEncoding.EncodeToString([]byte(json)) + " -->"
 }
 
 func TestMarker_RoundTrip(t *testing.T) {
@@ -37,15 +38,10 @@ func TestMarker_RoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(*got, m) {
 		t.Fatalf("got %+v want %+v", *got, m)
 	}
-	init := Initial(4)
-	got, err = Decode(Encode(init))
-	if err != nil || got.Auto != 0 || got.Max != 4 || got.V != 1 {
-		t.Fatalf("initial: %+v %v", got, err)
-	}
 }
 
-func TestDecode_Absent(t *testing.T) {
-	for _, body := range []string{"", "no marker here", "<!-- ocr-checkpoint:v1 abc= -->"} {
+func TestDecode_AbsentOrLegacy(t *testing.T) {
+	for _, body := range []string{"", "no marker here", "<!-- ocr-checkpoint:v1 abc= -->", rawMarker("1", `{"v":1,"auto":2}`)} {
 		m, err := Decode(body)
 		if m != nil || err != nil {
 			t.Fatalf("%q: %v %v", body, m, err)
@@ -55,20 +51,24 @@ func TestDecode_Absent(t *testing.T) {
 
 func TestDecode_Rejects(t *testing.T) {
 	good := Encode(sampleMarker())
+	run := func(r string) string {
+		return rawMarker("2", `{"v":2,"status":"success","rounds":[`+r+`]}`)
+	}
 	cases := []struct{ name, body, want string }{
 		{"two markers", good + "\n" + good, "found 2"},
-		{"one good one mangled", good + "\n<!-- ocr-serve:v1 !!! -->", "found 2"},
-		{"malformed", "<!-- ocr-serve:v1 not base64! -->", "malformed"},
-		{"future version tag", "<!-- ocr-serve:v2 YWJj -->", "malformed"},
-		{"garbage base64", "<!-- ocr-serve:v1 YWJj= -->", "not base64"},
-		{"not json", rawMarker("hello"), "not JSON"},
-		{"wrong version", rawMarker(`{"v":2}`), "version 2"},
-		{"negative count", rawMarker(`{"v":1,"auto":-1}`), "negative"},
-		{"short reviewed sha", rawMarker(`{"v":1,"auto":1,"reviewed":"abc123"}`), "reviewed"},
-		{"upper case base", rawMarker(`{"v":1,"base":"` + strings.Repeat("A", 40) + `"}`), "base"},
-		{"bad run from", rawMarker(`{"v":1,"runs":[{"n":1,"kind":"full","from":"x","to":"` + shaA + `"}]}`), "runs[0].from"},
-		{"unknown run kind", rawMarker(`{"v":1,"runs":[{"n":1,"kind":"partial","to":"` + shaA + `"}]}`), "runs[0].kind"},
-		{"missing run to", rawMarker(`{"v":1,"runs":[{"n":1,"kind":"full","from":"` + shaA + `"}]}`), "runs[0].to"},
+		{"one good one mangled", good + "\n<!-- ocr-serve:v2 !!! -->", "found 2"},
+		{"malformed", "<!-- ocr-serve:v2 not base64! -->", "malformed"},
+		{"future version tag", rawMarker("3", "{}"), "version 3"},
+		{"garbage base64", "<!-- ocr-serve:v2 YWJj= -->", "not base64"},
+		{"not json", rawMarker("2", "hello"), "not JSON"},
+		{"wrong version", rawMarker("2", `{"v":5,"status":"success"}`), "version 5"},
+		{"unknown status", rawMarker("2", `{"v":2,"status":"done"}`), "status"},
+		{"negative max", rawMarker("2", `{"v":2,"status":"success","max":-1}`), "negative"},
+		{"zero round", run(`{"n":0,"scope":"full","to":"` + shaA + `"}`), "rounds[0]"},
+		{"unknown scope", run(`{"n":1,"scope":"partial","to":"` + shaA + `"}`), "rounds[0].scope"},
+		{"bad from", run(`{"n":1,"scope":"full","from":"x","to":"` + shaA + `"}`), "rounds[0].from"},
+		{"bad fix", run(`{"n":1,"scope":"full","fix":"x","to":"` + shaA + `"}`), "rounds[0].fix"},
+		{"missing to", run(`{"n":1,"scope":"full"}`), "rounds[0].to"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,28 +80,32 @@ func TestDecode_Rejects(t *testing.T) {
 	}
 }
 
+func TestMarker_CommitState(t *testing.T) {
+	cases := map[string]forge.CommitState{ChainRunning: forge.StatusPending, ChainSuccess: forge.StatusSuccess, ChainFailure: forge.StatusFailure}
+	for st, want := range cases {
+		if got := (Marker{Status: st}).CommitState(); got != want {
+			t.Errorf("%s: %s, want %s", st, got, want)
+		}
+	}
+}
+
 func TestPreserve(t *testing.T) {
 	old := "old summary\n\n" + Encode(sampleMarker())
 	got := Preserve("new summary", old)
-	if m, err := Decode(got); err != nil || m == nil || m.Auto != 2 || !strings.HasPrefix(got, "new summary\n\n") {
+	if m, err := Decode(got); err != nil || m == nil || len(m.Rounds) != 2 || !strings.HasPrefix(got, "new summary\n\n") {
 		t.Fatalf("got %q m=%v err=%v", got, m, err)
 	}
-
-	withOwn := "new summary\n" + Encode(Initial(3))
+	withOwn := "new summary\n" + Encode(Marker{Status: ChainSuccess})
 	if got := Preserve(withOwn, old); got != withOwn {
 		t.Fatalf("new marker replaced: %q", got)
 	}
-
-	twoOld := old + "\n" + Encode(Initial(3))
+	twoOld := old + "\n" + Encode(Marker{Status: ChainSuccess})
 	if got := Preserve("new summary", twoOld); got != "new summary" {
 		t.Fatalf("copied from ambiguous body: %q", got)
 	}
-
-	mangledOld := "old <!-- ocr-serve:v1 !!! -->"
-	if got := Preserve("new summary", mangledOld); got != "new summary" {
+	if got := Preserve("new summary", "old <!-- ocr-serve:v2 !!! -->"); got != "new summary" {
 		t.Fatalf("copied mangled marker: %q", got)
 	}
-
 	if got := Preserve("new summary", ""); got != "new summary" {
 		t.Fatalf("empty old: %q", got)
 	}
