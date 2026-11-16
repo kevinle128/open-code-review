@@ -84,6 +84,7 @@ type hookChange struct {
 
 type hookPayload struct {
 	ObjectKind       string                `json:"object_kind"`
+	EventName        string                `json:"event_name"`
 	User             hookUser              `json:"user"`
 	Project          hookProject           `json:"project"`
 	ObjectAttributes json.RawMessage       `json:"object_attributes"`
@@ -101,6 +102,12 @@ func (f *Forge) ParseEvent(h http.Header, body []byte) (forge.Event, error) {
 		return forge.Event{}, fmt.Errorf("gitlab: decode webhook: %w", err)
 	}
 	if strings.TrimSpace(p.ObjectKind) == "" {
+		// A system hook also sends instance events (project_update,
+		// user_add_to_team, ...) that carry event_name and no object_kind.
+		// Refusing them would make GitLab count the hook as failing.
+		if strings.TrimSpace(p.EventName) != "" {
+			return forge.Event{Kind: forge.EventIgnored, DeliveryID: deliveryID(h)}, nil
+		}
 		return forge.Event{}, errors.New("gitlab: webhook body without object_kind")
 	}
 	ev := forge.Event{
