@@ -286,6 +286,33 @@ func TestIgnoreRules_Match(t *testing.T) {
 	}
 }
 
+func TestIgnoreRules_GitLabTargetBranches(t *testing.T) {
+	c, err := Load(env(map[string]string{EnvGitLabTargetBranch: "^dev$"}), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		s    IgnoreSubject
+		ok   bool
+		rule string
+	}{
+		{"gitlab to dev", IgnoreSubject{GitLab: true, TargetBranch: "dev"}, false, ""},
+		{"gitlab to main", IgnoreSubject{GitLab: true, TargetBranch: "main"}, true, "gitlab_target_branch:main"},
+		{"gitlab to develop", IgnoreSubject{GitLab: true, TargetBranch: "develop"}, true, "gitlab_target_branch:develop"},
+		{"gitlab without target, as for a command", IgnoreSubject{GitLab: true, Repo: "team/app"}, false, ""},
+		{"github to main", IgnoreSubject{TargetBranch: "main"}, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, rule := c.Ignore.Match(tc.s)
+			if ok != tc.ok || rule != tc.rule {
+				t.Fatalf("got %v %q want %v %q", ok, rule, tc.ok, tc.rule)
+			}
+		})
+	}
+}
+
 func TestIgnoreRules_EmptyValueNeverMatches(t *testing.T) {
 	c, err := Load(env(map[string]string{EnvIgnoreTitles: ".*"}), files(nil))
 	if err != nil {

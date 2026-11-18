@@ -26,6 +26,8 @@ func TestDispatchFilters(t *testing.T) {
 			SourceBranches: []*regexp.Regexp{regexp.MustCompile(`^release/`)},
 			TargetBranches: []*regexp.Regexp{regexp.MustCompile(`^legacy$`)},
 			Labels:         []string{"no-review"},
+
+			GitLabTargetBranches: []*regexp.Regexp{regexp.MustCompile(`^dev$`)},
 		}
 	})
 	withPR := func(ref forge.PRRef, id string, mut func(*forge.PR)) forge.Event {
@@ -51,6 +53,8 @@ func TestDispatchFilters(t *testing.T) {
 		{"title rule", withPR(ghRef(1), "r3", func(p *forge.PR) { p.Title = "WIP: x" }), "ignore rule title:(?i)^wip"},
 		{"source rule", withPR(ghRef(1), "r4", func(p *forge.PR) { p.SourceBranch = "release/1" }), "ignore rule source_branch:^release/"},
 		{"target rule", withPR(ghRef(1), "r5", func(p *forge.PR) { p.TargetBranch = "legacy" }), "ignore rule target_branch:^legacy$"},
+		{"gitlab target not allowed", withPR(glRef(7), "r7", func(*forge.PR) {}), "ignore rule gitlab_target_branch:main"},
+		{"gitlab target allowed", withPR(glRef(8), "r8", func(p *forge.PR) { p.TargetBranch = "dev" }), "queued opened"},
 		{"label rule", withPR(ghRef(1), "r6", func(p *forge.PR) { p.Labels = []string{"x", "no-review"} }), "ignore rule label:no-review"},
 		{"command on ignored repo", forge.Event{Kind: forge.EventCommand, Ref: skipRef, DeliveryID: "c0", CommentID: "1", CommentBody: "/review"}, "ignore rule repo:^skip/"},
 		{"command bypasses author rule", forge.Event{Kind: forge.EventCommand, Ref: ghRef(2), DeliveryID: "c1", CommentID: "2", CommentBody: "/review",
