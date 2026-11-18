@@ -7,6 +7,7 @@ package review
 
 import (
 	"context"
+	"errors"
 
 	"github.com/alibaba/open-code-review/internal/config/rules"
 	"github.com/alibaba/open-code-review/internal/model"
@@ -113,10 +114,26 @@ type Workspace interface {
 	Commit(ctx context.Context, ident forge.Identity, message string) (sha string, changed bool, err error)
 	// Push pushes sha to the checked out branch without force.
 	Push(ctx context.Context, spec forge.CloneSpec, sha string) error
+	// Rebase fetches the current tip of the branch and replays the fix
+	// commit on it, leaving the checkout on the result. A fix that does
+	// not apply is undone and gives ErrRebaseConflict; Rebased.Head is the
+	// fetched tip even then.
+	Rebase(ctx context.Context, ident forge.Identity, spec forge.CloneSpec, fix string) (Rebased, error)
+	// PushLease pushes sha to the checked out branch only while the branch
+	// is still at lease, the tip a Rebase fetched.
+	PushLease(ctx context.Context, spec forge.CloneSpec, sha, lease string) error
 	// CommitDiff returns the unified diff of sha against its first parent,
 	// with three lines of context.
 	CommitDiff(ctx context.Context, sha string) (string, error)
 }
+
+// Rebased is the result of Workspace.Rebase: Head is the branch tip that
+// was fetched, Fix the fix commit replayed on it.
+type Rebased struct{ Head, Fix string }
+
+// ErrRebaseConflict means the fix commit does not apply on the new tip of
+// the branch.
+var ErrRebaseConflict = errors.New("the fix conflicts with the moved branch")
 
 // Workspaces hands out checkout slots. The release func empties the slot and
 // must be called exactly once.

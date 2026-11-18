@@ -52,6 +52,9 @@ tests_none = not run
 tests_passed = {command} passed
 tests_failed = {command} failed or could not run; the fix was pushed anyway
 tests_output = End of the output
+rebase = Rebased
+rebased = The branch moved while the round ran, so the fix was rebased onto the new head {head}.
+rebased_tests = The tests ran on the old head {old}, not on the rebased tree.
 scope = Scope
 scope_value = reviewed {reviewed}/{total} files
 next = Next
@@ -69,6 +72,7 @@ report.fork = The bot cannot push to branch {branch}: the head branch is in a fo
 report.push = The bot cannot push to branch {branch}: {reason}. Apply the fixes yourself.
 report.engine = This review engine does not fix findings. Apply the fixes yourself.
 report.no-edit = The fix run changed no file, so nothing was pushed. Apply the fixes yourself.
+report.moved = The branch {branch} moved to {head} while the round ran, and the fix conflicts with the new head, so the bot did not push. Apply the fixes yourself.
 body_cut = ⚠️ This comment was cut at the comment size limit of the forge.
 
 [finding]

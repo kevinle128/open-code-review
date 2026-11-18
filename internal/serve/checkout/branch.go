@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/alibaba/open-code-review/internal/serve/forge"
+	"github.com/alibaba/open-code-review/internal/serve/review"
 )
 
 // gitSafety turns off what a file written into the checkout could use to
@@ -126,24 +127,20 @@ func (w *workspace) Commit(ctx context.Context, ident forge.Identity, message st
 	return strings.TrimSpace(string(out)), true, nil
 }
 
-// Push pushes sha to the branch FetchBranch checked out, without force, so
-// a branch that moved since the fetch rejects it. spec should be fresh: its
-// token may be short-lived.
-func (w *workspace) Push(ctx context.Context, spec forge.CloneSpec, sha string) error {
+// pushEnv checks spec for a push or fetch of the checked out branch and
+// returns the git environment that carries its auth header.
+func (w *workspace) pushEnv(spec forge.CloneSpec) ([]string, error) {
 	if w.branch == "" {
-		return errors.New("push: no branch checked out")
-	}
-	if !shaPattern.MatchString(sha) {
-		return fmt.Errorf("push: %q is not a commit id", sha)
+		return nil, errors.New("push: no branch checked out")
 	}
 	if spec.HeadRef != "refs/heads/"+w.branch {
-		return fmt.Errorf("push: ref %q is not the checked out branch %s", spec.HeadRef, w.branch)
+		return nil, fmt.Errorf("push: ref %q is not the checked out branch %s", spec.HeadRef, w.branch)
 	}
 	if err := validateURL(spec.URL, spec.AuthHeader != ""); err != nil {
-		return err
+		return nil, err
 	}
 	if strings.ContainsAny(spec.AuthHeader, "\r\n") {
-		return errors.New("auth header must be a single line")
+		return nil, errors.New("auth header must be a single line")
 	}
 	env := gitEnv()
 	if spec.AuthHeader != "" {
@@ -153,11 +150,104 @@ func (w *workspace) Push(ctx context.Context, spec forge.CloneSpec, sha string) 
 			"GIT_CONFIG_VALUE_0="+spec.AuthHeader,
 		)
 	}
-	args := append(append([]string{}, gitSafety...), "push", "--no-verify", "--quiet", "--end-of-options", spec.URL, sha+":"+spec.HeadRef)
+	return env, nil
+}
+
+// Push pushes sha to the branch FetchBranch checked out, without force, so
+// a branch that moved since the fetch rejects it. spec should be fresh: its
+// token may be short-lived.
+func (w *workspace) Push(ctx context.Context, spec forge.CloneSpec, sha string) error {
+	return w.push(ctx, spec, sha, "")
+}
+
+// PushLease pushes like Push and also refuses unless the remote branch is
+// at lease. It never forces: sha must descend from the branch tip.
+func (w *workspace) PushLease(ctx context.Context, spec forge.CloneSpec, sha, lease string) error {
+	if !shaPattern.MatchString(lease) {
+		return fmt.Errorf("push: lease %q is not a commit id", lease)
+	}
+	return w.push(ctx, spec, sha, lease)
+}
+
+func (w *workspace) push(ctx context.Context, spec forge.CloneSpec, sha, lease string) error {
+	env, err := w.pushEnv(spec)
+	if err != nil {
+		return err
+	}
+	if !shaPattern.MatchString(sha) {
+		return fmt.Errorf("push: %q is not a commit id", sha)
+	}
+	args := append(append([]string{}, gitSafety...), "push", "--no-verify", "--quiet")
+	if lease != "" {
+		args = append(args, "--force-with-lease="+spec.HeadRef+":"+lease)
+	}
+	args = append(args, "--end-of-options", spec.URL, sha+":"+spec.HeadRef)
 	if _, err := runGit(ctx, w.dir, env, args...); err != nil {
 		return fmt.Errorf("git push: %w", err)
 	}
 	return nil
+}
+
+// Rebase fetches the tip of the branch, moves the checkout to it and
+// replays the fix commit there. The replay keeps the author of the fix and
+// makes ident the committer. When it does not apply (a conflict, or a fix
+// the new tip already holds) the checkout goes back to the fix commit and
+// the error wraps review.ErrRebaseConflict; Head is set in that case too.
+func (w *workspace) Rebase(ctx context.Context, ident forge.Identity, spec forge.CloneSpec, fix string) (review.Rebased, error) {
+	var none review.Rebased
+	if !shaPattern.MatchString(fix) {
+		return none, fmt.Errorf("rebase: %q is not a commit id", fix)
+	}
+	if ident.Name == "" || ident.Email == "" || strings.ContainsAny(ident.Name+ident.Email, "\r\n<>") {
+		return none, fmt.Errorf("rebase: invalid identity %q <%s>", ident.Name, ident.Email)
+	}
+	env, err := w.pushEnv(spec)
+	if err != nil {
+		return none, err
+	}
+	sum, err := w.gitConfigSum()
+	if err != nil {
+		return none, err
+	}
+	if sum != w.configSum {
+		return none, errors.New("rebase: the repository config changed during the run")
+	}
+	args := append(append([]string{}, gitSafety...), "fetch", "--no-tags", "--quiet", "--end-of-options", spec.URL, "+"+spec.HeadRef+":"+HeadRef)
+	if _, err := runGit(ctx, w.dir, env, args...); err != nil {
+		return none, fmt.Errorf("git fetch: %w", err)
+	}
+	out, err := runGit(ctx, w.dir, gitEnv(), "rev-parse", "--verify", "--end-of-options", HeadRef+"^{commit}")
+	if err != nil {
+		return none, fmt.Errorf("resolve fetched head: %w", err)
+	}
+	head := strings.TrimSpace(string(out))
+	if !shaPattern.MatchString(head) {
+		return none, fmt.Errorf("resolve fetched head: %q is not a commit id", head)
+	}
+	got := review.Rebased{Head: head}
+	local := gitEnv()
+	if _, err := runGit(ctx, w.dir, local, "checkout", "-q", "-B", w.branch, head); err != nil {
+		return got, fmt.Errorf("git checkout: %w", err)
+	}
+	pick := append(local,
+		"GIT_COMMITTER_NAME="+ident.Name, "GIT_COMMITTER_EMAIL="+ident.Email)
+	args = append(append([]string{}, gitSafety...), "-c", "commit.gpgsign=false", "cherry-pick", "--no-edit", fix)
+	if _, err := runGit(ctx, w.dir, pick, args...); err != nil {
+		// The abort and the checkout restore the fix commit; the original
+		// error is the one to report.
+		_, _ = runGit(context.WithoutCancel(ctx), w.dir, local, "cherry-pick", "--abort")
+		if _, rerr := runGit(context.WithoutCancel(ctx), w.dir, local, "checkout", "-q", "-f", "-B", w.branch, fix); rerr != nil {
+			return got, fmt.Errorf("restore the fix commit: %w", rerr)
+		}
+		return got, fmt.Errorf("%w: %v", review.ErrRebaseConflict, err)
+	}
+	out, err = runGit(ctx, w.dir, local, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return got, fmt.Errorf("resolve commit: %w", err)
+	}
+	got.Fix = strings.TrimSpace(string(out))
+	w.start = head
+	return got, nil
 }
 
 // maxCommitDiff bounds the diff CommitDiff returns. The round comment

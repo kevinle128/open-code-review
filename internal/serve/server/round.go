@@ -564,15 +564,41 @@ func (r *roundRun) fix(ctx context.Context, ws review.Workspace, findings []revi
 	if err != nil {
 		return err
 	}
-	if err := ws.Push(ctx, spec, sha); err != nil {
-		r.log.Warn("fix push rejected", "error", err.Error())
+	pushErr := ws.Push(ctx, spec, sha)
+	for try := 0; pushErr != nil && branchMoved(pushErr) && try < maxRebasePushes; try++ {
+		r.log.Warn("fix push rejected because the branch moved; rebasing the fix", "error", pushErr.Error(), "try", try+1)
+		if spec, err = r.f.PushSpec(ctx, r.pr); err != nil {
+			return err
+		}
+		rb, rerr := ws.Rebase(ctx, ident, spec, sha)
+		if errors.Is(rerr, review.ErrRebaseConflict) {
+			r.log.Warn("fix conflicts with the moved branch", "head", rb.Head, "error", rerr.Error())
+			unfixed(out, state.ReportMoved, diffs)
+			out.NewHead = rb.Head
+			return nil
+		}
+		if rerr != nil {
+			// The branch cannot be read again (deleted, no access): the
+			// rejection of the first push is the reason to show.
+			r.log.Warn("rebase the fix", "error", rerr.Error())
+			break
+		}
+		sha, out.NewHead = rb.Fix, rb.Head
+		diffs, other = r.fixDiff(ctx, ws, sha, out.Fixed)
+		pushErr = ws.PushLease(ctx, spec, sha, rb.Head)
+	}
+	if pushErr != nil {
+		r.log.Warn("fix push rejected", "error", pushErr.Error())
 		unfixed(out, state.ReportPush, diffs)
-		out.PushReason = pushReason(err)
+		out.PushReason, out.NewHead = pushReason(pushErr), ""
 		return nil
 	}
-	r.log.Info("fix pushed", "commit", sha, "branch", r.pr.SourceBranch)
+	r.log.Info("fix pushed", "commit", sha, "branch", r.pr.SourceBranch, "rebased_onto", out.NewHead)
 	out.FixCommit, out.CommitURL = sha, r.f.CommitURL(r.ref, sha)
 	out.FixDiffs, out.OtherDiff = diffs, other
+	if out.NewHead != "" {
+		out.OldHead = r.pr.HeadSHA
+	}
 	return nil
 }
 
@@ -702,6 +728,27 @@ func roundFindings(cs []model.LlmComment) []review.Finding {
 }
 
 const maxPushReason = 300
+
+// maxRebasePushes bounds how often a fix is rebased and pushed again after
+// the branch moved.
+const maxRebasePushes = 2
+
+// branchMoved tells a push that git refused because the remote branch is no
+// longer where the checkout started (non-fast-forward, fetch first, stale
+// lease) from one the forge declined (permissions, protected branch, hooks),
+// which git reports as "remote rejected".
+func branchMoved(err error) bool {
+	msg := err.Error()
+	if strings.Contains(msg, "remote rejected") {
+		return false
+	}
+	for _, m := range []string{"fetch first", "non-fast-forward", "stale info"} {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // pushReason keeps the git text after the exit status, which says why the
 // forge refused (protected branch, missing permission, branch moved). The

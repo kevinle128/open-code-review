@@ -753,7 +753,13 @@ A chain is a series of rounds on one PR. One round:
    GitLab: the bot user's name and commit email) with the fix run's commit
    message, and pushes to the PR head branch without force. Hooks do not
    run, and a fix run that changed `.git/config`, made its own commit or left
-   the branch fails the round.
+   the branch fails the round. When git rejects the push because the branch
+   moved while the round ran (`fetch first`, non-fast-forward, stale info),
+   the service fetches the new head, replays the fix commit on it and pushes
+   again with a lease on that head, up to twice. The tests ran before the
+   rebase, so the round comment says the fix was rebased onto the new head
+   and that the tests ran on the old head. A fix that does not apply on the
+   new head is not pushed and is reported.
 4. The service posts one PR comment for the round.
 
 | Round | Starts when | Scope | Fix and push |
@@ -774,8 +780,9 @@ ends after a round that only reports. A round only reports when:
 
 - it is round `max_rounds` + 1;
 - the PR head branch is in a fork (the bot cannot push there);
-- the push is refused (protected branch, missing permission, branch moved);
-  the comment quotes git's reason;
+- the push is refused (protected branch, missing permission, deleted branch,
+  or a moved branch the fix cannot be rebased onto); the comment quotes
+  git's reason, or says the fix conflicts with the new head;
 - the fix run changed no file, or fixed none of the real findings;
 - the engine is `ocr`.
 
