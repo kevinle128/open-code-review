@@ -28,7 +28,9 @@ func TestShutdownKeepsRoundForRestart(t *testing.T) {
 	h.rev.set(func(ctx context.Context, _ review.Request) (review.Result, error) {
 		close(started)
 		<-ctx.Done()
-		return review.Result{}, ctx.Err()
+		// A multi-batch review cut mid-run returns the batches that
+		// finished as a partial result with no error.
+		return review.Result{Terminal: review.TerminalPartial}, nil
 	})
 	h.srv.queue.submit(ref, job{trigger: triggerOpened, requestID: "r"})
 	<-started
