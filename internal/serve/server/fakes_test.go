@@ -343,7 +343,10 @@ type fakeWorkspaces struct {
 	pushErrs []error
 	// rebaseErr answers Rebase; a rebase that succeeds moves the branch to
 	// movedHead and replays the fix as rebasedFix.
-	rebaseErr   error
+	rebaseErr error
+	// rebaseWaits makes Rebase wait for its context to end, as a cut
+	// cherry-pick that looks like a conflict.
+	rebaseWaits bool
 	movedHead   string
 	rebasedFix  string
 	rebases     []string // fixed sha + "@" + new head
@@ -353,9 +356,11 @@ type fakeWorkspaces struct {
 	pushed      []string // spec.HeadRef + "@" + sha
 	// onPush runs after a push, so a test can move the PR head to the fix.
 	onPush func(sha string)
-	// diff and diffErr answer CommitDiff.
-	diff    string
-	diffErr error
+	// diff and diffErr answer CommitDiff; commitDiffs, when it holds the
+	// commit, answers before diff.
+	diff        string
+	diffErr     error
+	commitDiffs map[string]string
 }
 
 // fixSHA is the commit the n-th fix makes: f, e, d, ... repeated.
@@ -387,10 +392,14 @@ func (w fakeWorkspace) Commit(_ context.Context, ident forge.Identity, message s
 	return fixSHA(len(w.w.commits)), true, nil
 }
 
-func (w fakeWorkspace) Rebase(_ context.Context, _ forge.Identity, _ forge.CloneSpec, fix string) (review.Rebased, error) {
+func (w fakeWorkspace) Rebase(ctx context.Context, _ forge.Identity, _ forge.CloneSpec, fix string) (review.Rebased, error) {
 	w.w.mu.Lock()
 	defer w.w.mu.Unlock()
 	w.w.rebases = append(w.w.rebases, fix+"@"+w.w.movedHead)
+	if w.w.rebaseWaits {
+		<-ctx.Done()
+		return review.Rebased{Head: w.w.movedHead}, fmt.Errorf("%w: %v", review.ErrRebaseConflict, ctx.Err())
+	}
 	if w.w.rebaseErr != nil {
 		return review.Rebased{Head: w.w.movedHead}, w.w.rebaseErr
 	}
@@ -435,9 +444,12 @@ func (w fakeWorkspace) Push(_ context.Context, spec forge.CloneSpec, sha string)
 
 type fakeWorkspace struct{ w *fakeWorkspaces }
 
-func (w fakeWorkspace) CommitDiff(context.Context, string) (string, error) {
+func (w fakeWorkspace) CommitDiff(_ context.Context, sha string) (string, error) {
 	w.w.mu.Lock()
 	defer w.w.mu.Unlock()
+	if d, ok := w.w.commitDiffs[sha]; ok {
+		return d, nil
+	}
 	return w.w.diff, w.w.diffErr
 }
 

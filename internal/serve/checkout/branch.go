@@ -142,7 +142,8 @@ func (w *workspace) pushEnv(spec forge.CloneSpec) ([]string, error) {
 	if strings.ContainsAny(spec.AuthHeader, "\r\n") {
 		return nil, errors.New("auth header must be a single line")
 	}
-	env := gitEnv()
+	// The round reads why a push failed from git's English text.
+	env := append(gitEnv(), "LC_ALL=C", "LANGUAGE=")
 	if spec.AuthHeader != "" {
 		env = append(env,
 			"GIT_CONFIG_COUNT=1",
@@ -238,6 +239,10 @@ func (w *workspace) Rebase(ctx context.Context, ident forge.Identity, spec forge
 		_, _ = runGit(context.WithoutCancel(ctx), w.dir, local, "cherry-pick", "--abort")
 		if _, rerr := runGit(context.WithoutCancel(ctx), w.dir, local, "checkout", "-q", "-f", "-B", w.branch, fix); rerr != nil {
 			return got, fmt.Errorf("restore the fix commit: %w", rerr)
+		}
+		if ctx.Err() != nil {
+			// The pick was cut, not refused: no conflict to report.
+			return got, fmt.Errorf("git cherry-pick: %w", ctx.Err())
 		}
 		return got, fmt.Errorf("%w: %v", review.ErrRebaseConflict, err)
 	}

@@ -564,13 +564,19 @@ func (r *roundRun) fix(ctx context.Context, ws review.Workspace, findings []revi
 	if err != nil {
 		return err
 	}
+	// diffs stay on the fix made on r.pr.HeadSHA for the report; the push
+	// shows the diffs of the commit it pushed.
+	pushed, pushedOther, fix := diffs, other, sha
 	pushErr := ws.Push(ctx, spec, sha)
-	for try := 0; pushErr != nil && branchMoved(pushErr) && try < maxRebasePushes; try++ {
+	for try := 0; pushErr != nil && ctx.Err() == nil && branchMoved(pushErr) && try < maxRebasePushes; try++ {
 		r.log.Warn("fix push rejected because the branch moved; rebasing the fix", "error", pushErr.Error(), "try", try+1)
 		if spec, err = r.f.PushSpec(ctx, r.pr); err != nil {
 			return err
 		}
 		rb, rerr := ws.Rebase(ctx, ident, spec, sha)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if errors.Is(rerr, review.ErrRebaseConflict) {
 			r.log.Warn("fix conflicts with the moved branch", "head", rb.Head, "error", rerr.Error())
 			unfixed(out, state.ReportMoved, diffs)
@@ -584,8 +590,13 @@ func (r *roundRun) fix(ctx context.Context, ws review.Workspace, findings []revi
 			break
 		}
 		sha, out.NewHead = rb.Fix, rb.Head
-		diffs, other = r.fixDiff(ctx, ws, sha, out.Fixed)
+		pushed, pushedOther = r.fixDiff(ctx, ws, sha, r.rebasedChanges(ctx, ws, fix, sha, out.Fixed))
 		pushErr = ws.PushLease(ctx, spec, sha, rb.Head)
+	}
+	if pushErr != nil && ctx.Err() != nil {
+		// A shutdown, a newer review or the fix timeout cut the push: the
+		// round fails instead of reporting a refusal by the forge.
+		return ctx.Err()
 	}
 	if pushErr != nil {
 		r.log.Warn("fix push rejected", "error", pushErr.Error())
@@ -595,11 +606,26 @@ func (r *roundRun) fix(ctx context.Context, ws review.Workspace, findings []revi
 	}
 	r.log.Info("fix pushed", "commit", sha, "branch", r.pr.SourceBranch, "rebased_onto", out.NewHead)
 	out.FixCommit, out.CommitURL = sha, r.f.CommitURL(r.ref, sha)
-	out.FixDiffs, out.OtherDiff = diffs, other
+	out.FixDiffs, out.OtherDiff = pushed, pushedOther
 	if out.NewHead != "" {
 		out.OldHead = r.pr.HeadSHA
 	}
 	return nil
+}
+
+// rebasedChanges moves the line ranges of fixed from the fix commit to the
+// same fix rebased onto a moved branch, whose earlier lines may have
+// shifted. A diff that cannot be read leaves the ranges as they are.
+func (r *roundRun) rebasedChanges(ctx context.Context, ws review.Workspace, fix, rebased string, fixed []review.Fixed) []review.Fixed {
+	from, err := ws.CommitDiff(ctx, fix)
+	if err != nil {
+		return fixed
+	}
+	to, err := ws.CommitDiff(ctx, rebased)
+	if err != nil {
+		return fixed
+	}
+	return state.ShiftChanges(from, to, fixed)
 }
 
 // fixDiff splits the diff of the fix commit among the fixed findings. A

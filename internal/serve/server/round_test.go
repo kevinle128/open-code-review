@@ -1104,6 +1104,78 @@ func TestMovedBranchThatCannotBeFetchedKeepsThePushReason(t *testing.T) {
 	}
 }
 
+// The moved head added lines above the fix, so the replayed hunk sits
+// lower in a.go than the line the fix run gave.
+const (
+	firstFixDiff   = "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -3 +3 @@\n-func A() {}\n+func A() int { return 1 }\n"
+	rebasedFixDiff = "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -10 +10 @@\n-func A() {}\n+func A() int { return 1 }\n"
+)
+
+func TestMovedBranchShowsTheRebasedHunkWithItsFinding(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(45)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		movedBranch(w)
+		w.commitDiffs = map[string]string{fixSHA(1): firstFixDiff, strings.Repeat("a", 40): rebasedFixDiff}
+	})
+	h.rev.set(func(_ context.Context, req review.Request) (review.Result, error) {
+		if req.FixCommit {
+			return review.Result{Terminal: review.TerminalComplete}, nil
+		}
+		return findingsResult(comment("a.go", 3))(context.Background(), req)
+	})
+	h.fix.set(fixWithChanges)
+	h.opened(ref)
+	h.drain()
+	note := h.gh.noteList()[0]
+	mustContain(t, note, "```diff\ndiff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -10 +10 @@")
+	if strings.Contains(note, h.loc.Text("round.other_changes")) || h.logs.has("fixed findings match no hunk of the fix commit; the round comment shows them as prose") {
+		t.Fatalf("the rebased hunk lost its finding:\n%s\nlogs:\n%s", note, h.logs.String())
+	}
+}
+
+func TestMovedBranchNotPushedProposesTheFirstFix(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(46)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		movedBranch(w)
+		w.leaseErr = errors.New("git push: exit status 1: ! [remote rejected] feature -> feature (protected branch hook declined)")
+		w.commitDiffs = map[string]string{fixSHA(1): firstFixDiff, strings.Repeat("a", 40): rebasedFixDiff}
+	})
+	h.rev.set(findingsResult(comment("a.go", 3)))
+	h.fix.set(fixWithChanges)
+	h.opened(ref)
+	h.drain()
+	note := h.gh.noteList()[0]
+	mustContain(t, note, h.loc.Text("round.proposed_diff")+"\n\n```diff\ndiff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -3 +3 @@")
+	if strings.Contains(note, "@@ -10 +10 @@") {
+		t.Fatalf("the proposed diff is the unpushed rebased commit:\n%s", note)
+	}
+}
+
+func TestMovedBranchRebaseCutByTheFixTimeoutFailsTheRound(t *testing.T) {
+	h := newHarness(t, func(c *serveconfig.Config) { c.FixTimeout = 100 * time.Millisecond })
+	ref := ghRef(47)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		movedBranch(w)
+		w.rebaseWaits = true
+	})
+	h.rev.set(findingsResult(comment("a.go", 3)))
+	h.opened(ref)
+	h.drain()
+	if got := lastStatus(h.gh); got != "1:failure" {
+		t.Fatalf("status %s", got)
+	}
+	for _, note := range h.gh.noteList() {
+		if strings.Contains(note, "rebased onto") || strings.Contains(note, "conflicts") || strings.Contains(note, "cannot push") {
+			t.Fatalf("a cut rebase is reported as a forge answer:\n%s", note)
+		}
+	}
+}
+
 func TestBranchMoved(t *testing.T) {
 	for msg, want := range map[string]bool{
 		fetchFirst: true,

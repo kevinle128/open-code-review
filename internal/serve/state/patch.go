@@ -208,3 +208,50 @@ func appendHunks(out []string, f diffFile, idx []int) []string {
 	}
 	return out
 }
+
+// ShiftChanges moves the line ranges of fixed, recorded on the commit whose
+// diff is from, to the same fix replayed elsewhere, whose diff is to. A file
+// keeps its ranges unless both diffs hold it with the same number of hunks;
+// then each range moves by the offset of the hunks it covers. fixed is not
+// changed.
+func ShiftChanges(from, to string, fixed []review.Fixed) []review.Fixed {
+	byPath := map[string]diffFile{}
+	for _, f := range parseDiff(to) {
+		byPath[f.newPath] = f
+	}
+	type pair struct{ old, cur diffFile }
+	pairs := map[string]pair{}
+	for _, f := range parseDiff(from) {
+		if g, ok := byPath[f.newPath]; ok && f.newPath != "" && len(f.hunks) > 0 && len(f.hunks) == len(g.hunks) {
+			pairs[f.newPath] = pair{f, g}
+		}
+	}
+	out := make([]review.Fixed, len(fixed))
+	for k, fx := range fixed {
+		out[k] = fx
+		out[k].Changes = make([]review.Change, len(fx.Changes))
+		for i, c := range fx.Changes {
+			out[k].Changes[i] = c
+			p, ok := pairs[cleanPath(c.Path)]
+			if !ok || c.StartLine <= 0 {
+				continue
+			}
+			first, last := -1, -1
+			for j := range p.old.hunks {
+				if claims(c, p.old, &p.old.hunks[j]) {
+					if first < 0 {
+						first = j
+					}
+					last = j
+				}
+			}
+			if first < 0 {
+				continue
+			}
+			end := max(c.EndLine, c.StartLine)
+			out[k].Changes[i].StartLine = c.StartLine + p.cur.hunks[first].newStart - p.old.hunks[first].newStart
+			out[k].Changes[i].EndLine = end + p.cur.hunks[last].newStart - p.old.hunks[last].newStart
+		}
+	}
+	return out
+}

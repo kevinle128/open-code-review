@@ -388,3 +388,24 @@ func TestRebaseValidatesInput(t *testing.T) {
 		t.Fatalf("tampered config: %v", err)
 	}
 }
+
+// TestPushEnvForcesEnglish: the round reads git's push errors as English
+// text, so a localized host must not translate them.
+func TestPushEnvForcesEnglish(t *testing.T) {
+	t.Setenv("LC_ALL", "vi_VN.UTF-8")
+	t.Setenv("LANGUAGE", "vi")
+	r := newRemote(t)
+	ws := fetchBranch(t, r)
+	env, err := ws.pushEnv(branchSpec(r))
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		last[k] = v
+	}
+	if last["LC_ALL"] != "C" || last["LANGUAGE"] != "" {
+		t.Fatalf("LC_ALL=%q LANGUAGE=%q", last["LC_ALL"], last["LANGUAGE"])
+	}
+}
