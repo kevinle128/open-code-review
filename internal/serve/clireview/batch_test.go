@@ -265,7 +265,8 @@ func TestReviewWithAFailedBatchIsPartial(t *testing.T) {
 	rev.Batching = Batching{Lines: 6}
 	var logs bytes.Buffer
 	rev.Log = slog.New(slog.NewTextHandler(&logs, nil))
-	res, err := rev.Review(context.Background(), review.Request{RepoDir: r.dir})
+	req := review.Request{RepoDir: r.dir, Checkpoint: filepath.Join(t.TempDir(), "round-1")}
+	res, err := rev.Review(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,6 +286,22 @@ func TestReviewWithAFailedBatchIsPartial(t *testing.T) {
 	if !strings.Contains(strings.Join(res.Warnings, "\n"), "batch 1/2: fake review: usage limit") ||
 		!strings.Contains(logs.String(), `msg="review batch failed"`) {
 		t.Fatalf("warnings %v logs %s", res.Warnings, logs.String())
+	}
+
+	// The same review started again, as after a restart, runs only the
+	// batch that did not finish and reuses the saved answer of the other.
+	cli.runs = nil
+	cli.answer = func(int) (string, error) { return answerJSON(findingJSON("api/a.go", 3, "Nil check")), nil }
+	res, err = rev.Review(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ran := cli.runs[2]; len(cli.runs) != 1 || ran {
+		t.Fatalf("runs after the restart %v", cli.runs)
+	}
+	if res.Terminal != review.TerminalComplete || res.Coverage.Reviewed != 3 || len(res.Findings) != 2 ||
+		!strings.Contains(logs.String(), "review batch reused from a checkpoint") {
+		t.Fatalf("result after the restart %+v", res)
 	}
 }
 

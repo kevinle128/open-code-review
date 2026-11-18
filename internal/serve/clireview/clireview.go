@@ -11,6 +11,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -187,6 +189,12 @@ func (r *Reviewer) runBatch(ctx context.Context, req review.Request, sel Selecti
 		}
 		r.logger().Info("review batch", attrs...)
 	}()
+	saved := batchCheckpoint(req, sel, b)
+	if ans, ok := loadAnswer(saved); ok {
+		r.logger().Info("review batch reused from a checkpoint", "batch", b.index+1, "batches", b.count)
+		out.findings = ans.Findings
+		return out
+	}
 	run, err := r.Homes.New()
 	if err != nil {
 		out.err = err
@@ -220,7 +228,60 @@ func (r *Reviewer) runBatch(ctx context.Context, req review.Request, sel Selecti
 		return out
 	}
 	out.findings = ans.Findings
+	if err := saveAnswer(saved, ans); err != nil {
+		out.warnings = append(out.warnings, err.Error())
+	}
 	return out
+}
+
+// batchCheckpoint is the file that keeps the answer of batch b, or "" when
+// the request has no checkpoint directory. The name hashes what the batch
+// reviews, so a batch of another commit, mode or file list never matches.
+func batchCheckpoint(req review.Request, sel Selection, b batch) string {
+	if req.Checkpoint == "" {
+		return ""
+	}
+	h := sha256.New()
+	for _, part := range []string{mode(req), sel.Base, sel.Head, req.Commit, strconv.FormatBool(req.FixCommit)} {
+		h.Write([]byte(part + "\x00"))
+	}
+	for _, p := range b.paths {
+		h.Write([]byte(p + "\n"))
+	}
+	return filepath.Join(req.Checkpoint, "batch-"+hex.EncodeToString(h.Sum(nil))[:24]+".json")
+}
+
+// loadAnswer reads a saved batch answer. A missing or unreadable file means
+// the batch runs again.
+func loadAnswer(path string) (answer, bool) {
+	var ans answer
+	if path == "" {
+		return ans, false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(b, &ans) != nil || ans.Findings == nil {
+		return ans, false
+	}
+	return ans, true
+}
+
+// saveAnswer keeps a batch answer through a rename, so a restart leaves the
+// whole file or none of it.
+func saveAnswer(path string, ans answer) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("save batch checkpoint: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := writeJSON(tmp, ans); err != nil {
+		return fmt.Errorf("save batch checkpoint: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("save batch checkpoint: %w", err)
+	}
+	return nil
 }
 
 func (r *Reviewer) logger() *slog.Logger {
