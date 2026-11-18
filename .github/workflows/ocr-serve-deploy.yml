@@ -1,0 +1,57 @@
+# Deploys `ocr serve` (PM2 app `ocr-review`) on the VTC server after a merge
+# to main. The job runs on the server itself: a runner registered for this
+# repository with only the label `ocr-deploy` (no default `self-hosted`
+# label, so the CI jobs never land on that host). It runs the serve tests
+# with the host toolchain, then deploy/pm2/deploy.sh, which builds main,
+# swaps the binary, reloads PM2 and waits for /healthz to report the new
+# commit. A review that runs during the deploy resumes after it from the
+# batches it finished.
+name: OCR serve deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+      - 'cmd/**'
+      - 'deploy/pm2/**'
+      - '.github/workflows/ocr-serve-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Deploys run one at a time and are never cancelled half way.
+concurrency:
+  group: ocr-serve-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'kevinle128/open-code-review'
+    runs-on: [ocr-deploy]
+    timeout-minutes: 30
+    environment: ocr-review
+    env:
+      OCR_REVIEW_BRANCH: main
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Serve tests
+        run: go test -count=1 ./internal/serve/... ./internal/config/serveconfig/...
+
+      - name: Deploy
+        run: bash deploy/pm2/deploy.sh
+
+      - name: Check the deployed commit
+        run: |
+          want=$(git rev-parse --short=7 HEAD)
+          body=$(curl -fsS --max-time 5 http://127.0.0.1:3012/healthz)
+          echo "$body"
+          case "$body" in
+            *"\"version\":\"$want"*) ;;
+            *) echo "::warning::/healthz does not report $want; main may have moved during the deploy" ;;
+          esac
