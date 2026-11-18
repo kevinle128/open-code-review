@@ -119,8 +119,8 @@ func (f *Forge) mrPipeline(ctx context.Context, path string, iid int, sha string
 	}
 	usesMRPipelines := false
 	for attempt := 0; ; attempt++ {
-		var list []pipelineInfo
-		if _, err := f.c.call(ctx, http.MethodGet, path+"/merge_requests/"+strconv.Itoa(iid)+"/pipelines", nil, nil, &list); err != nil {
+		list, err := paginate[pipelineInfo](ctx, f.c, path+"/merge_requests/"+strconv.Itoa(iid)+"/pipelines", nil)
+		if err != nil {
 			return mrPipelineRef{}, err
 		}
 		first := true
@@ -164,9 +164,9 @@ func (f *Forge) playAfterReviewJobs(ctx context.Context, path string, pipeline i
 	if len(f.cfg.AfterReviewJobs) == 0 {
 		return nil
 	}
-	var jobs []pipelineJob
 	q := url.Values{"scope[]": {"manual"}}
-	if _, err := f.c.call(ctx, http.MethodGet, path+"/pipelines/"+strconv.FormatInt(pipeline, 10)+"/jobs", q, nil, &jobs); err != nil {
+	jobs, err := paginate[pipelineJob](ctx, f.c, path+"/pipelines/"+strconv.FormatInt(pipeline, 10)+"/jobs", q)
+	if err != nil {
 		return err
 	}
 	var errs []error

@@ -130,6 +130,47 @@ func TestSetStatusIntoMRPipeline(t *testing.T) {
 	}
 }
 
+// TestSetStatusPaginatesPipelinesAndJobs: the merge request pipeline and the
+// manual jobs are found on a later page of the GitLab lists, behind
+// push and external pipelines.
+func TestSetStatusPaginatesPipelinesAndJobs(t *testing.T) {
+	f := newFake(t)
+	sha := strings.Repeat("d", 40)
+	other := strings.Repeat("e", 40)
+	f.handle("GET /projects/42/merge_requests/5/pipelines", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") != "2" {
+			w.Header().Set("X-Next-Page", "2")
+			writeJSON(w, 200, []map[string]any{mrPipe(82, other, "external"), mrPipe(81, other, "push")})
+			return
+		}
+		writeJSON(w, 200, []map[string]any{mrPipe(80, sha, mrPipelineSource)})
+	})
+	f.handle("GET /projects/42/pipelines/80/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") != "2" {
+			w.Header().Set("X-Next-Page", "2")
+			writeJSON(w, 200, []map[string]any{{"id": 910, "name": "deploy"}})
+			return
+		}
+		writeJSON(w, 200, []map[string]any{{"id": 911, "name": "unit-test"}})
+	})
+	f.json("POST /projects/42/jobs/911/play", 200, map[string]any{"id": 911})
+	f.json("POST /projects/42/statuses/"+sha, 201, map[string]any{"id": 1})
+	fg := newTestForge(t, f, nil)
+	fg.cfg.AfterReviewJobs = []string{"unit-test"}
+	pr := forge.PR{Ref: testRef, SourceBranch: "feat/x"}
+
+	if err := fg.SetStatus(context.Background(), pr, sha, forge.StatusSuccess, "x"); err != nil {
+		t.Fatal(err)
+	}
+	w := f.writes()
+	if len(w) != 2 || w[1].Path != "/projects/42/jobs/911/play" {
+		t.Fatalf("writes %+v", w)
+	}
+	if body := statusBody(t, w[0]); body["pipeline_id"] != "80" {
+		t.Fatalf("body %v", body)
+	}
+}
+
 // TestSetStatusOldCommitStartsNothing: a success on a commit that is no
 // longer the newest one (the round's commit, after a person pushed) goes
 // into its pipeline but does not start the tests there.
