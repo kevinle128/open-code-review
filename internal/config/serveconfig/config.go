@@ -43,6 +43,7 @@ const (
 	EnvIgnoreTargetBranch  = "OCR_SERVE_IGNORE_TARGET_BRANCHES"
 	EnvIgnoreLabels        = "OCR_SERVE_IGNORE_LABELS"
 	EnvGitLabTargetBranch  = "OCR_SERVE_GITLAB_TARGET_BRANCHES"
+	EnvGitLabAfterReview   = "OCR_SERVE_GITLAB_AFTER_REVIEW_JOBS"
 	EnvBotIndicators       = "OCR_SERVE_BOT_INDICATORS"
 	EnvMentions            = "OCR_SERVE_MENTIONS"
 	EnvGitHubAppID         = "OCR_SERVE_GITHUB_APP_ID"
@@ -153,6 +154,9 @@ type GitLabConfig struct {
 	AdminToken    string
 	HookURL       string
 	BotUsername   string
+	// AfterReviewJobs names the manual merge request jobs that the service
+	// starts when the review passes, such as the unit tests.
+	AfterReviewJobs []string
 }
 
 // IgnoreRules skip automatic reviews. Patterns are RE2 and match anywhere in
@@ -485,6 +489,8 @@ func (l *loader) gitlab() *GitLabConfig {
 		WebhookSecret: l.secret(EnvGitLabWebhookSecret),
 		AdminToken:    l.secret(EnvGitLabAdminToken),
 		BotUsername:   strings.TrimSpace(l.getenv(EnvGitLabBotUsername)),
+
+		AfterReviewJobs: splitList(l.getenv(EnvGitLabAfterReview)),
 	}
 	if strings.TrimSpace(l.getenv(EnvGitLabHookURL)) != "" {
 		g.HookURL = l.baseURL(EnvGitLabHookURL, "")
