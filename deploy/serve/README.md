@@ -80,6 +80,7 @@ OCR_SERVE_GITLAB_WEBHOOK_SECRET=[[OCR_SERVE_GITLAB_WEBHOOK_SECRET]]
 # Optional; empty uses the default.
 OCR_SERVE_IGNORE_AUTHORS=
 OCR_SERVE_GITLAB_TARGET_BRANCHES=
+OCR_SERVE_GITLAB_AFTER_REVIEW_JOBS=
 OCR_SERVE_MAX_ROUNDS=
 OCR_SERVE_REVIEW_TIMEOUT=
 OCR_SERVE_FIX_TIMEOUT=
@@ -271,6 +272,7 @@ setting both forms is an error.
 | `OCR_SERVE_IGNORE_TARGET_BRANCHES` | empty | Same format. |
 | `OCR_SERVE_IGNORE_LABELS` | empty | Comma-separated, exact match. |
 | `OCR_SERVE_GITLAB_TARGET_BRANCHES` | empty | Comma-separated RE2 patterns, GitLab only. When set, a merge request whose target branch matches none of them is not reviewed and gets a success status. Anchor the pattern (`^dev$`): `dev` alone also matches `develop`. Commands such as `@<bot> review` still run. |
+| `OCR_SERVE_GITLAB_AFTER_REVIEW_JOBS` | empty | Comma-separated job names. On a review `success` the service starts these manual jobs in the newest merge request pipeline; see [Merge gate](#merge-gate). |
 | `OCR_SERVE_EXCLUDE` | empty | Comma-separated globs added to the serve file filter for every repository; see [File filter](#file-filter). |
 | `OCR_SERVE_BOT_INDICATORS` | `bot` | Substrings that mark a GitLab sender as a bot. The service ignores comments from a bot; PR events from a bot that is not the service run as usual. |
 | `OCR_SERVE_MENTIONS` | empty | Comma-separated extra names users may tag the bot with to run a command (`@<name> review`), on top of the GitHub App slug and the GitLab bot username. Letters, digits, `-`, `_` and `.` only, without `@`. |
@@ -891,11 +893,37 @@ status `pending`, and the next start runs that round again.
 
   GitHub enforces branch protection on private repositories only with a paid
   plan; the Free plan enforces it on public repositories.
-- GitLab: `POST /projects/:id/statuses/:sha` with `name=ocr-review` and
-  `ref` set to the source branch. GitLab counts the status as an external
-  pipeline, so "Pipelines must succeed" blocks the merge; see
-  [GitLab hooks](#gitlab-hooks). GitLab's "Cannot transition status" answer
-  means the status already has that state and is not an error.
+- GitLab: `POST /projects/:id/statuses/:sha` with `name=ocr-review`. GitLab's
+  "Cannot transition status" answer means the status already has that state
+  and is not an error.
+  - The merge request has a merge request pipeline for the commit (source
+    `merge_request_event`): the status gets that `pipeline_id` and shows as
+    one more job in it. "Pipelines must succeed" checks only that pipeline,
+    so a status outside it would not block the merge. The pipeline of a
+    fresh push appears a moment later, so when the project runs merge
+    request pipelines the service waits up to 14 s for it.
+  - No merge request pipeline: `ref` is the source branch and GitLab counts
+    the status as an external pipeline; see [GitLab hooks](#gitlab-hooks).
+    A failed pipeline lookup also falls back to this, and is logged.
+  - **Tests after the review**: on `success` in the newest merge request
+    pipeline, the service starts the manual jobs named in
+    `OCR_SERVE_GITLAB_AFTER_REVIEW_JOBS`. A project that wants its tests to
+    run once, on the reviewed commit, and not on every fix commit of the
+    chain, declares them like this (job name `unit-test` in that variable):
+
+    ```yaml
+    unit-test:
+      rules:
+        - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+          when: manual          # started by ocr-review when the review passes
+          allow_failure: false  # the pipeline, and the merge, wait for it
+    ```
+
+    The pipeline stays `manual` while the review runs and turns green only
+    when the review and the tests pass. A chain that fails leaves the tests
+    unstarted; a person can still press Play. A merge request that is not
+    reviewed (ignore rule, review off) gets `success` at once, which starts
+    the tests too.
 
 ## GitHub App
 
