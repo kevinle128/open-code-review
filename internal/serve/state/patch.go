@@ -112,13 +112,17 @@ func claims(c review.Change, f diffFile, h *diffHunk) bool {
 		return true
 	}
 	end := max(c.EndLine, c.StartLine)
-	lo, hi := h.newStart, h.newStart+h.newCount-1
-	if h.newCount == 0 {
-		// A hunk that only deletes lines sits between new lines newStart
-		// and newStart+1.
-		hi = h.newStart + 1
-	}
+	lo, hi := hunkRange(*h)
 	return c.StartLine <= hi && end >= lo
+}
+
+// hunkRange gives the new-file lines a hunk covers. A hunk that only
+// deletes lines sits between new lines newStart and newStart+1.
+func hunkRange(h diffHunk) (int, int) {
+	if h.newCount == 0 {
+		return h.newStart, h.newStart + 1
+	}
+	return h.newStart, h.newStart + h.newCount - 1
 }
 
 // cleanPath turns an agent path into the repository-relative form git
@@ -248,9 +252,18 @@ func ShiftChanges(from, to string, fixed []review.Fixed) []review.Fixed {
 			if first < 0 {
 				continue
 			}
-			end := max(c.EndLine, c.StartLine)
-			out[k].Changes[i].StartLine = c.StartLine + p.cur.hunks[first].newStart - p.old.hunks[first].newStart
-			out[k].Changes[i].EndLine = end + p.cur.hunks[last].newStart - p.old.hunks[last].newStart
+			// A shifted range is clamped into the replayed hunks it
+			// covered, so it neither turns into a whole-file range (a start
+			// at or below 0), nor reaches a neighbouring hunk, nor misses
+			// its hunk when the leading context of the hunk shrank.
+			firstLo, firstHi := hunkRange(p.cur.hunks[first])
+			lastLo, lastHi := hunkRange(p.cur.hunks[last])
+			start := c.StartLine + p.cur.hunks[first].newStart - p.old.hunks[first].newStart
+			start = min(max(start, firstLo, 1), max(firstHi, 1))
+			end := max(c.EndLine, c.StartLine) + p.cur.hunks[last].newStart - p.old.hunks[last].newStart
+			end = min(max(end, lastLo, start), max(lastHi, start))
+			out[k].Changes[i].StartLine = start
+			out[k].Changes[i].EndLine = end
 		}
 	}
 	return out
