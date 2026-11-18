@@ -45,8 +45,21 @@ func TestShutdownKeepsRoundForRestart(t *testing.T) {
 		t.Fatal("the cut round is not logged")
 	}
 
+	cp := h.rev.requests()[0].Checkpoint
+	if cp == "" {
+		t.Fatal("the review got no checkpoint directory")
+	}
+	if _, err := os.Stat(filepath.Join(cp, reviewFile)); !os.IsNotExist(err) {
+		t.Fatalf("a review cut by the shutdown was saved: %v", err)
+	}
+
 	h2 := newHarness(t, useDir)
 	h2.gl.setPR(openPR(ref, sha1))
+	// A review that finished before the cut is reused, not run again.
+	if err := saveReview(h2.srv.roundCheckpoints(ref, 1), savedReview{Head: sha1, Scope: state.ScopeFull,
+		Result: review.Result{Terminal: review.TerminalComplete}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := h2.srv.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +72,12 @@ func TestShutdownKeepsRoundForRestart(t *testing.T) {
 	}
 	if n := len(h2.srv.journal.pending()); n != 0 {
 		t.Fatalf("journal keeps %d rounds after the chain ended", n)
+	}
+	if n := len(h2.rev.requests()); n != 0 || !h2.logs.has("review reused from a checkpoint") {
+		t.Fatalf("the resumed round ran the review again (%d runs)", n)
+	}
+	if _, err := os.Stat(h2.srv.prCheckpoints(ref)); !os.IsNotExist(err) {
+		t.Fatalf("checkpoints left after the round ended: %v", err)
 	}
 }
 

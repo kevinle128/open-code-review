@@ -35,6 +35,9 @@ func (s *Server) process(ref forge.PRRef, j job) bool {
 		s.commandFailed(f, ref, j.cmd, j.cmd.reject, log)
 		return false
 	case j.cmd != nil:
+		// A review command asks for a new review: nothing a cut round saved
+		// is reused.
+		s.clearCheckpoints(ref, log)
 		rj := roundJob{n: 1, scope: state.ScopeFull, gen: j.cmd.gen, effort: j.cmd.Effort}
 		if j.cmd.Kind == CommandReviewCommit {
 			rj.scope = state.ScopeCommit

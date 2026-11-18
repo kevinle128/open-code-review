@@ -32,6 +32,10 @@ import (
 //
 // Language is the output language of the review text, such as English or
 // Vietnamese; empty means the language of the app config.
+//
+// Checkpoint is a directory where an engine may keep the parts of the run
+// it finished, so the same run started again after a restart does them
+// only once; empty means none. The in-process OCR engine ignores it.
 type Request struct {
 	RepoDir     string
 	From        string
@@ -44,6 +48,7 @@ type Request struct {
 	PR          forge.PR
 	FixCommit   bool
 	Language    string
+	Checkpoint  string
 }
 
 // Terminal states of a review run.

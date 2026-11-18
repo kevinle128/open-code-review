@@ -957,6 +957,16 @@ push, otherwise the round only reports and its comment quotes the refusal.
   crash stays in it, keeps the status `pending`, and runs again when the
   service starts. Without a data directory there is no such list: a cut
   round fails and sets `failure` until someone comments `review`.
+- `/data/checkpoints/` keeps, per PR, the parts of the running round that
+  finished: the answer of each review batch and, once the review stage
+  ends, its whole result. A round that runs again after a restart reuses
+  them and runs only the batches that had not finished, or skips the review
+  stage when it had ended. So a deploy during a review loses only the work
+  in flight. A fix run cut by a restart runs again from its start, on a
+  fresh checkout. A saved part is used only for the same commit, review mode
+  and file list; batches saved before a deploy that changed the model or the
+  batch size are still reused. The checkpoints of a PR are removed when its
+  round ends and when a new chain starts (`review` command, opened PR).
 
 ## Upgrade from the thread flow
 

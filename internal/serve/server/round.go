@@ -144,6 +144,7 @@ func (s *Server) evaluate(f forge.Forge, ref forge.PRRef, j job, log *slog.Logge
 		return nil
 	}
 	log.Info("decided", "trigger", string(j.trigger), "action", "start chain")
+	s.clearCheckpoints(ref, log)
 	return s.round(f, ref, roundJob{n: 1, scope: state.ScopeFull, gen: s.restartChain(ref)}, j, log)
 }
 
@@ -254,6 +255,7 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 		if rerr := s.journal.remove(ref, token); rerr != nil {
 			log.Error("update the round journal", "error", rerr.Error())
 		}
+		s.clearCheckpoints(ref, log)
 	}
 	return err
 }
@@ -429,7 +431,8 @@ func (r *roundRun) run(round context.Context) error {
 	if rj.effort != "" {
 		req.Effort = rj.effort
 	}
-	res, err := s.reviewer.Review(ctx, req)
+	req.Checkpoint = s.roundCheckpoints(r.ref, rj.n)
+	res, err := r.review(ctx, req)
 	if len(res.Warnings) > 0 {
 		warnings := make([]string, len(res.Warnings))
 		for i, w := range res.Warnings {
@@ -461,6 +464,31 @@ func (r *roundRun) run(round context.Context) error {
 		ctx = fctx
 	}
 	return r.finish(ctx, out)
+}
+
+// review runs the review stage, or returns its result saved before a
+// restart cut the round. A finished review is saved for the same reason.
+func (r *roundRun) review(ctx context.Context, req review.Request) (review.Result, error) {
+	head, scope := r.pr.HeadSHA, r.rj.scope
+	if res, ok := loadReview(req.Checkpoint, head, scope, req.Commit); ok {
+		r.log.Info("review reused from a checkpoint", "findings", len(res.Findings))
+		return res, nil
+	}
+	res, err := r.s.reviewer.Review(ctx, req)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		// A shutdown or a newer review stopped the batches still running;
+		// what they left is no partial result. The batches that finished
+		// are saved, and the round runs again after a restart. A review
+		// that hit its time limit keeps its partial result.
+		return res, fmt.Errorf("review stopped: %w", ctx.Err())
+	}
+	if err == nil && res.Terminal != review.TerminalFailed {
+		sv := savedReview{Head: head, Scope: scope, Commit: req.Commit, Result: res}
+		if serr := saveReview(req.Checkpoint, sv); serr != nil {
+			r.log.Warn("save review checkpoint", "error", serr.Error())
+		}
+	}
+	return res, err
 }
 
 // checkoutBranch checks out the head branch for a fix round. A fork found
