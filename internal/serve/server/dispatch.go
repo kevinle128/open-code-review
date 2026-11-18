@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
@@ -16,15 +17,23 @@ import (
 // webhook handler, so it makes no forge call; forge calls run in the
 // background. The returned text is the outcome for the access log.
 //
-// Only an opened or ready PR starts a chain on its own. The bot's fix push
-// comes from the bot and is dropped here: the round that pushed queues the
-// next round itself. A person's push, or a reopened PR, starts no round; it
-// only copies the chain's status to the new head.
+// Only an opened or ready PR starts a chain on its own. The service's own
+// events are dropped here: the round that pushed a fix queues the next round
+// itself. Another bot (for example an agent that opens PRs) counts as a
+// person for PR events, so its PR is reviewed and its push copies the status;
+// without that the PR has no status and "pipelines must succeed" blocks it.
+// Comments from any bot are dropped so two bots cannot answer each other.
+// A push, or a reopened PR, starts no round; it only copies the chain's
+// status to the new head.
 func (s *Server) dispatch(ev forge.Event, body []byte, requestID string) string {
 	switch {
 	case ev.Kind == forge.EventIgnored:
 		return "ignored event"
-	case ev.SenderIsBot:
+	case ev.SenderIsSelf:
+		return "bot sender"
+	case ev.SenderIsBot && ev.CommentID != "" && (ev.Kind == forge.EventCommand || ev.Kind == forge.EventNote):
+		// A command without a comment is a GitLab reviewer assignment, which
+		// cannot start a reply loop between two bots.
 		return "bot sender"
 	case ev.Kind == forge.EventClosed:
 		s.forgetChain(ev.Ref)
@@ -49,6 +58,11 @@ func (s *Server) dispatch(ev forge.Event, body []byte, requestID string) string 
 			return "draft"
 		}
 		if matched, rule := s.cfg.Ignore.Match(ignoreSubject(ev.Ref, *ev.PR)); matched {
+			// An ignored PR still needs a success status, or "pipelines must
+			// succeed" blocks it; an ignored repository stays silent.
+			if !strings.HasPrefix(rule, "repo:") {
+				s.copyStatusAsync(ev.Ref, requestID)
+			}
 			return "ignore rule " + rule
 		}
 	}

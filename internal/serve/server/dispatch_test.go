@@ -40,7 +40,10 @@ func TestDispatchFilters(t *testing.T) {
 		want string
 	}{
 		{"ignored kind", forge.Event{Kind: forge.EventIgnored, Ref: ghRef(1)}, "ignored event"},
-		{"bot sender", forge.Event{Kind: forge.EventPush, Ref: ghRef(1), SenderIsBot: true}, "bot sender"},
+		{"own push", forge.Event{Kind: forge.EventPush, Ref: ghRef(1), SenderIsBot: true, SenderIsSelf: true}, "bot sender"},
+		{"other bot comment", forge.Event{Kind: forge.EventCommand, Ref: ghRef(1), CommentID: "9", SenderIsBot: true}, "bot sender"},
+		{"other bot assigns reviewer", forge.Event{Kind: forge.EventCommand, Ref: glRef(6), DeliveryID: "b2", CommentBody: "/review", SenderIsBot: true}, "queued command review"},
+		{"other bot opened", forge.Event{Kind: forge.EventOpened, Ref: ghRef(5), DeliveryID: "b1", SenderIsBot: true}, "queued opened"},
 		{"unsupported", forge.Event{Kind: "label", Ref: ghRef(1), DeliveryID: "u"}, "unsupported event"},
 		{"draft", withPR(ghRef(1), "d", func(p *forge.PR) { p.Draft = true }), "draft"},
 		{"repo rule", withPR(skipRef, "r1", func(*forge.PR) {}), "ignore rule repo:^skip/"},
@@ -66,6 +69,43 @@ func TestDispatchFilters(t *testing.T) {
 		})
 	}
 	h.drain()
+}
+
+// TestDispatchIgnoredOpenedMarksNotRequired: an opened PR that an author rule
+// skips gets a success status at once, so "pipelines must succeed" does not
+// block it; an ignored repository stays silent.
+func TestDispatchIgnoredOpenedMarksNotRequired(t *testing.T) {
+	h := newHarness(t, func(c *serveconfig.Config) {
+		c.Ignore = serveconfig.IgnoreRules{
+			Repos:   []*regexp.Regexp{regexp.MustCompile(`^skip/`)},
+			Authors: []*regexp.Regexp{regexp.MustCompile(`^archon-bot`)},
+		}
+	})
+	ref := ghRef(40)
+	pr := openPR(ref, sha2)
+	pr.Author = "archon-bot"
+	h.gh.setPR(pr)
+	ev := forge.Event{Kind: forge.EventOpened, Ref: ref, DeliveryID: "i1", SenderIsBot: true, PR: &pr}
+	if got := h.srv.dispatch(ev, []byte("i1"), "rid"); got != "ignore rule author:^archon-bot" {
+		t.Fatal(got)
+	}
+	h.drain()
+	if got := lastStatus(h.gh); got != "2:success" {
+		t.Fatalf("status %q", got)
+	}
+
+	skipRef := forge.PRRef{Platform: forge.GitHub, Repo: "skip/app", InstallationID: 7, Number: 41}
+	skipPR := openPR(skipRef, sha2)
+	h.gh.setPR(skipPR)
+	before := len(h.gh.statusList())
+	sev := forge.Event{Kind: forge.EventOpened, Ref: skipRef, DeliveryID: "i2", PR: &skipPR}
+	if got := h.srv.dispatch(sev, []byte("i2"), "rid"); got != "ignore rule repo:^skip/" {
+		t.Fatal(got)
+	}
+	h.drain()
+	if n := len(h.gh.statusList()); n != before {
+		t.Fatalf("ignored repository got %d new statuses", n-before)
+	}
 }
 
 func TestDispatchDedupe(t *testing.T) {
