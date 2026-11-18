@@ -42,6 +42,7 @@ const (
 	EnvIgnoreSourceBranch  = "OCR_SERVE_IGNORE_SOURCE_BRANCHES"
 	EnvIgnoreTargetBranch  = "OCR_SERVE_IGNORE_TARGET_BRANCHES"
 	EnvIgnoreLabels        = "OCR_SERVE_IGNORE_LABELS"
+	EnvGitLabTargetBranch  = "OCR_SERVE_GITLAB_TARGET_BRANCHES"
 	EnvBotIndicators       = "OCR_SERVE_BOT_INDICATORS"
 	EnvMentions            = "OCR_SERVE_MENTIONS"
 	EnvGitHubAppID         = "OCR_SERVE_GITHUB_APP_ID"
@@ -163,6 +164,9 @@ type IgnoreRules struct {
 	SourceBranches []*regexp.Regexp
 	TargetBranches []*regexp.Regexp
 	Labels         []string
+	// GitLabTargetBranches is an allow list: when it is set, a GitLab merge
+	// request whose target branch matches none of the patterns is ignored.
+	GitLabTargetBranches []*regexp.Regexp
 }
 
 // IgnoreSubject is the PR data that ignore rules look at.
@@ -173,6 +177,7 @@ type IgnoreSubject struct {
 	SourceBranch string
 	TargetBranch string
 	Labels       []string
+	GitLab       bool
 }
 
 // Match reports whether a rule matches s and names it as "<field>:<rule>".
@@ -207,7 +212,19 @@ func (r IgnoreRules) Match(s IgnoreSubject) (bool, string) {
 			}
 		}
 	}
+	if s.GitLab && s.TargetBranch != "" && len(r.GitLabTargetBranches) > 0 && !matchesAny(r.GitLabTargetBranches, s.TargetBranch) {
+		return true, "gitlab_target_branch:" + s.TargetBranch
+	}
 	return false, ""
+}
+
+func matchesAny(res []*regexp.Regexp, v string) bool {
+	for _, re := range res {
+		if re.MatchString(v) {
+			return true
+		}
+	}
+	return false
 }
 
 // Load reads the configuration. getenv and readFile are injected for tests;
@@ -245,6 +262,8 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 			SourceBranches: l.regexps(EnvIgnoreSourceBranch),
 			TargetBranches: l.regexps(EnvIgnoreTargetBranch),
 			Labels:         splitList(getenv(EnvIgnoreLabels)),
+
+			GitLabTargetBranches: l.regexps(EnvGitLabTargetBranch),
 		},
 		BotIndicators: l.botIndicators(),
 		Mentions:      l.mentions(),

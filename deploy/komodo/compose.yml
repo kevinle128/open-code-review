@@ -45,6 +45,7 @@
 #
 #   Optional; empty means the service default:
 #   OCR_SERVE_IGNORE_AUTHORS         Comma-separated RE2 patterns.
+#   OCR_SERVE_GITLAB_TARGET_BRANCHES GitLab only: review only MRs into these targets (RE2).
 #   OCR_SERVE_MAX_ROUNDS             Fix rounds before the report-only
 #                                    round; default 3, 1..10.
 #   OCR_SERVE_REVIEW_TIMEOUT         Default 2h for the review part of a round.
@@ -129,6 +130,7 @@ services:
       OCR_SERVE_GITLAB_TOKEN: ${OCR_SERVE_GITLAB_TOKEN:-}
       OCR_SERVE_GITLAB_WEBHOOK_SECRET: ${OCR_SERVE_GITLAB_WEBHOOK_SECRET:-}
       OCR_SERVE_IGNORE_AUTHORS: ${OCR_SERVE_IGNORE_AUTHORS:-}
+      OCR_SERVE_GITLAB_TARGET_BRANCHES: ${OCR_SERVE_GITLAB_TARGET_BRANCHES:-}
       OCR_SERVE_MAX_ROUNDS: ${OCR_SERVE_MAX_ROUNDS:-}
       OCR_SERVE_REVIEW_TIMEOUT: ${OCR_SERVE_REVIEW_TIMEOUT:-}
       OCR_SERVE_FIX_TIMEOUT: ${OCR_SERVE_FIX_TIMEOUT:-}

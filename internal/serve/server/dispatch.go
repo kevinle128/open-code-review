@@ -172,5 +172,6 @@ func ignoreSubject(ref forge.PRRef, pr forge.PR) serveconfig.IgnoreSubject {
 	return serveconfig.IgnoreSubject{
 		Repo: ref.Repo, Author: pr.Author, Title: pr.Title,
 		SourceBranch: pr.SourceBranch, TargetBranch: pr.TargetBranch, Labels: pr.Labels,
+		GitLab: ref.Platform == forge.GitLab,
 	}
 }

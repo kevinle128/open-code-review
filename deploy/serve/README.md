@@ -79,6 +79,7 @@ OCR_SERVE_GITLAB_TOKEN=[[OCR_SERVE_GITLAB_TOKEN]]
 OCR_SERVE_GITLAB_WEBHOOK_SECRET=[[OCR_SERVE_GITLAB_WEBHOOK_SECRET]]
 # Optional; empty uses the default.
 OCR_SERVE_IGNORE_AUTHORS=
+OCR_SERVE_GITLAB_TARGET_BRANCHES=
 OCR_SERVE_MAX_ROUNDS=
 OCR_SERVE_REVIEW_TIMEOUT=
 OCR_SERVE_FIX_TIMEOUT=
@@ -269,6 +270,7 @@ setting both forms is an error.
 | `OCR_SERVE_IGNORE_SOURCE_BRANCHES` | empty | Same format. |
 | `OCR_SERVE_IGNORE_TARGET_BRANCHES` | empty | Same format. |
 | `OCR_SERVE_IGNORE_LABELS` | empty | Comma-separated, exact match. |
+| `OCR_SERVE_GITLAB_TARGET_BRANCHES` | empty | Comma-separated RE2 patterns, GitLab only. When set, a merge request whose target branch matches none of them is not reviewed and gets a success status. Anchor the pattern (`^dev$`): `dev` alone also matches `develop`. Commands such as `@<bot> review` still run. |
 | `OCR_SERVE_EXCLUDE` | empty | Comma-separated globs added to the serve file filter for every repository; see [File filter](#file-filter). |
 | `OCR_SERVE_BOT_INDICATORS` | `bot` | Substrings that mark a GitLab sender as a bot. The service ignores comments from a bot; PR events from a bot that is not the service run as usual. |
 | `OCR_SERVE_MENTIONS` | empty | Comma-separated extra names users may tag the bot with to run a command (`@<name> review`), on top of the GitHub App slug and the GitLab bot username. Letters, digits, `-`, `_` and `.` only, without `@`. |
