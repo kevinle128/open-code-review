@@ -162,3 +162,62 @@ func TestSplitDiff_UnclaimedHunksAndWholeFiles(t *testing.T) {
 		t.Fatal("cleanPath")
 	}
 }
+
+func TestShiftChangesFollowsTheReplayedHunks(t *testing.T) {
+	from := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -3 +3 @@\n-x\n+y\n@@ -20,2 +20,3 @@\n a\n+b\n c\n" +
+		"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -5 +5 @@\n-x\n+y\n"
+	to := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -3 +3 @@\n-x\n+y\n@@ -27,2 +27,3 @@\n a\n+b\n c\n" +
+		"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -5 +5 @@\n-x\n+y\n@@ -9 +9 @@\n-p\n+q\n"
+	fixed := []review.Fixed{
+		{ID: "F1", Changes: []review.Change{{Path: "a.go", StartLine: 3, EndLine: 3}, {Path: "./a.go", StartLine: 21}}},
+		{ID: "F2", Changes: []review.Change{{Path: "a.go", StartLine: 3, EndLine: 21}, {Path: "a.go", StartLine: 50, EndLine: 51}}},
+		{ID: "F3", Changes: []review.Change{{Path: "b.go", StartLine: 5, EndLine: 5}, {Path: "c.go"}}},
+	}
+	got := ShiftChanges(from, to, fixed)
+	want := [][]review.Change{
+		{{Path: "a.go", StartLine: 3, EndLine: 3}, {Path: "./a.go", StartLine: 28, EndLine: 28}},
+		{{Path: "a.go", StartLine: 3, EndLine: 28}, {Path: "a.go", StartLine: 50, EndLine: 51}},
+		{{Path: "b.go", StartLine: 5, EndLine: 5}, {Path: "c.go"}},
+	}
+	for k := range want {
+		if !slices.Equal(got[k].Changes, want[k]) {
+			t.Fatalf("%s changes %+v, want %+v", got[k].ID, got[k].Changes, want[k])
+		}
+	}
+	if fixed[0].Changes[1].StartLine != 21 {
+		t.Fatal("ShiftChanges changed its input")
+	}
+	per, other, unmatched := SplitDiff(to, got[:1])
+	if len(unmatched) != 0 || !strings.Contains(per[0], "@@ -27,2 +27,3 @@") || strings.Contains(other, "@@ -27") {
+		t.Fatalf("per %q other %q unmatched %v", per, other, unmatched)
+	}
+}
+
+func TestShiftChangesClampsToTheReplayedHunks(t *testing.T) {
+	// The moved branch deleted lines above both hunks of a.go, and the
+	// edit at the end of c.go moved to line 3, where its hunk has only two
+	// lines of leading context.
+	from := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -20,2 +20,3 @@\n a\n+b\n c\n@@ -40 +41 @@\n-x\n+y\n" +
+		"diff --git a/c.go b/c.go\n--- a/c.go\n+++ b/c.go\n@@ -9,4 +9,4 @@\n a\n b\n c\n-x\n+y\n"
+	to := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -10,2 +10,3 @@\n a\n+b\n c\n@@ -30 +31 @@\n-x\n+y\n" +
+		"diff --git a/c.go b/c.go\n--- a/c.go\n+++ b/c.go\n@@ -1,3 +1,3 @@\n b\n c\n-x\n+y\n"
+	fixed := []review.Fixed{
+		{ID: "F1", Changes: []review.Change{{Path: "a.go", StartLine: 5, EndLine: 21}}},
+		{ID: "F2", Changes: []review.Change{{Path: "c.go", StartLine: 12, EndLine: 12}}},
+	}
+	got := ShiftChanges(from, to, fixed)
+	want := [][]review.Change{
+		{{Path: "a.go", StartLine: 10, EndLine: 11}},
+		{{Path: "c.go", StartLine: 3, EndLine: 3}},
+	}
+	for k := range want {
+		if !slices.Equal(got[k].Changes, want[k]) {
+			t.Fatalf("%s changes %+v, want %+v", got[k].ID, got[k].Changes, want[k])
+		}
+	}
+	per, other, unmatched := SplitDiff(to, got)
+	if len(unmatched) != 0 || strings.Contains(per[0], "@@ -30 +31 @@") || !strings.Contains(other, "@@ -30 +31 @@") ||
+		!strings.Contains(per[1], "@@ -1,3 +1,3 @@") {
+		t.Fatalf("per %q other %q unmatched %v", per, other, unmatched)
+	}
+}

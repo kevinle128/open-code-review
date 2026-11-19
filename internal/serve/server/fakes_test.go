@@ -339,13 +339,28 @@ type fakeWorkspaces struct {
 	dirty         bool // Commit finds changes
 	commitErr     error
 	pushErr       error
-	commits       []string // identity name + ":" + message
-	pushed        []string // spec.HeadRef + "@" + sha
+	// pushErrs are returned by the next pushes, one each, before pushErr.
+	pushErrs []error
+	// rebaseErr answers Rebase; a rebase that succeeds moves the branch to
+	// movedHead and replays the fix as rebasedFix.
+	rebaseErr error
+	// rebaseWaits makes Rebase wait for its context to end, as a cut
+	// cherry-pick that looks like a conflict.
+	rebaseWaits bool
+	movedHead   string
+	rebasedFix  string
+	rebases     []string // fixed sha + "@" + new head
+	leasePushed []string // spec.HeadRef + "@" + sha + " lease " + lease
+	leaseErr    error
+	commits     []string // identity name + ":" + message
+	pushed      []string // spec.HeadRef + "@" + sha
 	// onPush runs after a push, so a test can move the PR head to the fix.
 	onPush func(sha string)
-	// diff and diffErr answer CommitDiff.
-	diff    string
-	diffErr error
+	// diff and diffErr answer CommitDiff; commitDiffs, when it holds the
+	// commit, answers before diff.
+	diff        string
+	diffErr     error
+	commitDiffs map[string]string
 }
 
 // fixSHA is the commit the n-th fix makes: f, e, d, ... repeated.
@@ -377,8 +392,43 @@ func (w fakeWorkspace) Commit(_ context.Context, ident forge.Identity, message s
 	return fixSHA(len(w.w.commits)), true, nil
 }
 
+func (w fakeWorkspace) Rebase(ctx context.Context, _ forge.Identity, _ forge.CloneSpec, fix string) (review.Rebased, error) {
+	w.w.mu.Lock()
+	defer w.w.mu.Unlock()
+	w.w.rebases = append(w.w.rebases, fix+"@"+w.w.movedHead)
+	if w.w.rebaseWaits {
+		<-ctx.Done()
+		return review.Rebased{Head: w.w.movedHead}, fmt.Errorf("%w: %v", review.ErrRebaseConflict, ctx.Err())
+	}
+	if w.w.rebaseErr != nil {
+		return review.Rebased{Head: w.w.movedHead}, w.w.rebaseErr
+	}
+	return review.Rebased{Head: w.w.movedHead, Fix: w.w.rebasedFix}, nil
+}
+
+func (w fakeWorkspace) PushLease(_ context.Context, spec forge.CloneSpec, sha, lease string) error {
+	w.w.mu.Lock()
+	if w.w.leaseErr != nil {
+		defer w.w.mu.Unlock()
+		return w.w.leaseErr
+	}
+	w.w.leasePushed = append(w.w.leasePushed, spec.HeadRef+"@"+sha+" lease "+lease)
+	onPush := w.w.onPush
+	w.w.mu.Unlock()
+	if onPush != nil {
+		onPush(sha)
+	}
+	return nil
+}
+
 func (w fakeWorkspace) Push(_ context.Context, spec forge.CloneSpec, sha string) error {
 	w.w.mu.Lock()
+	if len(w.w.pushErrs) > 0 {
+		defer w.w.mu.Unlock()
+		err := w.w.pushErrs[0]
+		w.w.pushErrs = w.w.pushErrs[1:]
+		return err
+	}
 	if w.w.pushErr != nil {
 		defer w.w.mu.Unlock()
 		return w.w.pushErr
@@ -394,9 +444,12 @@ func (w fakeWorkspace) Push(_ context.Context, spec forge.CloneSpec, sha string)
 
 type fakeWorkspace struct{ w *fakeWorkspaces }
 
-func (w fakeWorkspace) CommitDiff(context.Context, string) (string, error) {
+func (w fakeWorkspace) CommitDiff(_ context.Context, sha string) (string, error) {
 	w.w.mu.Lock()
 	defer w.w.mu.Unlock()
+	if d, ok := w.w.commitDiffs[sha]; ok {
+		return d, nil
+	}
 	return w.w.diff, w.w.diffErr
 }
 

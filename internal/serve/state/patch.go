@@ -112,13 +112,17 @@ func claims(c review.Change, f diffFile, h *diffHunk) bool {
 		return true
 	}
 	end := max(c.EndLine, c.StartLine)
-	lo, hi := h.newStart, h.newStart+h.newCount-1
-	if h.newCount == 0 {
-		// A hunk that only deletes lines sits between new lines newStart
-		// and newStart+1.
-		hi = h.newStart + 1
-	}
+	lo, hi := hunkRange(*h)
 	return c.StartLine <= hi && end >= lo
+}
+
+// hunkRange gives the new-file lines a hunk covers. A hunk that only
+// deletes lines sits between new lines newStart and newStart+1.
+func hunkRange(h diffHunk) (int, int) {
+	if h.newCount == 0 {
+		return h.newStart, h.newStart + 1
+	}
+	return h.newStart, h.newStart + h.newCount - 1
 }
 
 // cleanPath turns an agent path into the repository-relative form git
@@ -205,6 +209,62 @@ func appendHunks(out []string, f diffFile, idx []int) []string {
 	out = append(out, f.header...)
 	for _, i := range idx {
 		out = append(out, f.hunks[i].lines...)
+	}
+	return out
+}
+
+// ShiftChanges moves the line ranges of fixed, recorded on the commit whose
+// diff is from, to the same fix replayed elsewhere, whose diff is to. A file
+// keeps its ranges unless both diffs hold it with the same number of hunks;
+// then each range moves by the offset of the hunks it covers. fixed is not
+// changed.
+func ShiftChanges(from, to string, fixed []review.Fixed) []review.Fixed {
+	byPath := map[string]diffFile{}
+	for _, f := range parseDiff(to) {
+		byPath[f.newPath] = f
+	}
+	type pair struct{ old, cur diffFile }
+	pairs := map[string]pair{}
+	for _, f := range parseDiff(from) {
+		if g, ok := byPath[f.newPath]; ok && f.newPath != "" && len(f.hunks) > 0 && len(f.hunks) == len(g.hunks) {
+			pairs[f.newPath] = pair{f, g}
+		}
+	}
+	out := make([]review.Fixed, len(fixed))
+	for k, fx := range fixed {
+		out[k] = fx
+		out[k].Changes = make([]review.Change, len(fx.Changes))
+		for i, c := range fx.Changes {
+			out[k].Changes[i] = c
+			p, ok := pairs[cleanPath(c.Path)]
+			if !ok || c.StartLine <= 0 {
+				continue
+			}
+			first, last := -1, -1
+			for j := range p.old.hunks {
+				if claims(c, p.old, &p.old.hunks[j]) {
+					if first < 0 {
+						first = j
+					}
+					last = j
+				}
+			}
+			if first < 0 {
+				continue
+			}
+			// A shifted range is clamped into the replayed hunks it
+			// covered, so it neither turns into a whole-file range (a start
+			// at or below 0), nor reaches a neighbouring hunk, nor misses
+			// its hunk when the leading context of the hunk shrank.
+			firstLo, firstHi := hunkRange(p.cur.hunks[first])
+			lastLo, lastHi := hunkRange(p.cur.hunks[last])
+			start := c.StartLine + p.cur.hunks[first].newStart - p.old.hunks[first].newStart
+			start = min(max(start, firstLo, 1), max(firstHi, 1))
+			end := max(c.EndLine, c.StartLine) + p.cur.hunks[last].newStart - p.old.hunks[last].newStart
+			end = min(max(end, lastLo, start), max(lastHi, start))
+			out[k].Changes[i].StartLine = start
+			out[k].Changes[i].EndLine = end
+		}
 	}
 	return out
 }

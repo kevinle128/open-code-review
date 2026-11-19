@@ -51,6 +51,9 @@ tests_none = không chạy
 tests_passed = {command} đạt
 tests_failed = {command} không đạt hoặc không chạy được; bản sửa vẫn được push
 tests_output = Phần cuối output
+rebase = Đã rebase
+rebased = Nhánh đã thay đổi trong lúc vòng chạy, nên bản sửa được rebase lên head mới {head}.
+rebased_tests = Kiểm thử chạy trên head cũ {old}, không chạy trên cây đã rebase.
 scope = Phạm vi
 scope_value = đã review {reviewed}/{total} file
 next = Tiếp theo
@@ -68,6 +71,7 @@ report.fork = Bot không thể push lên nhánh {branch}: nhánh head nằm ở 
 report.push = Bot không thể push lên nhánh {branch}: {reason}. Bạn tự áp dụng bản sửa.
 report.engine = Engine review này không sửa lỗi. Bạn tự áp dụng bản sửa.
 report.no-edit = Lần sửa không thay đổi file nào nên không có gì được push. Bạn tự áp dụng bản sửa.
+report.moved = Nhánh {branch} đã chuyển sang {head} trong lúc vòng chạy và bản sửa xung đột với head mới, nên bot không push. Bạn tự áp dụng bản sửa.
 body_cut = ⚠️ Bình luận này bị cắt vì vượt giới hạn độ dài bình luận của forge.
 
 [finding]

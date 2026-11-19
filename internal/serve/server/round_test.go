@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -956,5 +957,235 @@ func TestPlatformLanguageAndLocale(t *testing.T) {
 	mustContain(t, h.gl.summary(gl), vi.Text("summary.title"))
 	if strings.Contains(glNote, h.loc.Text("finding.why_skipped")) {
 		t.Fatalf("English text in a GitLab note:\n%s", glNote)
+	}
+}
+
+const fetchFirst = "git push: exit status 1: ! [rejected] feature -> feature (fetch first)"
+
+func movedBranch(w *fakeWorkspaces) {
+	w.pushErrs = []error{errors.New(fetchFirst)}
+	w.movedHead = strings.Repeat("c", 40)
+	w.rebasedFix = strings.Repeat("a", 40)
+}
+
+func TestMovedBranchRebasesTheFixAndPushesAgain(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(40)
+	chainPR(h, ref)
+	h.ws.set(movedBranch)
+	h.rev.set(func(_ context.Context, req review.Request) (review.Result, error) {
+		if req.FixCommit {
+			return review.Result{Terminal: review.TerminalComplete}, nil
+		}
+		return findingsResult(comment("a.go", 3))(context.Background(), req)
+	})
+	h.fix.set(func(_ context.Context, req review.FixRequest) (review.FixResult, error) {
+		res := fixAll(req)
+		res.Tests = review.Tests{Command: "go test ./...", Passed: true}
+		return res, nil
+	})
+	h.opened(ref)
+	h.drain()
+	if got := h.ws.rebases; len(got) != 1 || got[0] != fixSHA(1)+"@"+strings.Repeat("c", 40) {
+		t.Fatalf("rebases %v", got)
+	}
+	wantLease := "refs/heads/feature@" + strings.Repeat("a", 40) + " lease " + strings.Repeat("c", 40)
+	if len(h.ws.pushed) != 0 || len(h.ws.leasePushed) != 1 || h.ws.leasePushed[0] != wantLease {
+		t.Fatalf("pushed %v lease pushed %v", h.ws.pushed, h.ws.leasePushed)
+	}
+	notes := h.gh.noteList()
+	if len(notes) != 2 {
+		t.Fatalf("notes %q", notes)
+	}
+	mustContain(t, notes[0], h.loc.Text("round.rebased", "head", "<code>ccccccc</code>"))
+	mustContain(t, notes[0], h.loc.Text("round.rebased_tests", "old", "<code>1111111</code>"))
+	mustContain(t, notes[0], "<code>aaaaaaa</code>")
+	if strings.Contains(notes[0], "cannot push") {
+		t.Fatalf("the fix was reported as unpushed:\n%s", notes[0])
+	}
+	mustContain(t, notes[1], h.loc.Text("round.found_zero"))
+	reqs := h.rev.requests()
+	if len(reqs) != 2 || !reqs[1].FixCommit || reqs[1].Commit != strings.Repeat("a", 40) {
+		t.Fatalf("the next round must review only the rebased fix commit: %+v", reqs)
+	}
+	if m := h.gh.marker(t, ref); m.Rounds[0].Fixed != 1 || m.Rounds[0].Fix != strings.Repeat("a", 40) {
+		t.Fatalf("marker %+v", m.Rounds)
+	}
+	if got := lastStatus(h.gh); got != "a:success" {
+		t.Fatalf("status %s", got)
+	}
+}
+
+func TestMovedBranchRebasesAtMostTwice(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(41)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		movedBranch(w)
+		w.leaseErr = errors.New("git push: exit status 1: ! [rejected] feature -> feature (stale info)")
+	})
+	h.rev.set(findingsResult(comment("a.go", 3)))
+	h.opened(ref)
+	h.drain()
+	if len(h.ws.rebases) != 2 || len(h.ws.leasePushed) != 0 || len(h.ws.pushed) != 0 {
+		t.Fatalf("rebases %v lease pushed %v pushed %v", h.ws.rebases, h.ws.leasePushed, h.ws.pushed)
+	}
+	note := h.gh.noteList()[0]
+	mustContain(t, note, "The bot cannot push to branch <code>feature</code>: <code>! [rejected] feature -&gt; feature (stale info)</code>")
+	if strings.Contains(note, "rebased onto") {
+		t.Fatalf("an unpushed fix is shown as rebased:\n%s", note)
+	}
+	if m := h.gh.marker(t, ref); m.Rounds[0].Fixed != 0 || m.Rounds[0].Fix != "" {
+		t.Fatalf("marker %+v", m.Rounds)
+	}
+}
+
+func TestMovedBranchWithConflictReportsTheFindings(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(42)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		movedBranch(w)
+		w.rebaseErr = fmt.Errorf("%w: CONFLICT in a.go", review.ErrRebaseConflict)
+	})
+	h.rev.set(findingsResult(comment("a.go", 3)))
+	h.opened(ref)
+	h.drain()
+	if len(h.ws.rebases) != 1 || len(h.ws.leasePushed) != 0 || len(h.ws.pushed) != 0 {
+		t.Fatalf("rebases %v lease pushed %v pushed %v", h.ws.rebases, h.ws.leasePushed, h.ws.pushed)
+	}
+	note := h.gh.noteList()[0]
+	mustContain(t, note, h.loc.Text("round.report.moved", "branch", "<code>feature</code>", "head", "<code>ccccccc</code>"))
+	mustContain(t, note, "**Proposed fix**: fixed it")
+	if len(h.rev.requests()) != 1 || lastStatus(h.gh) != "1:success" {
+		t.Fatalf("status %s", lastStatus(h.gh))
+	}
+	if m := h.gh.marker(t, ref); m.Rounds[0].Fixed != 0 || m.Rounds[0].Real != 1 || m.Rounds[0].Fix != "" {
+		t.Fatalf("marker %+v", m.Rounds)
+	}
+}
+
+func TestOtherPushRejectionsAreNotRebased(t *testing.T) {
+	for name, msg := range map[string]string{
+		"protected branch": "git push: exit status 1: ! [remote rejected] feature -> feature (protected branch hook declined)",
+		"no permission":    "git push: exit status 128: remote: Permission to o/r.git denied to bot. fatal: unable to access",
+		"deleted branch":   "git push: exit status 1: error: src refspec does not match any",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			ref := ghRef(43)
+			chainPR(h, ref)
+			h.ws.set(func(w *fakeWorkspaces) { w.pushErrs = []error{errors.New(msg)} })
+			h.rev.set(findingsResult(comment("a.go", 3)))
+			h.opened(ref)
+			h.drain()
+			if len(h.ws.rebases) != 0 || len(h.ws.leasePushed) != 0 {
+				t.Fatalf("rebased: %v %v", h.ws.rebases, h.ws.leasePushed)
+			}
+			mustContain(t, h.gh.noteList()[0], "The bot cannot push to branch <code>feature</code>")
+		})
+	}
+}
+
+func TestMovedBranchThatCannotBeFetchedKeepsThePushReason(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(44)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		movedBranch(w)
+		w.rebaseErr = errors.New("git fetch: exit status 128: couldn't find remote ref refs/heads/feature")
+	})
+	h.rev.set(findingsResult(comment("a.go", 3)))
+	h.opened(ref)
+	h.drain()
+	mustContain(t, h.gh.noteList()[0], "(fetch first)")
+	if len(h.ws.leasePushed) != 0 {
+		t.Fatalf("lease pushed %v", h.ws.leasePushed)
+	}
+}
+
+// The moved head added lines above the fix, so the replayed hunk sits
+// lower in a.go than the line the fix run gave.
+const (
+	firstFixDiff   = "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -3 +3 @@\n-func A() {}\n+func A() int { return 1 }\n"
+	rebasedFixDiff = "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -10 +10 @@\n-func A() {}\n+func A() int { return 1 }\n"
+)
+
+func TestMovedBranchShowsTheRebasedHunkWithItsFinding(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(45)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		movedBranch(w)
+		w.commitDiffs = map[string]string{fixSHA(1): firstFixDiff, strings.Repeat("a", 40): rebasedFixDiff}
+	})
+	h.rev.set(func(_ context.Context, req review.Request) (review.Result, error) {
+		if req.FixCommit {
+			return review.Result{Terminal: review.TerminalComplete}, nil
+		}
+		return findingsResult(comment("a.go", 3))(context.Background(), req)
+	})
+	h.fix.set(fixWithChanges)
+	h.opened(ref)
+	h.drain()
+	note := h.gh.noteList()[0]
+	mustContain(t, note, "```diff\ndiff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -10 +10 @@")
+	if strings.Contains(note, h.loc.Text("round.other_changes")) || h.logs.has("fixed findings match no hunk of the fix commit; the round comment shows them as prose") {
+		t.Fatalf("the rebased hunk lost its finding:\n%s\nlogs:\n%s", note, h.logs.String())
+	}
+}
+
+func TestMovedBranchNotPushedProposesTheFirstFix(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(46)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		movedBranch(w)
+		w.leaseErr = errors.New("git push: exit status 1: ! [remote rejected] feature -> feature (protected branch hook declined)")
+		w.commitDiffs = map[string]string{fixSHA(1): firstFixDiff, strings.Repeat("a", 40): rebasedFixDiff}
+	})
+	h.rev.set(findingsResult(comment("a.go", 3)))
+	h.fix.set(fixWithChanges)
+	h.opened(ref)
+	h.drain()
+	note := h.gh.noteList()[0]
+	mustContain(t, note, h.loc.Text("round.proposed_diff")+"\n\n```diff\ndiff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -3 +3 @@")
+	if strings.Contains(note, "@@ -10 +10 @@") {
+		t.Fatalf("the proposed diff is the unpushed rebased commit:\n%s", note)
+	}
+}
+
+func TestMovedBranchRebaseCutByTheFixTimeoutFailsTheRound(t *testing.T) {
+	h := newHarness(t, func(c *serveconfig.Config) { c.FixTimeout = 100 * time.Millisecond })
+	ref := ghRef(47)
+	chainPR(h, ref)
+	h.ws.set(func(w *fakeWorkspaces) {
+		movedBranch(w)
+		w.rebaseWaits = true
+	})
+	h.rev.set(findingsResult(comment("a.go", 3)))
+	h.opened(ref)
+	h.drain()
+	if got := lastStatus(h.gh); got != "1:failure" {
+		t.Fatalf("status %s", got)
+	}
+	for _, note := range h.gh.noteList() {
+		if strings.Contains(note, "rebased onto") || strings.Contains(note, "conflicts") || strings.Contains(note, "cannot push") {
+			t.Fatalf("a cut rebase is reported as a forge answer:\n%s", note)
+		}
+	}
+}
+
+func TestBranchMoved(t *testing.T) {
+	for msg, want := range map[string]bool{
+		fetchFirst: true,
+		"git push: exit status 1: ! [rejected] a -> a (non-fast-forward)":        true,
+		"git push: exit status 1: ! [rejected] a -> a (stale info)":              true,
+		"git push: exit status 1: ! [remote rejected] a -> a (fetch first hook)": false,
+		"git push: exit status 128: Permission denied":                           false,
+	} {
+		if got := branchMoved(errors.New(msg)); got != want {
+			t.Errorf("branchMoved(%q) = %v", msg, got)
+		}
 	}
 }

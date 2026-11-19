@@ -564,16 +564,68 @@ func (r *roundRun) fix(ctx context.Context, ws review.Workspace, findings []revi
 	if err != nil {
 		return err
 	}
-	if err := ws.Push(ctx, spec, sha); err != nil {
-		r.log.Warn("fix push rejected", "error", err.Error())
+	// diffs stay on the fix made on r.pr.HeadSHA for the report; the push
+	// shows the diffs of the commit it pushed.
+	pushed, pushedOther, fix := diffs, other, sha
+	pushErr := ws.Push(ctx, spec, sha)
+	for try := 0; pushErr != nil && ctx.Err() == nil && branchMoved(pushErr) && try < maxRebasePushes; try++ {
+		r.log.Warn("fix push rejected because the branch moved; rebasing the fix", "error", pushErr.Error(), "try", try+1)
+		if spec, err = r.f.PushSpec(ctx, r.pr); err != nil {
+			return err
+		}
+		rb, rerr := ws.Rebase(ctx, ident, spec, sha)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(rerr, review.ErrRebaseConflict) {
+			r.log.Warn("fix conflicts with the moved branch", "head", rb.Head, "error", rerr.Error())
+			unfixed(out, state.ReportMoved, diffs)
+			out.NewHead = rb.Head
+			return nil
+		}
+		if rerr != nil {
+			// The branch cannot be read again (deleted, no access): the
+			// rejection of the first push is the reason to show.
+			r.log.Warn("rebase the fix", "error", rerr.Error())
+			break
+		}
+		sha, out.NewHead = rb.Fix, rb.Head
+		pushed, pushedOther = r.fixDiff(ctx, ws, sha, r.rebasedChanges(ctx, ws, fix, sha, out.Fixed))
+		pushErr = ws.PushLease(ctx, spec, sha, rb.Head)
+	}
+	if pushErr != nil && ctx.Err() != nil {
+		// A shutdown, a newer review or the fix timeout cut the push: the
+		// round fails instead of reporting a refusal by the forge.
+		return ctx.Err()
+	}
+	if pushErr != nil {
+		r.log.Warn("fix push rejected", "error", pushErr.Error())
 		unfixed(out, state.ReportPush, diffs)
-		out.PushReason = pushReason(err)
+		out.PushReason, out.NewHead = pushReason(pushErr), ""
 		return nil
 	}
-	r.log.Info("fix pushed", "commit", sha, "branch", r.pr.SourceBranch)
+	r.log.Info("fix pushed", "commit", sha, "branch", r.pr.SourceBranch, "rebased_onto", out.NewHead)
 	out.FixCommit, out.CommitURL = sha, r.f.CommitURL(r.ref, sha)
-	out.FixDiffs, out.OtherDiff = diffs, other
+	out.FixDiffs, out.OtherDiff = pushed, pushedOther
+	if out.NewHead != "" {
+		out.OldHead = r.pr.HeadSHA
+	}
 	return nil
+}
+
+// rebasedChanges moves the line ranges of fixed from the fix commit to the
+// same fix rebased onto a moved branch, whose earlier lines may have
+// shifted. A diff that cannot be read leaves the ranges as they are.
+func (r *roundRun) rebasedChanges(ctx context.Context, ws review.Workspace, fix, rebased string, fixed []review.Fixed) []review.Fixed {
+	from, err := ws.CommitDiff(ctx, fix)
+	if err != nil {
+		return fixed
+	}
+	to, err := ws.CommitDiff(ctx, rebased)
+	if err != nil {
+		return fixed
+	}
+	return state.ShiftChanges(from, to, fixed)
 }
 
 // fixDiff splits the diff of the fix commit among the fixed findings. A
@@ -702,6 +754,27 @@ func roundFindings(cs []model.LlmComment) []review.Finding {
 }
 
 const maxPushReason = 300
+
+// maxRebasePushes bounds how often a fix is rebased and pushed again after
+// the branch moved.
+const maxRebasePushes = 2
+
+// branchMoved tells a push that git refused because the remote branch is no
+// longer where the checkout started (non-fast-forward, fetch first, stale
+// lease) from one the forge declined (permissions, protected branch, hooks),
+// which git reports as "remote rejected".
+func branchMoved(err error) bool {
+	msg := err.Error()
+	if strings.Contains(msg, "remote rejected") {
+		return false
+	}
+	for _, m := range []string{"fetch first", "non-fast-forward", "stale info"} {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // pushReason keeps the git text after the exit status, which says why the
 // forge refused (protected branch, missing permission, branch moved). The

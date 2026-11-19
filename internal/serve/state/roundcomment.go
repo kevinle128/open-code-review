@@ -21,6 +21,7 @@ const (
 	ReportPush   = "push"
 	ReportEngine = "engine"
 	ReportNoEdit = "no-edit"
+	ReportMoved  = "moved"
 )
 
 // RoundReport is what one round comment shows. From is empty for a commit
@@ -53,7 +54,11 @@ type RoundReport struct {
 	Report     string
 	Branch     string
 	PushReason string
-	Next       int
+	// NewHead is the branch head that moved while the round ran. With
+	// ReportMoved the fix conflicts with it; with a pushed FixCommit the fix
+	// was rebased onto it, and OldHead is the head the tests ran on.
+	NewHead, OldHead string
+	Next             int
 }
 
 // Bounds of a round comment. maxCommentRunes stays under the 65536
@@ -496,12 +501,15 @@ func writeStatus(b *strings.Builder, r RoundReport, loc Locale, v *roundView) {
 		value = html.EscapeString(loc.Text("round.fixed_count", "count", strconv.Itoa(needs)))
 		if r.Report != "" {
 			value += "<br>" + loc.Text("round.report."+r.Report, "max", strconv.Itoa(r.Max),
-				"branch", htmlCode(r.Branch), "reason", htmlCode(r.PushReason))
+				"branch", htmlCode(r.Branch), "reason", htmlCode(r.PushReason), "head", htmlCode(short(r.NewHead)))
 		}
 		statusRow(b, "⚠️", loc.Text("round.needs_you"), value)
 	}
 	if fixed > 0 {
 		writeTestsRow(b, r.Tests, loc)
+		if r.FixCommit != "" && r.NewHead != "" {
+			writeRebasedRow(b, r, loc)
+		}
 	}
 	if c := r.Coverage; c.Total > 0 {
 		statusRow(b, "📄", loc.Text("round.scope"), html.EscapeString(loc.Text("round.scope_value",
@@ -514,6 +522,16 @@ func writeStatus(b *strings.Builder, r RoundReport, loc Locale, v *roundView) {
 		statusRow(b, "🏁", loc.Text("round.end"), html.EscapeString(loc.Text("round.end_value")))
 	}
 	b.WriteString("</table>\n")
+}
+
+// writeRebasedRow tells that the branch moved while the round ran and the
+// fix was rebased onto the new head. The tests ran before the rebase.
+func writeRebasedRow(b *strings.Builder, r RoundReport, loc Locale) {
+	value := loc.Text("round.rebased", "head", htmlCode(short(r.NewHead)))
+	if r.Tests.Command != "" && r.OldHead != "" {
+		value += " " + loc.Text("round.rebased_tests", "old", htmlCode(short(r.OldHead)))
+	}
+	statusRow(b, "🔀", loc.Text("round.rebase"), value)
 }
 
 // writeTestsRow writes the test run after the fix. A failed run shows the
