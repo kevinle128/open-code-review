@@ -210,7 +210,7 @@ func writeSettings(t *testing.T, body string) string {
 
 func TestClaudeExec(t *testing.T) {
 	f := newFixture(t)
-	settings := writeSettings(t, `{"env":{"ANTHROPIC_BASE_URL":"http://proxy"},"model":"sonnet",
+	settings := writeSettings(t, `{"env":{"ANTHROPIC_BASE_URL":"http://proxy"},"model":"sonnet","advisorModel":"fable",
 		"hooks":{"Stop":[{"command":"curl evil"}]},"permissions":{"allow":["Bash"]}}`)
 	result := filepath.Join(t.TempDir(), "result.json")
 	body, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false,
@@ -249,7 +249,7 @@ cat `+result+"\n")
 	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(f.rec, "settings"))), &kept); err != nil {
 		t.Fatal(err)
 	}
-	if len(kept) != 2 || string(kept["model"]) != `"sonnet"` || !strings.Contains(string(kept["env"]), "http://proxy") {
+	if len(kept) != 3 || string(kept["model"]) != `"sonnet"` || string(kept["advisorModel"]) != `"fable"` || !strings.Contains(string(kept["env"]), "http://proxy") {
 		t.Fatalf("settings %v", kept)
 	}
 	env := readFile(t, filepath.Join(f.rec, "env"))

@@ -237,21 +237,31 @@ func buildAgentCLI(c serveconfig.CLIConfig, sc serveconfig.SandboxConfig, sb *ag
 	if bin, err = filepath.Abs(bin); err != nil {
 		return nil, fmt.Errorf("%s: %w", s.binEnv, err)
 	}
-	if err := readable(s.cred); err != nil {
-		return nil, fmt.Errorf("%s: %w", s.credEnv, err)
+	// agy through a gateway needs no credential file.
+	hasCred := s.cred != ""
+	if hasCred {
+		if err := readable(s.cred); err != nil {
+			return nil, fmt.Errorf("%s: %w", s.credEnv, err)
+		}
 	}
 	if sb != nil {
 		var installDir string
 		if bin, installDir, err = sandboxInstall(bin, s.installDir); err != nil {
 			return nil, fmt.Errorf("%s: %w", s.dirEnv, err)
 		}
-		sb = sb.WithMounts(agentcli.Mount{Path: installDir, ReadOnly: true}, s.credMount)
+		sb = sb.WithMounts(agentcli.Mount{Path: installDir, ReadOnly: true})
+		if name == serveconfig.CLIAgy {
+			sb = sb.WithNetwork(sc.AgyNetwork)
+		}
+		if hasCred {
+			sb = sb.WithMounts(s.credMount)
+		}
 	}
 	switch name {
 	case serveconfig.CLIClaude:
 		return agentcli.Claude{Bin: bin, Model: c.ClaudeModel, SettingsFile: s.cred, Sandbox: sb}, nil
 	case serveconfig.CLIAgy:
-		return agentcli.Agy{Bin: bin, Model: c.AgyModel, Effort: c.AgyEffort, TokenFile: s.cred, Sandbox: sb}, nil
+		return agentcli.Agy{Bin: bin, Model: c.AgyModel, Effort: c.AgyEffort, TokenFile: s.cred, GatewayURL: c.AgyGatewayURL, Sandbox: sb}, nil
 	}
 	return agentcli.Codex{Bin: bin, Model: c.CodexModel, Effort: c.CodexEffort, AuthFile: s.cred, Sandbox: sb}, nil
 }

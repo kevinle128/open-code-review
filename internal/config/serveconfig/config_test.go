@@ -82,7 +82,7 @@ func TestLoad_Defaults(t *testing.T) {
 		},
 		Verify: VerifyConfig{CLI: DefaultVerifyCLI},
 		Sandbox: SandboxConfig{
-			Mode: SandboxNone, DockerBin: "docker", Memory: "6g", CPUs: "4",
+			Mode: SandboxNone, DockerBin: "docker", Memory: "6g", CPUs: "4", AgyNetwork: NetworkBridge,
 			Images: DefaultSandboxImages,
 		},
 		GitHubLanguage: LanguageEnglish, GitLabLanguage: LanguageVietnamese,

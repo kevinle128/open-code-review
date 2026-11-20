@@ -86,6 +86,8 @@
 #                                    change it when the host Claude updates.
 #   OCR_SERVE_CODEX_BIN              Default /opt/codex/releases/0.163.0-
 #                                    x86_64-unknown-linux-musl/bin/codex.
+#   OCR_SERVE_AGY_GATEWAY_URL        Secret. LLM gateway URL for agy; with
+#                                    it agy needs no sign-in.
 #   OCR_SERVE_AGY_BIN                Default /opt/agy/agy, the mounted host
 #                                    binary.
 #   OCR_HOST_AGY_BIN                 Host agy binary; default
@@ -148,6 +150,7 @@ services:
       OCR_SERVE_CODEX_EFFORT: ${OCR_SERVE_CODEX_EFFORT:-}
       OCR_SERVE_AGY_MODEL: ${OCR_SERVE_AGY_MODEL:-}
       OCR_SERVE_AGY_EFFORT: ${OCR_SERVE_AGY_EFFORT:-}
+      OCR_SERVE_AGY_GATEWAY_URL: ${OCR_SERVE_AGY_GATEWAY_URL:-}
       OCR_SERVE_BATCH_LINES: ${OCR_SERVE_BATCH_LINES:-}
       OCR_SERVE_BATCH_FILES: ${OCR_SERVE_BATCH_FILES:-}
       OCR_SERVE_BATCH_CONCURRENCY: ${OCR_SERVE_BATCH_CONCURRENCY:-}

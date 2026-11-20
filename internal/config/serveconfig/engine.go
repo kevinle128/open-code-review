@@ -6,6 +6,7 @@ package serveconfig
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -28,6 +29,7 @@ const (
 	EnvAgyToken       = "OCR_SERVE_AGY_TOKEN"
 	EnvAgyModel       = "OCR_SERVE_AGY_MODEL"
 	EnvAgyEffort      = "OCR_SERVE_AGY_EFFORT"
+	EnvAgyGatewayURL  = "OCR_SERVE_AGY_GATEWAY_URL"
 
 	EnvBatchLines       = "OCR_SERVE_BATCH_LINES"
 	EnvBatchFiles       = "OCR_SERVE_BATCH_FILES"
@@ -98,6 +100,9 @@ type CLIConfig struct {
 	AgyToken       string
 	AgyModel       string
 	AgyEffort      string
+	// AgyGatewayURL is the LLM gateway agy sends its model requests to.
+	// It holds a key, so it is never printed or put in an error.
+	AgyGatewayURL string
 
 	BatchLines       int
 	BatchFiles       int
@@ -135,11 +140,27 @@ func (l *loader) cli(dataDir string) CLIConfig {
 		AgyToken:       l.absPath(EnvAgyToken, ""),
 		AgyModel:       l.matching(EnvAgyModel, modelPattern),
 		AgyEffort:      l.optionalOneOf(EnvAgyEffort, AgyEfforts...),
+		AgyGatewayURL:  l.secretURL(EnvAgyGatewayURL),
 
 		BatchLines:       l.intIn(EnvBatchLines, DefaultBatchLines, MinBatchLines, MaxBatchLines),
 		BatchFiles:       l.intIn(EnvBatchFiles, DefaultBatchFiles, MinBatchFiles, MaxBatchFiles),
 		BatchConcurrency: l.intIn(EnvBatchConcurrency, DefaultBatchConcurrency, MinBatchConcurrency, MaxBatchConcurrency),
 	}
+}
+
+// secretURL reads an optional absolute http(s) URL that carries a secret,
+// so a rejected value is never quoted.
+func (l *loader) secretURL(key string) string {
+	v := l.str(key, "")
+	if v == "" {
+		return ""
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		l.fail("%s must be an absolute http(s) URL", key)
+		return ""
+	}
+	return v
 }
 
 // optionalOneOf is oneOf for a setting whose empty value means unset.
@@ -211,8 +232,8 @@ func (c *Config) requireCLI() error {
 				errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvClaudeSettings, use.env, CLIClaude))
 			}
 		case CLIAgy:
-			if c.CLI.AgyToken == "" {
-				errs = append(errs, fmt.Errorf("%s is required when %s is %s", EnvAgyToken, use.env, CLIAgy))
+			if c.CLI.AgyToken == "" && c.CLI.AgyGatewayURL == "" {
+				errs = append(errs, fmt.Errorf("%s or %s is required when %s is %s", EnvAgyToken, EnvAgyGatewayURL, use.env, CLIAgy))
 			}
 		}
 	}

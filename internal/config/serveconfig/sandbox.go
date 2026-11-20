@@ -20,6 +20,7 @@ const (
 	EnvSandboxAgyDir      = "OCR_SERVE_SANDBOX_AGY_DIR"
 	EnvSandboxImagePrefix = "OCR_SERVE_SANDBOX_IMAGE_"
 	EnvSandboxAddHosts    = "OCR_SERVE_SANDBOX_ADD_HOSTS"
+	EnvSandboxAgyNetwork  = "OCR_SERVE_SANDBOX_AGY_NETWORK"
 )
 
 // Sandbox modes.
@@ -31,6 +32,14 @@ const (
 	DefaultDockerBin     = "docker"
 	DefaultSandboxMemory = "6g"
 	DefaultSandboxCPUs   = "4"
+)
+
+// Docker networks of the agy sandbox.
+const (
+	NetworkBridge = "bridge"
+	NetworkHost   = "host"
+
+	DefaultSandboxAgyNetwork = NetworkBridge
 )
 
 // Toolchain kinds of a sandbox image, in the order the image detection
@@ -84,6 +93,10 @@ type SandboxConfig struct {
 	// can resolve to another address through the public DNS a container
 	// uses, so endpoints such as an LLM proxy on the tailnet need them.
 	AddHosts []string
+	// AgyNetwork is the docker network of agy containers: NetworkBridge, or
+	// NetworkHost when the LLM gateway is reachable only from the host
+	// network. Other CLIs always use the bridge.
+	AgyNetwork string
 }
 
 func (l *loader) sandbox() SandboxConfig {
@@ -96,6 +109,8 @@ func (l *loader) sandbox() SandboxConfig {
 		ClaudeDir: l.absPath(EnvSandboxClaudeDir, ""),
 		AgyDir:    l.absPath(EnvSandboxAgyDir, ""),
 		Images:    make(map[string]string, len(DefaultSandboxImages)),
+
+		AgyNetwork: l.oneOf(EnvSandboxAgyNetwork, DefaultSandboxAgyNetwork, NetworkBridge, NetworkHost),
 	}
 	for _, h := range splitList(l.getenv(EnvSandboxAddHosts)) {
 		if !addHostPattern.MatchString(h) {

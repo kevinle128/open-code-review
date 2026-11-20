@@ -213,8 +213,8 @@ func codexStreamMessage(path string) (string, error) {
 // run git inside the run's container; without one a shell would run where
 // the service runs. A Shell run keeps the read tools and the read-only
 // checkout mount, so its shell cannot change the checkout. SettingsFile is
-// the host settings.json; the run home gets a copy of its env and model
-// keys only, so the host's hooks, plugins and permission rules do not
+// the host settings.json; the run home gets a copy of its env, model and
+// advisorModel keys only, so the host's hooks, plugins and permission rules do not
 // apply.
 type Claude struct {
 	Bin          string
@@ -327,8 +327,9 @@ func rewriteAgent(b []byte) []byte {
 }
 
 // claudeSettingsKeys are the host settings a run keeps: the API endpoint
-// and token live in env, the default model in model.
-var claudeSettingsKeys = []string{"env", "model"}
+// and token live in env, the default model in model, and the advisor
+// model in advisorModel.
+var claudeSettingsKeys = []string{"env", "model", "advisorModel"}
 
 func writeClaudeSettings(src, dst string) error {
 	b, err := os.ReadFile(src)

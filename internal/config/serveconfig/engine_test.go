@@ -143,7 +143,7 @@ func TestRequireServe_CLIEngine(t *testing.T) {
 			[]string{EnvCodexAuth + " is required when " + EnvVerifyCLI}},
 		{"agy needs the token", Config{GitHub: gh, Engine: EngineCLI,
 			CLI: CLIConfig{ReviewCLI: CLIAgy, SkillDir: "/s", ClaudeSettings: "/c"}, Verify: VerifyConfig{CLI: CLIClaude}},
-			[]string{EnvAgyToken + " is required when " + EnvReviewCLI}},
+			[]string{EnvAgyToken + " or " + EnvAgyGatewayURL + " is required when " + EnvReviewCLI}},
 		{"agy complete", Config{GitHub: gh, Engine: EngineCLI,
 			CLI: CLIConfig{ReviewCLI: CLIAgy, SkillDir: "/s", ClaudeSettings: "/c", AgyToken: "/t"}, Verify: VerifyConfig{CLI: CLIClaude}}, nil},
 		{"both complete", Config{GitHub: gh, Engine: EngineCLI,
@@ -167,5 +167,36 @@ func TestRequireServe_CLIEngine(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLoad_AgyGatewayURL(t *testing.T) {
+	const gw = "https://gw.example/v1/secret-key"
+	c, err := Load(env(map[string]string{EnvReviewCLI: "agy", EnvAgyGatewayURL: gw}), files(nil))
+	if err != nil || c.CLI.AgyGatewayURL != gw {
+		t.Fatalf("gateway %q %v", c.CLI.AgyGatewayURL, err)
+	}
+	if c, err = Load(env(nil), files(nil)); err != nil || c.CLI.AgyGatewayURL != "" {
+		t.Fatalf("default %q %v", c.CLI.AgyGatewayURL, err)
+	}
+	for _, bad := range []string{"gw.example/secret-key", "ftp://gw.example/secret-key", "https:///secret-key", "http://%zz-secret-key"} {
+		_, err := Load(env(map[string]string{EnvAgyGatewayURL: bad}), files(nil))
+		if err == nil || !strings.Contains(err.Error(), EnvAgyGatewayURL) || strings.Contains(err.Error(), "secret-key") {
+			t.Fatalf("value %q: err %v", bad, err)
+		}
+	}
+}
+
+func TestRequireServe_AgyGatewayReplacesToken(t *testing.T) {
+	gh := &GitHubConfig{AppID: 1}
+	cfg := Config{GitHub: gh, Engine: EngineCLI, CLI: CLIConfig{ReviewCLI: CLIAgy, SkillDir: "/s", CodexAuth: "/a", ClaudeSettings: "/c"},
+		Verify: VerifyConfig{CLI: CLICodex}}
+	err := cfg.RequireServe()
+	if err == nil || !strings.Contains(err.Error(), EnvAgyToken) || !strings.Contains(err.Error(), EnvAgyGatewayURL) {
+		t.Fatalf("err %v", err)
+	}
+	cfg.CLI.AgyGatewayURL = "https://gw.example/k"
+	if err := cfg.RequireServe(); err != nil {
+		t.Fatal(err)
 	}
 }

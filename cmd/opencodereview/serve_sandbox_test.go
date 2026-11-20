@@ -247,3 +247,19 @@ func mountsEqual(a, b []agentcli.Mount) bool {
 	}
 	return true
 }
+
+func TestBuildServeEnginesMountsNoAgyTokenWithAGateway(t *testing.T) {
+	cfg := sandboxEngineConfig(t, "{}", t.TempDir())
+	useFakeAgy(t, cfg, "{}")
+	cfg.CLI.AgyToken, cfg.CLI.AgyGatewayURL = "", "https://gw.example/k"
+	rev, _, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := rev.(*clireview.Reviewer).CLI.(agentcli.Agy)
+	realBin, _ := filepath.EvalSymlinks(cfg.CLI.AgyBin)
+	want := []agentcli.Mount{{Path: cfg.CLI.SkillDir, ReadOnly: true}, {Path: filepath.Dir(realBin), ReadOnly: true}}
+	if a.Sandbox == nil || !mountsEqual(a.Sandbox.Mounts, want) {
+		t.Fatalf("agy sandbox %+v", a.Sandbox)
+	}
+}
