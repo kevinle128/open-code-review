@@ -175,6 +175,8 @@ OCR_SERVE_GITLAB_WEBHOOK_SECRET=<secret>
 # For OCR_SERVE_REVIEW_CLI=agy (review only):
 # OCR_SERVE_AGY_BIN=/home/<user>/.local/bin/agy
 # OCR_SERVE_AGY_TOKEN=/home/<user>/.gemini/antigravity-cli/antigravity-oauth-token
+# Or, instead of the token, an LLM gateway (a secret; it holds a key):
+# OCR_SERVE_AGY_GATEWAY_URL=https://<gateway>/<path-with-key>
 # Optional, as on the stack: OCR_SERVE_REVIEW_CLI, OCR_SERVE_VERIFY_CLI,
 # OCR_SERVE_VERIFY_MODEL, OCR_SERVE_CODEX_EFFORT, OCR_SERVE_MAX_ROUNDS,
 # OCR_SERVE_EXCLUDE, ...
@@ -351,9 +353,10 @@ marker and the merge gate are the same for both; only `cli` has a
 | `OCR_SERVE_BATCH_LINES` | `1500` | Changed lines (insertions plus deletions) per review batch, `100`..`50000`. |
 | `OCR_SERVE_BATCH_FILES` | `25` | Files per review batch, `1`..`500`. |
 | `OCR_SERVE_BATCH_CONCURRENCY` | `1` | Review batches of one PR that run at the same time, `1`..`4`. Each is a full CLI run (and a sandbox container), on top of `OCR_SERVE_WORKERS`. |
-| `OCR_SERVE_CLAUDE_SETTINGS` | | Required with `claude`. The host `~/.claude/settings.json`. Each run's `CLAUDE_CONFIG_DIR` gets a `settings.json` with only its `env` and `model` keys, never hooks or permissions. |
+| `OCR_SERVE_CLAUDE_SETTINGS` | | Required with `claude`. The host `~/.claude/settings.json`. Each run's `CLAUDE_CONFIG_DIR` gets a `settings.json` with only its `env`, `model` and `advisorModel` keys, never hooks, plugins or permissions. Because `env` is copied, `env.ANTHROPIC_CUSTOM_HEADERS` of the host settings reaches Claude runs; for Agent-Memory set it to `x-memory-mode: off`. |
 | `OCR_SERVE_AGY_BIN` | `agy` | Name on `PATH` or absolute path of the Antigravity CLI. |
-| `OCR_SERVE_AGY_TOKEN` | | Required with `agy`. The host `~/.gemini/antigravity-cli/antigravity-oauth-token`. Each run home links to it; nothing else of the host `~/.gemini` is used. Mount it read-write so a token refresh reaches the host file. |
+| `OCR_SERVE_AGY_TOKEN` | | Required with `agy`, unless `OCR_SERVE_AGY_GATEWAY_URL` is set. The host `~/.gemini/antigravity-cli/antigravity-oauth-token`. Each run home links to it; nothing else of the host `~/.gemini` is used. Mount it read-write so a token refresh reaches the host file. |
+| `OCR_SERVE_AGY_GATEWAY_URL` | empty | Absolute http(s) URL of an LLM gateway. It is a secret: the URL holds a key, so keep it in the secret store, never in a log, a ticket or a config dump (the service never prints it). When set, the agy run gets it as `AGY_LLM_GATEWAY_URL` (no other CLI does), agy sends every model request to it and needs no Google sign-in, so `OCR_SERVE_AGY_TOKEN` becomes optional. With both set, the token is still linked as before. |
 | `OCR_SERVE_AGY_MODEL` | empty | agy `--model`, a slug from `agy models`, for example `gemini-4-hydrogen-high`; empty uses the account default. |
 | `OCR_SERVE_AGY_EFFORT` | empty | agy `--effort`: `low`, `medium`, `high`, `xhigh` or `max`. |
 
@@ -401,7 +404,7 @@ The Komodo stack mounts these host paths (each one is a stack variable):
 | `/home/vtcm/.local/share/claude` (`OCR_HOST_CLAUDE_DIR`) | `/opt/claude` | read-only |
 | `/home/vtcm/.codex/packages/standalone` (`OCR_HOST_CODEX_DIR`) | `/opt/codex` | read-only |
 | `/home/vtcm/.codex` (`OCR_HOST_CODEX_HOME`) | `/opt/codex-home` | read-write; only `auth.json` is used |
-| `/home/vtcm/.claude` (`OCR_HOST_CLAUDE_HOME`) | `/opt/claude-home` | read-only; only the `env` and `model` keys of `settings.json` are used |
+| `/home/vtcm/.claude` (`OCR_HOST_CLAUDE_HOME`) | `/opt/claude-home` | read-only; only the `env`, `model` and `advisorModel` keys of `settings.json` are used |
 | `/home/vtcm/.local/bin/agy` (`OCR_HOST_AGY_BIN`) | `/opt/agy/agy` | read-only; the binary file |
 | `/home/vtcm/.gemini/antigravity-cli/antigravity-oauth-token` (`OCR_HOST_AGY_TOKEN`) | `/opt/agy-token/antigravity-oauth-token` | read-write; the token file only |
 | `/home/vtcm/ocr-review/skills` (`OCR_HOST_SKILL_DIR`) | `/opt/ocr-skills` | read-only |
@@ -410,6 +413,8 @@ The agy rows are file mounts: docker creates an empty directory at a host
 path that does not exist, so install agy and sign in on the host before the
 first deploy with this stack. `OCR_SERVE_AGY_BIN` defaults to `/opt/agy/agy`
 and `OCR_SERVE_AGY_TOKEN` is `/opt/agy-token/antigravity-oauth-token`.
+The stack passes `OCR_SERVE_AGY_GATEWAY_URL` through from its variables; with
+it set, the token mount is not used by the run and can stay as is.
 
 `OCR_SERVE_CLAUDE_BIN` defaults to `/opt/claude/versions/2.1.322` and
 `OCR_SERVE_CODEX_BIN` to
@@ -589,6 +594,7 @@ any container.
 | `OCR_SERVE_SANDBOX_MEMORY` | `6g` | `docker run --memory`. |
 | `OCR_SERVE_SANDBOX_CPUS` | `4` | `docker run --cpus`. |
 | `OCR_SERVE_SANDBOX_ADD_HOSTS` | empty | Comma-separated `host:ip` pairs for `docker run --add-host`. A container resolves names through public DNS, so a name the host resolves through Tailscale MagicDNS (for example an LLM proxy at `vtc.<tailnet>.ts.net`) needs its tailnet IP here, or the CLI cannot reach it. |
+| `OCR_SERVE_SANDBOX_AGY_NETWORK` | `bridge` | `bridge` or `host`. Docker network of agy containers only; codex and claude always use `bridge`. Use `host` when the agy LLM gateway is reachable only from the host network, for example a `tailscale serve` listener bound to `tailscale0`, which a bridge container cannot reach. Trade-off: with `host` the agy run shares the host network stack and can reach services on the host loopback, so use it only when needed. `OCR_SERVE_SANDBOX_ADD_HOSTS` still works with `host`. |
 | `OCR_SERVE_SANDBOX_IMAGE_GO` | `golang:1-bookworm` | Checkout with `go.mod`. |
 | `OCR_SERVE_SANDBOX_IMAGE_DOTNET` | `mcr.microsoft.com/dotnet/sdk:9.0` | `*.csproj`, `*.sln` or `global.json`. |
 | `OCR_SERVE_SANDBOX_IMAGE_RUST` | `rust:1-bookworm` | `Cargo.toml`. |
@@ -627,8 +633,8 @@ the container as on the host:
 | `$OCR_SERVE_SKILL_DIR` | read-only |
 | The CLI install (see above) | read-only |
 | Codex: the directory of `OCR_SERVE_CODEX_AUTH` (`~/.codex`) | read-write, so a token refresh reaches the host; only `auth.json`, linked from the run home, is used |
-| Claude: `OCR_SERVE_CLAUDE_SETTINGS` | read-only; the run home holds the copy with only `env` and `model` |
-| agy: `OCR_SERVE_AGY_TOKEN` (the token file only) | read-write, so a token refresh reaches the host; linked from the run home |
+| Claude: `OCR_SERVE_CLAUDE_SETTINGS` | read-only; the run home holds the copy with only `env`, `model` and `advisorModel` |
+| agy: `OCR_SERVE_AGY_TOKEN` (the token file only), when set | read-write, so a token refresh reaches the host; linked from the run home. With `OCR_SERVE_AGY_GATEWAY_URL` and no token, nothing of the host `~/.gemini` is mounted |
 | `$OCR_SERVE_DATA_DIR/cache/{go,npm,nuget,cargo,pip}` | read-write toolchain caches |
 | `<run dir>/passwd`, `<run dir>/group` at `/etc/passwd`, `/etc/group` | read-only; give the service uid a user name, which some tools look up |
 

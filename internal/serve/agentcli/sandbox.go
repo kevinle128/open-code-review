@@ -67,7 +67,9 @@ type Sandbox struct {
 	CacheDir string
 	Mounts   []Mount
 	AddHosts []string
-	Log      *slog.Logger
+	// Network is the docker network of the container; empty means bridge.
+	Network string
+	Log     *slog.Logger
 	// Getenv supplies the docker client environment; nil means os.Getenv.
 	Getenv func(string) string
 }
@@ -76,6 +78,13 @@ type Sandbox struct {
 func (s *Sandbox) WithMounts(m ...Mount) *Sandbox {
 	c := *s
 	c.Mounts = append(append([]Mount(nil), s.Mounts...), m...)
+	return &c
+}
+
+// WithNetwork returns a copy of s that runs its containers on network.
+func (s *Sandbox) WithNetwork(network string) *Sandbox {
+	c := *s
+	c.Network = network
 	return &c
 }
 
@@ -191,11 +200,15 @@ func (s *Sandbox) runArgs(inv Invocation, p Process, name, image string) ([]stri
 	if err := writeEnvFile(envFile, s.containerEnv(p.Env)); err != nil {
 		return nil, err
 	}
+	network := s.Network
+	if network == "" {
+		network = "bridge"
+	}
 	args := []string{"run", "--rm", "-i", "--name", name, "--init",
 		"--user", strconv.Itoa(s.UID) + ":" + strconv.Itoa(s.GID),
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--pids-limit", "1024", "--memory", s.Memory, "--cpus", s.CPUs,
-		"--network", "bridge", "-w", p.Dir, "--env-file", envFile}
+		"--network", network, "-w", p.Dir, "--env-file", envFile}
 	for _, h := range s.AddHosts {
 		args = append(args, "--add-host", h)
 	}

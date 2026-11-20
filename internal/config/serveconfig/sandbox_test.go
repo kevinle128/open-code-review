@@ -29,7 +29,7 @@ func TestLoad_SandboxSettings(t *testing.T) {
 	}
 	want := SandboxConfig{
 		Mode: SandboxDocker, DockerBin: "/usr/local/bin/docker", Memory: "8G", CPUs: "2.5",
-		CodexDir: "/opt/codex", ClaudeDir: "/opt/claude", AgyDir: "/opt/agy",
+		CodexDir: "/opt/codex", ClaudeDir: "/opt/claude", AgyDir: "/opt/agy", AgyNetwork: NetworkBridge,
 		Images: map[string]string{
 			ImageGo:      "golang:1.26-bookworm",
 			ImageDotnet:  "mcr.microsoft.com/dotnet/sdk:10.0",
@@ -149,5 +149,27 @@ func TestSandboxAddHosts(t *testing.T) {
 	}}
 	if bad.sandbox(); len(bad.errs) == 0 {
 		t.Fatal("want an error for an invalid entry")
+	}
+}
+
+func TestSandboxAgyNetwork(t *testing.T) {
+	load := func(v string) (SandboxConfig, []error) {
+		l := &loader{getenv: func(k string) string {
+			if k == EnvSandboxAgyNetwork {
+				return v
+			}
+			return ""
+		}}
+		s := l.sandbox()
+		return s, l.errs
+	}
+	for _, tc := range []struct{ in, want string }{{"", NetworkBridge}, {"bridge", NetworkBridge}, {"host", NetworkHost}} {
+		s, errs := load(tc.in)
+		if len(errs) != 0 || s.AgyNetwork != tc.want {
+			t.Fatalf("%q: got %q, errors %v", tc.in, s.AgyNetwork, errs)
+		}
+	}
+	if _, errs := load("none"); len(errs) == 0 {
+		t.Fatal("want an error for an invalid network")
 	}
 }

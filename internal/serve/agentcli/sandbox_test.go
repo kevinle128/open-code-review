@@ -513,3 +513,20 @@ func TestSandboxPassesAddHosts(t *testing.T) {
 		t.Fatalf("run args miss the --add-host pair:\n%s", runArgs)
 	}
 }
+
+func TestSandboxNetwork(t *testing.T) {
+	for _, tc := range []struct{ network, want string }{{"", "bridge"}, {"host", "host"}} {
+		f := newSandboxFixture(t)
+		sb := f.sb.WithNetwork(tc.network)
+		result, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "result": "{}"})
+		bin := writeScript(t, t.TempDir(), "claude", recorder(f.rec)+"echo '"+string(result)+"'\n")
+		c := Claude{Bin: bin, SettingsFile: writeSettings(t, `{"model":"sonnet"}`), Sandbox: sb}
+		if _, err := c.Exec(context.Background(), f.inv("review")); err != nil {
+			t.Fatal(err)
+		}
+		runArgs := readFile(t, filepath.Join(f.dockerRec, "run-args"))
+		if !strings.Contains(runArgs, "--network\n"+tc.want+"\n") {
+			t.Fatalf("network %q: run args miss --network %s:\n%s", tc.network, tc.want, runArgs)
+		}
+	}
+}

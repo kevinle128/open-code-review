@@ -43,13 +43,21 @@ const (
 // TokenFile is the host OAuth token file. The run home links to it, so a
 // token refresh reaches the host file and agy writes its conversations,
 // logs and caches into the run home instead of the host's.
+//
+// GatewayURL is an LLM gateway. agy then sends every model request to it
+// and needs no sign-in, so TokenFile may be empty. The URL holds a key: it
+// goes to the agy process only, through its environment.
 type Agy struct {
-	Bin       string
-	Model     string
-	Effort    string
-	TokenFile string
-	Sandbox   *Sandbox
+	Bin        string
+	Model      string
+	Effort     string
+	TokenFile  string
+	GatewayURL string
+	Sandbox    *Sandbox
 }
+
+// agyGatewayEnv is the variable agy reads the gateway URL from.
+const agyGatewayEnv = "AGY_LLM_GATEWAY_URL"
 
 // Name implements CLI.
 func (Agy) Name() string { return "agy" }
@@ -59,14 +67,20 @@ func (a Agy) Exec(ctx context.Context, inv Invocation) (string, error) {
 	if inv.Edit {
 		return "", errors.New("agy runs reviews only")
 	}
-	link := filepath.Join(inv.Run.Home, agyTokenPath)
-	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
-		return "", fmt.Errorf("create agy home: %w", err)
+	if a.TokenFile != "" {
+		link := filepath.Join(inv.Run.Home, agyTokenPath)
+		if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+			return "", fmt.Errorf("create agy home: %w", err)
+		}
+		if err := os.Symlink(a.TokenFile, link); err != nil {
+			return "", fmt.Errorf("link agy token: %w", err)
+		}
+		defer syncAuthBack(link, a.TokenFile)
 	}
-	if err := os.Symlink(a.TokenFile, link); err != nil {
-		return "", fmt.Errorf("link agy token: %w", err)
+	var extraEnv []string
+	if a.GatewayURL != "" {
+		extraEnv = append(extraEnv, agyGatewayEnv+"="+a.GatewayURL)
 	}
-	defer syncAuthBack(link, a.TokenFile)
 
 	full := inv
 	full.Prompt = agyPreface(inv.RepoDir) + inv.Prompt
@@ -98,7 +112,7 @@ func (a Agy) Exec(ctx context.Context, inv Invocation) (string, error) {
 	}
 	// prompt.txt keeps the full prompt for a kept run directory; the
 	// prompt goes in the arguments, and stdin is an empty file.
-	p, err := full.process(a.Bin, args, inv.env())
+	p, err := full.process(a.Bin, args, inv.env(extraEnv...))
 	if err != nil {
 		return "", err
 	}

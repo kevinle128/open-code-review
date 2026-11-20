@@ -258,3 +258,71 @@ func TestSandboxRunsAgyInTheRunInputDir(t *testing.T) {
 		}
 	}
 }
+
+const agyOK = `echo '{"status":"SUCCESS","response":"{}"}'
+`
+
+func TestAgyExecPassesTheGatewayURLToAgyOnly(t *testing.T) {
+	const gw = "https://gw.example/v1/key-123"
+	f := newFixture(t)
+	bin := fakeAgy(t, t.TempDir(), f.rec, agyOK)
+	if _, err := (Agy{Bin: bin, TokenFile: agyToken(t), GatewayURL: gw}).Exec(context.Background(), f.inv("p")); err != nil {
+		t.Fatal(err)
+	}
+	if env := readFile(t, filepath.Join(f.rec, "env")); !strings.Contains(env, "AGY_LLM_GATEWAY_URL="+gw+"\n") {
+		t.Fatal("agy env misses the gateway URL")
+	}
+
+	g := newFixture(t)
+	bin = fakeAgy(t, t.TempDir(), g.rec, agyOK)
+	if _, err := (Agy{Bin: bin, TokenFile: agyToken(t)}).Exec(context.Background(), g.inv("p")); err != nil {
+		t.Fatal(err)
+	}
+	if env := readFile(t, filepath.Join(g.rec, "env")); strings.Contains(env, "AGY_LLM_GATEWAY_URL") {
+		t.Fatal("gateway variable set without a gateway")
+	}
+}
+
+func TestAgyExecWithGatewayNeedsNoToken(t *testing.T) {
+	f := newFixture(t)
+	bin := fakeAgy(t, t.TempDir(), f.rec, agyOK)
+	if _, err := (Agy{Bin: bin, GatewayURL: "https://gw.example/k"}).Exec(context.Background(), f.inv("p")); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(f.run.Home, agyTokenPath)
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("token link exists without a token file: %v", err)
+	}
+}
+
+func TestSandboxCarriesTheGatewayURLIntoTheContainer(t *testing.T) {
+	const gw = "https://gw.example/v1/key-456"
+	f := newSandboxFixture(t)
+	installDir := t.TempDir()
+	bin := fakeAgy(t, installDir, f.rec, agyOK)
+	sb := f.sb.WithMounts(Mount{Path: installDir, ReadOnly: true})
+	if _, err := (Agy{Bin: bin, GatewayURL: gw, Sandbox: sb}).Exec(context.Background(), f.inv("review")); err != nil {
+		t.Fatal(err)
+	}
+	if env := readFile(t, filepath.Join(f.rec, "env")); !strings.Contains(env, "AGY_LLM_GATEWAY_URL="+gw+"\n") {
+		t.Fatal("container env misses the gateway URL")
+	}
+	runArgs := readFile(t, filepath.Join(f.dockerRec, "run-args"))
+	if strings.Contains(runArgs, gw) {
+		t.Fatal("gateway URL is in the docker arguments")
+	}
+}
+
+func TestBaseEnvDoesNotPassAServiceGatewayURL(t *testing.T) {
+	getenv := func(k string) string {
+		if k == "AGY_LLM_GATEWAY_URL" {
+			return "https://gw.example/k"
+		}
+		return ""
+	}
+	for _, kv := range BaseEnv(getenv, "/h", "/t") {
+		if strings.HasPrefix(kv, "AGY_LLM_GATEWAY_URL=") {
+			t.Fatal("BaseEnv passes the gateway URL on")
+		}
+	}
+}

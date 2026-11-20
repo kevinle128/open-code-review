@@ -422,3 +422,59 @@ func TestEngineName(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestBuildServeReviewerRunsAgyThroughAGatewayWithoutAToken(t *testing.T) {
+	writeServeAppConfig(t, `{"language": "Vietnamese"}`)
+	noLLMEnv(t)
+	cfg := cliEngineConfig(t, "{}")
+	useFakeAgy(t, cfg, "{}")
+	cfg.CLI.AgyToken, cfg.CLI.AgyGatewayURL = "", "https://gw.example/k"
+	rev, _, err := buildServeEngines(context.Background(), cfg, os.Getenv, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := rev.(*clireview.Reviewer).CLI.(agentcli.Agy)
+	if !ok || a.TokenFile != "" || a.GatewayURL != cfg.CLI.AgyGatewayURL {
+		t.Fatalf("agy cli %+v", rev.(*clireview.Reviewer).CLI)
+	}
+}
+
+func TestBuildAgentCLIUsesHostNetworkOnlyForAgy(t *testing.T) {
+	dir := t.TempDir()
+	script := func(name string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cred := filepath.Join(dir, "cred")
+	if err := os.WriteFile(cred, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := serveconfig.CLIConfig{CodexBin: script("codex"), CodexAuth: cred, AgyBin: script("agy"), AgyGatewayURL: "https://gw.example/k"}
+	sc := serveconfig.SandboxConfig{AgyNetwork: serveconfig.NetworkHost}
+	sb := &agentcli.Sandbox{}
+	agy, err := buildAgentCLI(c, sc, sb, serveconfig.CLIAgy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := agy.(agentcli.Agy).Sandbox.Network; n != "host" {
+		t.Fatalf("agy network %q", n)
+	}
+	codex, err := buildAgentCLI(c, sc, sb, serveconfig.CLICodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := codex.(agentcli.Codex).Sandbox.Network; n != "" {
+		t.Fatalf("codex network %q", n)
+	}
+	sc.AgyNetwork = serveconfig.NetworkBridge
+	agy, err = buildAgentCLI(c, sc, sb, serveconfig.CLIAgy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := agy.(agentcli.Agy).Sandbox.Network; n != "bridge" {
+		t.Fatalf("agy default network %q", n)
+	}
+}
