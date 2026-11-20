@@ -117,7 +117,7 @@ func (s *Server) dispatchComment(ev forge.Event, requestID string) (string, bool
 		// starts a new chain.
 		gen, busy, started := s.startChainIfIdle(ev.Ref, 1, scope)
 		if !started {
-			s.replyBusyAsync(ev.Ref, busy, cmd, requestID)
+			s.replyBusyAsync(ev.Ref, ev.CommentID, busy, cmd, requestID)
 			return "ignored: chain running", true
 		}
 		cj.gen = gen
@@ -133,11 +133,15 @@ func (s *Server) dispatchComment(ev forge.Event, requestID string) (string, bool
 }
 
 // replyBusyAsync answers a command that was dropped because the chain of the
-// PR is still queued or running.
-func (s *Server) replyBusyAsync(ref forge.PRRef, busy busyChain, cmd Command, requestID string) {
-	f := s.forges[ref.Platform]
+// PR is still queued or running. A command without a comment, such as a
+// GitLab reviewer assignment, gets no reply.
+func (s *Server) replyBusyAsync(ref forge.PRRef, commentID string, busy busyChain, cmd Command, requestID string) {
 	log := withPR(withRequest(s.log, requestID), ref)
 	log.Info("decided", "trigger", "command "+cmd.Kind, "action", "ignored: chain running", "round", busy.n, "scope", busy.scope)
+	if commentID == "" {
+		return
+	}
+	f := s.forges[ref.Platform]
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

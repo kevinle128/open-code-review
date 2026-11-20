@@ -184,3 +184,41 @@ func TestPushWhileRunningKeepsTheChain(t *testing.T) {
 		t.Fatalf("marker %+v", m)
 	}
 }
+
+// TestOpenedKeepsACommandChainStartedDuringItsRead covers a command accepted
+// while the opened evaluation read the PR: the evaluation keeps that chain.
+func TestOpenedKeepsACommandChainStartedDuringItsRead(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(26)
+	chainPR(h, ref)
+	gen, _, started := h.srv.startChainIfIdle(ref, 1, state.ScopeCommit)
+	if !started {
+		t.Fatal("chain not started")
+	}
+	h.srv.queue.submit(ref, job{trigger: triggerOpened, requestID: "r-open"})
+	h.drain()
+	if !h.srv.current(ref, gen) || len(h.rev.requests()) != 0 || !strings.Contains(h.logs.String(), `"reason":"chain running"`) {
+		t.Fatalf("current %v reviews %d logs:\n%s", h.srv.current(ref, gen), len(h.rev.requests()), h.logs.String())
+	}
+}
+
+// TestReviewerAssignmentWhileRunningGetsNoReply covers a GitLab reviewer
+// assignment, a command without a comment, while a chain runs.
+func TestReviewerAssignmentWhileRunningGetsNoReply(t *testing.T) {
+	h := newHarness(t)
+	ref := glRef(27)
+	f := h.forgeFor(ref.Platform)
+	chainPR(h, ref)
+	started, release := holdRoundTwo(h)
+	h.srv.queue.submit(ref, job{trigger: triggerOpened, requestID: "r-open"})
+	<-started
+	ev := forge.Event{Kind: forge.EventCommand, Ref: ref, DeliveryID: "a1", CommentBody: "/review"}
+	if got := h.srv.dispatch(ev, nil, "r-assign"); got != "ignored: chain running" {
+		t.Fatal(got)
+	}
+	close(release)
+	h.drain()
+	if len(busyReplies(f)) != 0 {
+		t.Fatalf("busy replies %v", busyReplies(f))
+	}
+}

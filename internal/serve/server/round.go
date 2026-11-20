@@ -82,10 +82,20 @@ func (s *Server) restartChain(ref forge.PRRef) uint64 {
 
 // startChain replaces the chain of the PR with a new one whose first round,
 // n on scope, is about to be queued or run.
+// The replacement happens under one lock, so a command never finds the PR
+// idle in between.
 func (s *Server) startChain(ref forge.PRRef, n int, scope string) uint64 {
-	gen := s.restartChain(ref)
-	s.roundQueued(ref, gen, n, scope)
-	return gen
+	c := s.chain(ref)
+	s.chainMu.Lock()
+	defer s.chainMu.Unlock()
+	c.gen++
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+	c.live, c.limit = 1, 0
+	c.n, c.scope = n, scope
+	return c.gen
 }
 
 // startChainIfIdle starts a chain for a command, unless the chain of the PR
@@ -219,9 +229,16 @@ func (s *Server) evaluate(f forge.Forge, ref forge.PRRef, j job, log *slog.Logge
 		}
 		return nil
 	}
+	// A command accepted while the PR was read already started a chain;
+	// that chain is kept.
+	gen, _, started := s.startChainIfIdle(ref, 1, state.ScopeFull)
+	if !started {
+		log.Info("decided", "trigger", string(j.trigger), "action", "none", "reason", "chain running")
+		return nil
+	}
 	log.Info("decided", "trigger", string(j.trigger), "action", "start chain")
 	s.clearCheckpoints(ref, log)
-	return s.round(f, ref, roundJob{n: 1, scope: state.ScopeFull, gen: s.startChain(ref, 1, state.ScopeFull)}, j, log)
+	return s.round(f, ref, roundJob{n: 1, scope: state.ScopeFull, gen: gen}, j, log)
 }
 
 // readChain reads the PR and its chain marker. present is true when a
