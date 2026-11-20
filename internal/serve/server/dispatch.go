@@ -11,6 +11,7 @@ import (
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
+	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 // dispatch filters a verified event and queues its work. It runs inside the
@@ -107,9 +108,19 @@ func (s *Server) dispatchComment(ev forge.Event, requestID string) (string, bool
 	case perr != nil:
 		cj.reject = perr.Error()
 	default:
-		// A new review restarts the chain at once: the running round is
-		// cancelled and the rounds it queued are skipped.
-		cj.gen = s.restartChain(ev.Ref)
+		scope := state.ScopeFull
+		if cmd.Kind == CommandReviewCommit {
+			scope = state.ScopeCommit
+		}
+		// A chain that is queued or running is not replaced: its work is
+		// kept and the command is answered and dropped. Only an idle PR
+		// starts a new chain.
+		gen, busy, started := s.startChainIfIdle(ev.Ref, 1, scope)
+		if !started {
+			s.replyBusyAsync(ev.Ref, busy, cmd, requestID)
+			return "ignored: chain running", true
+		}
+		cj.gen = gen
 	}
 	if ev.CommentID != "" {
 		s.reactAsync(ev.Ref, ev.CommentID, forge.ReactionEyes, requestID)
@@ -119,6 +130,23 @@ func (s *Server) dispatchComment(ev forge.Event, requestID string) (string, bool
 		return "queued command reply", true
 	}
 	return "queued command " + cmd.Kind, true
+}
+
+// replyBusyAsync answers a command that was dropped because the chain of the
+// PR is still queued or running.
+func (s *Server) replyBusyAsync(ref forge.PRRef, busy busyChain, cmd Command, requestID string) {
+	f := s.forges[ref.Platform]
+	log := withPR(withRequest(s.log, requestID), ref)
+	log.Info("decided", "trigger", "command "+cmd.Kind, "action", "ignored: chain running", "round", busy.n, "scope", busy.scope)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ctx, cancel := context.WithTimeout(s.runCtx, sideCallTimeout)
+		defer cancel()
+		if err := f.PostNote(ctx, ref, state.RenderCommandBusy(busy.n, busy.limit, busy.scope, s.locales[ref.Platform])); err != nil {
+			log.Error("post command reply", "error", err.Error())
+		}
+	}()
 }
 
 // reactAsync acknowledges a command at once, even while the PR is busy with

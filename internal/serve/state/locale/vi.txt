@@ -123,3 +123,6 @@ failed = Vòng gần nhất bị lỗi. Bình luận `/review` để chạy lạ
 error = Lệnh thất bại: {reason}
 help = Lệnh hỗ trợ: `/review [--effort=low|medium|high]` (chạy lại chuỗi review trên toàn bộ PR) và `/review-commit` (chạy lại trên commit mới nhất).
 help_mention = Lệnh hỗ trợ: `@{bot} review [--effort=low|medium|high]` (chạy lại chuỗi review trên toàn bộ PR) và `@{bot} review-commit` (chạy lại trên commit mới nhất); `/review` và `/review-commit` cũng dùng được.
+busy = Một review đang chạy ({round}, phạm vi: {scope}) nên lệnh này bị bỏ qua. Hãy gửi lại sau khi chuỗi review hiện tại kết thúc.
+scope_full = toàn bộ PR
+scope_commit = commit mới nhất
