@@ -851,10 +851,13 @@ round comments are separate comments.
 
 Commands in a PR comment:
 
-- `/review [--effort=low|medium|high]` restarts the chain as round 1 on the
-  whole PR. A round of the old chain that runs is cancelled, and its queued
-  rounds are skipped.
+- `/review [--effort=low|medium|high]` starts a chain with round 1 on the
+  whole PR.
 - `/review-commit` does the same, but round 1 covers only the latest commit.
+- A review command does not replace a chain that has a round running or
+  waiting for a worker. The chain goes on, and the service replies with the
+  round and scope that are in progress and ignores the command. Send it again
+  after the chain ends.
 - The command comment gets a reaction on receipt (eyes) and when round 1
   ends (GitHub: rocket; GitLab: white_check_mark); the round comment is the
   answer. A command that is rejected or whose round fails gets GitHub:

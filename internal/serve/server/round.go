@@ -32,12 +32,26 @@ type roundJob struct {
 }
 
 // chainCtl tracks the chain of one PR: gen counts the chains started, and
-// cancel stops the round that runs. status serializes the marker and commit
+// cancel stops the round that runs. live counts the rounds of the current
+// chain that are queued or running, so a chain with live > 0 is busy; n and
+// scope describe the latest of them and limit is the fix-round limit once a
+// round has read it (0 before). status serializes the marker and commit
 // status writes of a round against a status copy for a new head.
 type chainCtl struct {
 	gen    uint64
 	cancel context.CancelFunc
+	live   int
+	n      int
+	scope  string
+	limit  int
 	status sync.Mutex
+}
+
+// busyChain describes the round a command found in a chain that is still
+// queued or running.
+type busyChain struct {
+	n, limit int
+	scope    string
 }
 
 func (s *Server) chain(ref forge.PRRef) *chainCtl {
@@ -58,11 +72,83 @@ func (s *Server) restartChain(ref forge.PRRef) uint64 {
 	s.chainMu.Lock()
 	defer s.chainMu.Unlock()
 	c.gen++
+	c.live, c.limit = 0, 0
 	if c.cancel != nil {
 		c.cancel()
 		c.cancel = nil
 	}
 	return c.gen
+}
+
+// startChain replaces the chain of the PR with a new one whose first round,
+// n on scope, is about to be queued or run.
+// The replacement happens under one lock, so a command never finds the PR
+// idle in between.
+func (s *Server) startChain(ref forge.PRRef, n int, scope string) uint64 {
+	c := s.chain(ref)
+	s.chainMu.Lock()
+	defer s.chainMu.Unlock()
+	c.gen++
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+	c.live, c.limit = 1, 0
+	c.n, c.scope = n, scope
+	return c.gen
+}
+
+// startChainIfIdle starts a chain for a command, unless the chain of the PR
+// still has a round queued or running: that chain is left untouched and its
+// state is returned. The check and the start happen under one lock, so two
+// commands that arrive together start one chain.
+func (s *Server) startChainIfIdle(ref forge.PRRef, n int, scope string) (gen uint64, busy busyChain, started bool) {
+	c := s.chain(ref)
+	s.chainMu.Lock()
+	defer s.chainMu.Unlock()
+	if c.live > 0 {
+		busy = busyChain{n: c.n, limit: c.limit, scope: c.scope}
+		if busy.limit == 0 {
+			busy.limit = s.cfg.MaxRounds
+		}
+		return 0, busy, false
+	}
+	c.gen++
+	c.live, c.limit = 1, 0
+	c.n, c.scope = n, scope
+	return c.gen, busyChain{}, true
+}
+
+// roundQueued records that a round of chain gen is queued. Every call is
+// paired with one round call, which ends it.
+func (s *Server) roundQueued(ref forge.PRRef, gen uint64, n int, scope string) {
+	c := s.chain(ref)
+	s.chainMu.Lock()
+	defer s.chainMu.Unlock()
+	if c.gen == gen {
+		c.live++
+		c.n, c.scope = n, scope
+	}
+}
+
+// roundEnded records that a round of chain gen ended and queued no round
+// itself; the chain is idle when no round is left.
+func (s *Server) roundEnded(ref forge.PRRef, gen uint64) {
+	c := s.chain(ref)
+	s.chainMu.Lock()
+	defer s.chainMu.Unlock()
+	if c.gen == gen && c.live > 0 {
+		c.live--
+	}
+}
+
+func (s *Server) setChainLimit(ref forge.PRRef, gen uint64, limit int) {
+	c := s.chain(ref)
+	s.chainMu.Lock()
+	defer s.chainMu.Unlock()
+	if c.gen == gen {
+		c.limit = limit
+	}
 }
 
 // current reports whether gen is still the chain of the PR.
@@ -143,9 +229,16 @@ func (s *Server) evaluate(f forge.Forge, ref forge.PRRef, j job, log *slog.Logge
 		}
 		return nil
 	}
+	// A command accepted while the PR was read already started a chain;
+	// that chain is kept.
+	gen, _, started := s.startChainIfIdle(ref, 1, state.ScopeFull)
+	if !started {
+		log.Info("decided", "trigger", string(j.trigger), "action", "none", "reason", "chain running")
+		return nil
+	}
 	log.Info("decided", "trigger", string(j.trigger), "action", "start chain")
 	s.clearCheckpoints(ref, log)
-	return s.round(f, ref, roundJob{n: 1, scope: state.ScopeFull, gen: s.restartChain(ref)}, j, log)
+	return s.round(f, ref, roundJob{n: 1, scope: state.ScopeFull, gen: gen}, j, log)
 }
 
 // readChain reads the PR and its chain marker. present is true when a
@@ -245,12 +338,22 @@ func (s *Server) setStatus(ctx context.Context, f forge.Forge, pr forge.PR, sha 
 // spent waiting for a free worker does not count toward the round timeout.
 func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *slog.Logger) error {
 	log = log.With("round", rj.n, "scope", rj.scope)
+	// A round that runs again after the head moved keeps its place in the
+	// chain, so a command cannot slip in between the two runs. An automatic
+	// job starts its chain inside itself, so it never runs this round twice.
+	var err error
+	defer func() {
+		rerun := errors.Is(err, errHeadMoved) && j.reruns < maxReruns && (j.cmd != nil || j.round != nil)
+		if !rerun {
+			s.roundEnded(ref, rj.gen)
+		}
+	}()
 	if !s.current(ref, rj.gen) {
 		log.Info("round skipped: a newer review replaced its chain")
 		return nil
 	}
 	token := s.record(ref, rj, log)
-	err := s.runRound(f, ref, rj, j, log)
+	err = s.runRound(f, ref, rj, j, log)
 	if !errors.Is(err, errShutdown) && !errors.Is(err, errHeadMoved) {
 		if rerr := s.journal.remove(ref, token); rerr != nil {
 			log.Error("update the round journal", "error", rerr.Error())
@@ -393,6 +496,7 @@ func (r *roundRun) run(round context.Context) error {
 	}
 	r.limit = repo.MaxRounds
 	r.marker.Max = r.limit
+	s.setChainLimit(r.ref, rj.gen, r.limit)
 	loc := r.loc()
 	r.publish(ctx, pr.HeadSHA, rj.n, loc.Text("pending.round", "round", state.RoundLabel(rj.n, r.limit, loc)), true)
 
@@ -681,6 +785,7 @@ func (r *roundRun) finish(ctx context.Context, out state.RoundReport) error {
 		r.publish(ctx, out.FixCommit, next, "", false)
 		nj := roundJob{n: next, scope: state.ScopeCommit, commit: out.FixCommit, fixCommit: true, gen: rj.gen, effort: rj.effort}
 		s.record(r.ref, nj, r.log)
+		s.roundQueued(r.ref, nj.gen, nj.n, nj.scope)
 		s.queue.submit(r.ref, job{round: &nj, requestID: r.j.requestID})
 	} else {
 		r.marker.Status = state.ChainSuccess

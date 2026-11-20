@@ -8,12 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
-	"github.com/alibaba/open-code-review/internal/model"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
 	"github.com/alibaba/open-code-review/internal/serve/review"
 	"github.com/alibaba/open-code-review/internal/serve/state"
@@ -504,43 +502,6 @@ func TestReviewCommandRestartsTheChain(t *testing.T) {
 		t.Fatalf("review-commit %+v", r)
 	}
 	if m := h.gh.marker(t, ref); len(m.Rounds) != 1 || m.Rounds[0].Scope != state.ScopeCommit {
-		t.Fatalf("marker %+v", m)
-	}
-}
-
-// TestReviewCommandCancelsARunningChain cancels round 2 when a review is
-// requested: that round fails quietly and the new chain owns the PR.
-func TestReviewCommandCancelsARunningChain(t *testing.T) {
-	h := newHarness(t)
-	ref := ghRef(13)
-	chainPR(h, ref)
-	started := make(chan struct{})
-	var full atomic.Int32
-	h.rev.set(func(ctx context.Context, req review.Request) (review.Result, error) {
-		if req.FixCommit {
-			close(started)
-			<-ctx.Done()
-			return review.Result{}, ctx.Err()
-		}
-		if full.Add(1) == 1 {
-			return review.Result{Findings: []model.LlmComment{comment("a.go", 3)}, Terminal: review.TerminalComplete}, nil
-		}
-		return review.Result{Terminal: review.TerminalComplete}, nil
-	})
-	h.srv.queue.submit(ref, job{trigger: triggerOpened, requestID: "r-open"})
-	<-started
-	ev := forge.Event{Kind: forge.EventCommand, Ref: ref, DeliveryID: "c", CommentID: "c1", CommentBody: "/review"}
-	if got := h.srv.dispatch(ev, nil, "r-cmd"); got != "queued command review" {
-		t.Fatal(got)
-	}
-	h.drain()
-	if len(h.rev.requests()) != 3 || !h.logs.has("round cancelled: a newer review replaced its chain") || h.logs.has("review round failed") {
-		t.Fatalf("reviews %d logs:\n%s", len(h.rev.requests()), h.logs.String())
-	}
-	if st := strings.Join(h.gh.statusList(), " "); strings.Contains(st, "failure") || lastStatus(h.gh) != "f:success" {
-		t.Fatalf("statuses %s", st)
-	}
-	if m := h.gh.marker(t, ref); m.Status != state.ChainSuccess || len(m.Rounds) != 1 {
 		t.Fatalf("marker %+v", m)
 	}
 }

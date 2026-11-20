@@ -124,3 +124,6 @@ failed = The last round failed. Comment `/review` to start the chain again.
 error = Command failed: {reason}
 help = Supported commands: `/review [--effort=low|medium|high]` (restart the review chain on the whole PR) and `/review-commit` (restart it on the latest commit).
 help_mention = Supported commands: `@{bot} review [--effort=low|medium|high]` (restart the review chain on the whole PR) and `@{bot} review-commit` (restart it on the latest commit); `/review` and `/review-commit` also work.
+busy = A review is already in progress ({round}, scope: {scope}), so this command was ignored. Send it again after the current chain ends.
+scope_full = the whole PR
+scope_commit = the latest commit

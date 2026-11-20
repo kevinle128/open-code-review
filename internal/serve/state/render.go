@@ -159,6 +159,13 @@ func RenderCommandError(reason, bot string, loc Locale) string {
 	return "❌ " + loc.Text("command.error", "reason", codeSpan(reason)) + "\n\n" + mentionText(loc, "command.help", bot)
 }
 
+// RenderCommandBusy answers a review command that was dropped because the
+// chain of the PR is still queued or running; n and limit name the round
+// that holds it and scope is the scope of that round.
+func RenderCommandBusy(n, limit int, scope string, loc Locale) string {
+	return "⏳ " + loc.Text("command.busy", "round", RoundLabel(n, limit, loc), "scope", loc.Text("command.scope_"+scope))
+}
+
 // mentionText picks the "<key>_mention" text that shows the tag form of the
 // commands, or the slash-only text when the bot name is not known.
 func mentionText(loc Locale, key, bot string) string {

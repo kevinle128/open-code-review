@@ -67,3 +67,21 @@ func TestStatusTextAndCommandError(t *testing.T) {
 		t.Fatal("helpers")
 	}
 }
+
+func TestRenderCommandBusy(t *testing.T) {
+	en, err := LoadLocale("en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vi, err := LoadLocale("vi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := RenderCommandBusy(2, 3, ScopeCommit, en)
+	if !strings.Contains(got, "round 2/3") || !strings.Contains(got, "the latest commit") || strings.Contains(got, "{") {
+		t.Fatalf("en: %q", got)
+	}
+	if got := RenderCommandBusy(1, 3, ScopeFull, vi); !strings.Contains(got, vi["command.scope_full"]) || vi["command.scope_full"] == en["command.scope_full"] || strings.Contains(got, "{") {
+		t.Fatalf("vi: %q", got)
+	}
+}

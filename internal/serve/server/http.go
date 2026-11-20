@@ -161,7 +161,7 @@ func (s *Server) Start(context.Context) error {
 			continue
 		}
 		rj := e.roundJob()
-		rj.gen = s.restartChain(ref)
+		rj.gen = s.startChain(ref, rj.n, rj.scope)
 		withPR(s.log, ref).Info("round resumed after a restart", "round", rj.n, "scope", rj.scope)
 		s.queue.submit(ref, job{round: &rj, requestID: "resume-" + newRequestID()})
 	}
