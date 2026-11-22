@@ -886,7 +886,7 @@ The service sets the commit status `ocr-review` on the PR head:
 
 | State | When |
 |---|---|
-| `pending` | the chain runs |
+| `pending` | the chain runs; or the PR is reviewed but its chain has not started yet: a draft (set when it opens and on every push, text "review starts when the PR is ready"), or an opened or reopened PR that waits for its review |
 | `success` | the chain ended: a round had no real finding, a report-only round reported, or the bot cannot push; or the PR is not reviewed at all (an ignore rule matches it, or `serve.json` sets `"enabled": false`), set when it opens and on every push |
 | `failure` (GitLab: `failed`) | a round failed (CLI error, quota, timeout, forge error, or a shutdown during the round), until a later `review` succeeds |
 
@@ -895,6 +895,11 @@ pushed while the round ran. A round that waits for a worker sets `pending`
 on the head first, so a merge cannot pass before the review starts. A
 service restart or crash that cuts a running or waiting round leaves the
 status `pending`, and the next start runs that round again.
+
+A draft starts no round, but it gets `pending` so that a person cannot mark
+it ready and merge it before the ready webhook starts the review. A reopened
+PR without a chain also stays `pending`, and starts no round: a `review`
+comment starts it. A push on a non-draft PR without a chain sets no status.
 
 - GitHub: the Statuses API. Make `ocr-review` a required status check in the
   branch protection of each repository, for example:

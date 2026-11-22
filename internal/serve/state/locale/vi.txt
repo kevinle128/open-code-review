@@ -112,6 +112,8 @@ other = Khác
 running = Đang chạy review OCR {round}
 queued = Review OCR đang chờ tới lượt chạy
 not_required = Không cần review OCR cho PR này
+draft = Review OCR sẽ bắt đầu khi PR sẵn sàng
+waiting = Đang chờ review OCR
 success = Chuỗi review OCR đã kết thúc
 failure = Review OCR bị lỗi; bình luận review để chạy lại
 

@@ -60,7 +60,7 @@ func TestLocaleFiles_SameKeys(t *testing.T) {
 func TestLocale_EveryKeyTheServiceUsesExists(t *testing.T) {
 	en := mustLocale(t, "en")
 	keys := []string{"summary.status." + ChainRunning, "summary.status." + ChainSuccess, "summary.status." + ChainFailure,
-		"status." + ChainSuccess, "status." + ChainFailure, "round.other_changes", "round.diff_summary", "round.diff_shared",
+		"status." + ChainSuccess, "status." + ChainFailure, "status.draft", "status.waiting", "round.other_changes", "round.diff_summary", "round.diff_shared",
 		"round.diff_cut", "round.proposed_diff", "round.proposal_cut", "round.body_cut", "round.range_full", "round.range_fix",
 		"round.range_commit", "round.found_value", "round.found_value_one", "round.found_zero", "round.fixed_value",
 		"round.fixed_count", "round.fixed_nothing", "round.tests_output", "round.scope_value", "round.next_value", "round.end_value",

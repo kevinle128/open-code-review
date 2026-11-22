@@ -25,7 +25,9 @@ import (
 // without that the PR has no status and "pipelines must succeed" blocks it.
 // Comments from any bot are dropped so two bots cannot answer each other.
 // A push, or a reopened PR, starts no round; it only copies the chain's
-// status to the new head.
+// status to the new head. An open PR that the service reviews but whose
+// chain has not started gets a pending status (see holdStatus), so the merge
+// waits for the review.
 func (s *Server) dispatch(ev forge.Event, body []byte, requestID string) string {
 	switch {
 	case ev.Kind == forge.EventIgnored:
@@ -47,30 +49,40 @@ func (s *Server) dispatch(ev forge.Event, body []byte, requestID string) string 
 	case forge.EventCommand, forge.EventNote:
 		outcome, _ := s.dispatchComment(ev, requestID)
 		return outcome
-	case forge.EventPush, forge.EventReopened:
-		s.copyStatusAsync(ev.Ref, requestID)
+	case forge.EventPush:
+		s.copyStatusAsync(ev.Ref, requestID, false)
+		return "status copy"
+	case forge.EventReopened:
+		s.copyStatusAsync(ev.Ref, requestID, true)
 		return "status copy"
 	case forge.EventOpened, forge.EventReady:
 	default:
 		return "unsupported event"
 	}
 	if ev.PR != nil {
-		if ev.PR.Draft {
-			return "draft"
-		}
 		if matched, rule := s.cfg.Ignore.Match(ignoreSubject(ev.Ref, *ev.PR)); matched {
 			// An ignored PR still needs a success status, or "pipelines must
 			// succeed" blocks it; an ignored repository stays silent.
 			if !strings.HasPrefix(rule, "repo:") {
-				s.copyStatusAsync(ev.Ref, requestID)
+				s.copyStatusAsync(ev.Ref, requestID, true)
 			}
 			return "ignore rule " + rule
+		}
+		if ev.PR.Draft {
+			// A draft starts no round, but it gets a pending status, so it
+			// cannot merge in the moment between "ready" and the review.
+			s.copyStatusAsync(ev.Ref, requestID, true)
+			return "draft"
 		}
 	}
 	t := triggerOpened
 	if ev.Kind == forge.EventReady {
 		t = triggerReady
 	}
+	// The evaluation may wait behind other work of the PR, and a ready event
+	// may carry a new commit; the head is held at pending until the round
+	// publishes its own status.
+	s.copyStatusAsync(ev.Ref, requestID, true)
 	s.queue.submit(ev.Ref, job{trigger: t, requestID: requestID})
 	return "queued " + string(t)
 }
