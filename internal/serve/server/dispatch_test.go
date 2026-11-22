@@ -302,3 +302,130 @@ func TestReactAsyncFailureIsLogged(t *testing.T) {
 		t.Fatal("not logged")
 	}
 }
+
+// TestDispatchDraftHoldsTheMergeUntilReviewed: a draft that the service will
+// review gets a pending status when it opens and on each push, so a person
+// cannot mark it ready and merge it before the ready webhook starts the
+// review. Ready then starts the chain as before.
+func TestDispatchDraftHoldsTheMergeUntilReviewed(t *testing.T) {
+	h := newHarness(t)
+	ref := glRef(50)
+	draft := openPR(ref, sha1)
+	draft.Draft = true
+	h.gl.setPR(draft)
+	if got := h.srv.dispatch(forge.Event{Kind: forge.EventOpened, Ref: ref, DeliveryID: "o1", PR: &draft}, nil, "r"); got != "draft" {
+		t.Fatal(got)
+	}
+	h.drain()
+	if got := strings.Join(h.gl.statusList(), " "); got != "1:pending" || h.gl.lastStatusText() != h.loc.Text("status.draft") {
+		t.Fatalf("opened draft: statuses %q text %q", got, h.gl.lastStatusText())
+	}
+
+	draft.HeadSHA = sha2
+	h.gl.setPR(draft)
+	if got := h.srv.dispatch(forge.Event{Kind: forge.EventPush, Ref: ref, DeliveryID: "p1"}, nil, "r"); got != "status copy" {
+		t.Fatal(got)
+	}
+	h.drain()
+	if got := lastStatus(h.gl); got != "2:pending" || h.gl.lastStatusText() != h.loc.Text("status.draft") {
+		t.Fatalf("push on draft: status %q text %q", got, h.gl.lastStatusText())
+	}
+	if len(h.rev.requests()) != 0 {
+		t.Fatal("a draft started a review")
+	}
+
+	ready := openPR(ref, sha2)
+	h.gl.setPR(ready)
+	if got := h.srv.dispatch(forge.Event{Kind: forge.EventReady, Ref: ref, DeliveryID: "r1", PR: &ready}, nil, "r"); got != "queued ready" {
+		t.Fatal(got)
+	}
+	h.drain()
+	if len(h.rev.requests()) != 1 || lastStatus(h.gl) != "2:success" {
+		t.Fatalf("ready: reviews %d status %q", len(h.rev.requests()), lastStatus(h.gl))
+	}
+}
+
+// TestDispatchHoldsAReviewedPRWithoutAChain: a non-draft PR without a chain
+// is held at pending when it opens or is reopened, and the review of an
+// opened PR replaces that status. A push on it, which starts no review,
+// leaves it as it was.
+func TestDispatchHoldsAReviewedPRWithoutAChain(t *testing.T) {
+	h := newHarness(t)
+	ref := ghRef(51)
+	pr := openPR(ref, sha1)
+	h.gh.setPR(pr)
+	if got := h.srv.dispatch(forge.Event{Kind: forge.EventOpened, Ref: ref, DeliveryID: "o1", PR: &pr}, nil, "r"); got != "queued opened" {
+		t.Fatal(got)
+	}
+	h.drain()
+	// The hold and the round's own pending status come in either order.
+	if got := strings.Join(h.gh.statusList(), " "); got != "1:pending 1:pending 1:success" || len(h.rev.requests()) != 1 {
+		t.Fatalf("opened: statuses %q reviews %d", got, len(h.rev.requests()))
+	}
+
+	ref2 := ghRef(52)
+	h.gh.setPR(openPR(ref2, sha2))
+	before := len(h.gh.statusList())
+	h.srv.dispatch(forge.Event{Kind: forge.EventPush, Ref: ref2, DeliveryID: "p2"}, nil, "r")
+	h.drain()
+	if n := len(h.gh.statusList()); n != before {
+		t.Fatalf("push on a PR without a chain set %d statuses", n-before)
+	}
+	if got := h.srv.dispatch(forge.Event{Kind: forge.EventReopened, Ref: ref2, DeliveryID: "re2"}, nil, "r"); got != "status copy" {
+		t.Fatal(got)
+	}
+	h.drain()
+	if got := lastStatus(h.gh); got != "2:pending" || h.gh.lastStatusText() != h.loc.Text("status.waiting") || len(h.rev.requests()) != 1 {
+		t.Fatalf("reopened: status %q text %q reviews %d", got, h.gh.lastStatusText(), len(h.rev.requests()))
+	}
+}
+
+// TestDispatchIgnoredDraftMarksNotRequired: a draft that the service never
+// reviews gets success at once, as an ignored PR does; a disabled repository
+// too. An ignored repository stays silent.
+func TestDispatchIgnoredDraftMarksNotRequired(t *testing.T) {
+	h := newHarness(t, func(c *serveconfig.Config) {
+		c.Ignore = serveconfig.IgnoreRules{
+			Repos:   []*regexp.Regexp{regexp.MustCompile(`^skip/`)},
+			Authors: []*regexp.Regexp{regexp.MustCompile(`^renovate`)},
+		}
+	})
+	ref := ghRef(53)
+	pr := openPR(ref, sha2)
+	pr.Draft, pr.Author = true, "renovate"
+	h.gh.setPR(pr)
+	if got := h.srv.dispatch(forge.Event{Kind: forge.EventOpened, Ref: ref, DeliveryID: "i1", PR: &pr}, nil, "r"); got != "ignore rule author:^renovate" {
+		t.Fatal(got)
+	}
+	h.drain()
+	if got := strings.Join(h.gh.statusList(), " "); got != "2:success" {
+		t.Fatalf("ignored draft: statuses %q", got)
+	}
+
+	h2 := newHarness(t)
+	ref2 := ghRef(54)
+	dpr := openPR(ref2, sha1)
+	dpr.Draft = true
+	h2.gh.setPR(dpr)
+	h2.gh.files[shaBase+":"+serveconfig.RepoConfigPath] = []byte(`{"enabled":false}`)
+	if got := h2.srv.dispatch(forge.Event{Kind: forge.EventOpened, Ref: ref2, DeliveryID: "d1", PR: &dpr}, nil, "r"); got != "draft" {
+		t.Fatal(got)
+	}
+	h2.drain()
+	if got := strings.Join(h2.gh.statusList(), " "); got != "1:success" {
+		t.Fatalf("disabled draft: statuses %q", got)
+	}
+
+	skipRef := forge.PRRef{Platform: forge.GitHub, Repo: "skip/app", InstallationID: 7, Number: 55}
+	skipPR := openPR(skipRef, sha2)
+	skipPR.Draft = true
+	h.gh.setPR(skipPR)
+	before := len(h.gh.statusList())
+	if got := h.srv.dispatch(forge.Event{Kind: forge.EventOpened, Ref: skipRef, DeliveryID: "i2", PR: &skipPR}, nil, "r"); got != "ignore rule repo:^skip/" {
+		t.Fatal(got)
+	}
+	h.drain()
+	if n := len(h.gh.statusList()); n != before {
+		t.Fatalf("ignored repository got %d new statuses", n-before)
+	}
+}

@@ -436,17 +436,16 @@ func TestOpenedDecisions(t *testing.T) {
 			h.gh.setPR(openPR(ref, sha1))
 			setup(h, ref)
 			h.opened(ref)
+			h.drain()
 			if len(h.rev.requests()) != 0 {
 				t.Fatal("no chain must start")
 			}
 			// A PR the service never reviews gets success, so a merge gate
-			// on every project does not block it.
-			want := 0
-			if name == "disabled" || name == "ignored" {
-				want = 1
-			}
-			if st := h.gh.statusList(); len(st) != want || (want == 1 && st[0] != "1:success") {
-				t.Fatalf("statuses %v", st)
+			// on every project does not block it. A draft it reviews later
+			// is held at pending until the review.
+			want := map[string]string{"disabled": "1:success", "ignored": "1:success", "draft": "1:pending"}[name]
+			if st := strings.Join(h.gh.statusList(), " "); st != want {
+				t.Fatalf("statuses %q want %q", st, want)
 			}
 		})
 	}
@@ -848,7 +847,7 @@ func TestPushOnIgnoredPRMarksNotRequired(t *testing.T) {
 	pr := openPR(ref, sha2)
 	pr.Labels = []string{"skip"}
 	h.gh.setPR(pr)
-	h.srv.copyStatusAsync(ref, "r-push")
+	h.srv.copyStatusAsync(ref, "r-push", false)
 	h.drain()
 	if got := lastStatus(h.gh); got != "2:success" {
 		t.Fatalf("status %q", got)
@@ -857,7 +856,7 @@ func TestPushOnIgnoredPRMarksNotRequired(t *testing.T) {
 	h2 := newHarness(t)
 	ref2 := ghRef(32)
 	h2.gh.setPR(openPR(ref2, sha2))
-	h2.srv.copyStatusAsync(ref2, "r-push")
+	h2.srv.copyStatusAsync(ref2, "r-push", false)
 	h2.drain()
 	if n := len(h2.gh.statusList()); n != 0 {
 		t.Fatalf("a reviewed PR without a chain got %d statuses", n)

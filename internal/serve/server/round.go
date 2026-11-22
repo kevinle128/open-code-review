@@ -206,6 +206,9 @@ func (s *Server) evaluate(f forge.Forge, ref forge.PRRef, j job, log *slog.Logge
 		reason = "pr not open"
 	case pr.Draft:
 		reason = "draft"
+		// The status is read again under the status lock, beside a
+		// command chain that may be running on the draft.
+		s.copyStatusAsync(ref, j.requestID, false)
 	case ignored:
 		reason = "ignore rule " + rule
 	case m != nil || present:
@@ -267,8 +270,10 @@ func (s *Server) readChain(ctx context.Context, f forge.Forge, ref forge.PRRef, 
 
 // copyStatusAsync gives a new head the status of the chain, so a push by a
 // person, which starts no round, neither unblocks nor blocks the merge on
-// its own. It runs at once, beside a round that may be running.
-func (s *Server) copyStatusAsync(ref forge.PRRef, requestID string) {
+// its own. It runs at once, beside a round that may be running. hold gives
+// a reviewed PR without a chain a pending status even when it is not a
+// draft; see holdStatus.
+func (s *Server) copyStatusAsync(ref forge.PRRef, requestID string, hold bool) {
 	f := s.forges[ref.Platform]
 	log := withPR(withRequest(s.log, requestID), ref)
 	s.wg.Add(1)
@@ -279,7 +284,7 @@ func (s *Server) copyStatusAsync(ref forge.PRRef, requestID string) {
 		c := s.chain(ref)
 		c.status.Lock()
 		defer c.status.Unlock()
-		pr, m, _, err := s.readChain(ctx, f, ref, log)
+		pr, m, present, err := s.readChain(ctx, f, ref, log)
 		if err != nil {
 			log.Error("read pull request for a status copy", "error", err.Error())
 			return
@@ -287,12 +292,31 @@ func (s *Server) copyStatusAsync(ref forge.PRRef, requestID string) {
 		if pr.State != forge.StateOpen {
 			return
 		}
-		if m == nil && s.notReviewed(ctx, f, ref, pr, log) {
-			s.markNotRequired(ctx, f, pr, log)
-			return
-		}
-		s.copyStatus(ctx, f, ref, pr, m, log)
+		s.holdStatus(ctx, f, ref, pr, m, present, hold, log)
 	}()
+}
+
+// holdStatus sets the status of an open PR head from its chain. A PR that
+// the service never reviews gets success. A PR that the service reviews but
+// whose chain has not started gets pending when it is a draft or when hold
+// is set, so "pipelines must succeed" and required status checks cannot let
+// it merge before the review: a person can mark a draft ready and merge it
+// before the ready webhook arrives. A summary whose marker is unreadable
+// still counts as a chain. The caller holds the status lock of the PR.
+func (s *Server) holdStatus(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, m *state.Marker, present, hold bool, log *slog.Logger) {
+	switch {
+	case m != nil:
+		s.copyStatus(ctx, f, ref, pr, m, log)
+	case s.notReviewed(ctx, f, ref, pr, log):
+		s.markNotRequired(ctx, f, pr, log)
+	case !present && (pr.Draft || hold):
+		key := "status.waiting"
+		if pr.Draft {
+			key = "status.draft"
+		}
+		s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusPending, s.locales[ref.Platform].Text(key), log)
+		log.Info("status set before the review", "head", pr.HeadSHA, "draft", pr.Draft)
+	}
 }
 
 // notReviewed reports whether the service never reviews pr: an ignore rule
@@ -302,7 +326,13 @@ func (s *Server) notReviewed(ctx context.Context, f forge.Forge, ref forge.PRRef
 		return true
 	}
 	repo, err := s.repoConfig(ctx, f, ref, pr, log)
-	return err == nil && !repo.Enabled
+	if err != nil {
+		// Without the config the PR counts as reviewed, so the merge stays
+		// blocked instead of passing unchecked.
+		log.Warn("read repository config for the status", "error", err.Error())
+		return false
+	}
+	return !repo.Enabled
 }
 
 // markNotRequired gives a PR that the service does not review a success

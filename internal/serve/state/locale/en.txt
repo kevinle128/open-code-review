@@ -113,6 +113,8 @@ other = Other
 running = OCR review {round} is running
 queued = OCR review is waiting for a free worker
 not_required = OCR review is not required for this PR
+draft = OCR review starts when the PR is ready
+waiting = Waiting for the OCR review
 success = OCR review chain ended
 failure = OCR review failed; comment review to run it again
 

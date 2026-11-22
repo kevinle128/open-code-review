@@ -46,6 +46,7 @@ type fakeForge struct {
 	notes     []string
 	reactions []string         // commentID + ":" + reaction
 	statuses  []string         // sha + ":" + state
+	texts     []string         // description of each status, in the same order
 	errs      map[string]error // method name -> error to return
 	errOnce   map[string]error // method name -> error for the next call only
 	headAfter map[string]string
@@ -136,13 +137,14 @@ func (f *fakeForge) UpsertSummary(_ context.Context, ref forge.PRRef, body strin
 	return nil
 }
 
-func (f *fakeForge) SetStatus(_ context.Context, pr forge.PR, sha string, st forge.CommitState, _ string) error {
+func (f *fakeForge) SetStatus(_ context.Context, pr forge.PR, sha string, st forge.CommitState, text string) error {
 	if err := f.api("SetStatus"); err != nil {
 		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statuses = append(f.statuses, sha[:1]+":"+string(st))
+	f.texts = append(f.texts, text)
 	return nil
 }
 
@@ -282,6 +284,16 @@ func (f *fakeForge) statusList() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.statuses)
+}
+
+// lastStatusText is the description of the last status set, or "".
+func (f *fakeForge) lastStatusText() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.texts) == 0 {
+		return ""
+	}
+	return f.texts[len(f.texts)-1]
 }
 
 // fakeReviewer records requests and answers with fn.
