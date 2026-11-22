@@ -78,11 +78,11 @@ func (s *Server) dispatch(ev forge.Event, body []byte, requestID string) string 
 	t := triggerOpened
 	if ev.Kind == forge.EventReady {
 		t = triggerReady
-	} else {
-		// The evaluation may wait behind other work of the PR; the head is
-		// held at pending until the round publishes its own status.
-		s.copyStatusAsync(ev.Ref, requestID, true)
 	}
+	// The evaluation may wait behind other work of the PR, and a ready event
+	// may carry a new commit; the head is held at pending until the round
+	// publishes its own status.
+	s.copyStatusAsync(ev.Ref, requestID, true)
 	s.queue.submit(ev.Ref, job{trigger: t, requestID: requestID})
 	return "queued " + string(t)
 }

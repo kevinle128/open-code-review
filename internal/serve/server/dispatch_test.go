@@ -10,6 +10,7 @@ import (
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
+	"github.com/alibaba/open-code-review/internal/serve/state"
 )
 
 func prEvent(kind forge.EventKind, ref forge.PRRef, id string) forge.Event {
@@ -347,8 +348,8 @@ func TestDispatchDraftHoldsTheMergeUntilReviewed(t *testing.T) {
 
 // TestDispatchHoldsAReviewedPRWithoutAChain: a non-draft PR without a chain
 // is held at pending when it opens or is reopened, and the review of an
-// opened PR replaces that status. A push on it, which starts no review,
-// leaves it as it was.
+// opened PR replaces that status. A push on a PR never held, which starts no
+// review, leaves it as it was; a push after the hold keeps the new head held.
 func TestDispatchHoldsAReviewedPRWithoutAChain(t *testing.T) {
 	h := newHarness(t)
 	ref := ghRef(51)
@@ -377,6 +378,43 @@ func TestDispatchHoldsAReviewedPRWithoutAChain(t *testing.T) {
 	h.drain()
 	if got := lastStatus(h.gh); got != "2:pending" || h.gh.lastStatusText() != h.loc.Text("status.waiting") || len(h.rev.requests()) != 1 {
 		t.Fatalf("reopened: status %q text %q reviews %d", got, h.gh.lastStatusText(), len(h.rev.requests()))
+	}
+	// A push after the reopen keeps the new head held.
+	h.gh.setPR(openPR(ref2, sha3))
+	h.srv.dispatch(forge.Event{Kind: forge.EventPush, Ref: ref2, DeliveryID: "p3"}, nil, "r")
+	h.drain()
+	if got := lastStatus(h.gh); got != "3:pending" || h.gh.lastStatusText() != h.loc.Text("status.waiting") {
+		t.Fatalf("push after reopen: status %q text %q", got, h.gh.lastStatusText())
+	}
+}
+
+// TestDispatchHoldsBeforeTheRoundStarts: an opened or ready PR whose round
+// cannot start (here the repository config cannot be read) is still held at
+// pending by dispatch, and a push while a round is queued holds the new head.
+func TestDispatchHoldsBeforeTheRoundStarts(t *testing.T) {
+	for _, kind := range []forge.EventKind{forge.EventOpened, forge.EventReady} {
+		h := newHarness(t)
+		h.gh.setErr("ReadFile", errTest)
+		ref := ghRef(56)
+		pr := openPR(ref, sha1)
+		h.gh.setPR(pr)
+		h.srv.dispatch(forge.Event{Kind: kind, Ref: ref, DeliveryID: "e1", PR: &pr}, nil, "r")
+		h.drain()
+		if got := strings.Join(h.gh.statusList(), " "); got != "1:pending" || h.gh.lastStatusText() != h.loc.Text("status.waiting") || len(h.rev.requests()) != 0 {
+			t.Fatalf("%s: statuses %q text %q reviews %d", kind, got, h.gh.lastStatusText(), len(h.rev.requests()))
+		}
+	}
+
+	h := newHarness(t)
+	ref := ghRef(57)
+	h.gh.setPR(openPR(ref, sha2))
+	if _, _, started := h.srv.startChainIfIdle(ref, 1, state.ScopeFull); !started {
+		t.Fatal("chain not started")
+	}
+	h.srv.dispatch(forge.Event{Kind: forge.EventPush, Ref: ref, DeliveryID: "p1"}, nil, "r")
+	h.drain()
+	if got := lastStatus(h.gh); got != "2:pending" || h.gh.lastStatusText() != h.loc.Text("status.waiting") {
+		t.Fatalf("push while queued: status %q text %q", got, h.gh.lastStatusText())
 	}
 }
 

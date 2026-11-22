@@ -36,7 +36,9 @@ type roundJob struct {
 // chain that are queued or running, so a chain with live > 0 is busy; n and
 // scope describe the latest of them and limit is the fix-round limit once a
 // round has read it (0 before). status serializes the marker and commit
-// status writes of a round against a status copy for a new head.
+// status writes of a round against a status copy for a new head. held,
+// guarded by status, is set once a head of the PR was held at pending before
+// its chain started, so a later push holds the new head too.
 type chainCtl struct {
 	gen    uint64
 	cancel context.CancelFunc
@@ -45,6 +47,7 @@ type chainCtl struct {
 	scope  string
 	limit  int
 	status sync.Mutex
+	held   bool
 }
 
 // busyChain describes the round a command found in a chain that is still
@@ -292,8 +295,21 @@ func (s *Server) copyStatusAsync(ref forge.PRRef, requestID string, hold bool) {
 		if pr.State != forge.StateOpen {
 			return
 		}
-		s.holdStatus(ctx, f, ref, pr, m, present, hold, log)
+		// A head held before, or a round queued or running whose summary
+		// is not written yet, keeps a new head at pending too.
+		hold = hold || c.held || s.busy(ref)
+		if s.holdStatus(ctx, f, ref, pr, m, present, hold, log) {
+			c.held = true
+		}
 	}()
+}
+
+// busy reports whether the chain of the PR has a round queued or running.
+func (s *Server) busy(ref forge.PRRef) bool {
+	c := s.chain(ref)
+	s.chainMu.Lock()
+	defer s.chainMu.Unlock()
+	return c.live > 0
 }
 
 // holdStatus sets the status of an open PR head from its chain. A PR that
@@ -303,7 +319,8 @@ func (s *Server) copyStatusAsync(ref forge.PRRef, requestID string, hold bool) {
 // it merge before the review: a person can mark a draft ready and merge it
 // before the ready webhook arrives. A summary whose marker is unreadable
 // still counts as a chain. The caller holds the status lock of the PR.
-func (s *Server) holdStatus(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, m *state.Marker, present, hold bool, log *slog.Logger) {
+// held reports whether the head was set to pending before the review.
+func (s *Server) holdStatus(ctx context.Context, f forge.Forge, ref forge.PRRef, pr forge.PR, m *state.Marker, present, hold bool, log *slog.Logger) (held bool) {
 	switch {
 	case m != nil:
 		s.copyStatus(ctx, f, ref, pr, m, log)
@@ -316,7 +333,9 @@ func (s *Server) holdStatus(ctx context.Context, f forge.Forge, ref forge.PRRef,
 		}
 		s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusPending, s.locales[ref.Platform].Text(key), log)
 		log.Info("status set before the review", "head", pr.HeadSHA, "draft", pr.Draft)
+		return true
 	}
+	return false
 }
 
 // notReviewed reports whether the service never reviews pr: an ignore rule
