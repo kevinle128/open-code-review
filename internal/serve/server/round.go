@@ -243,7 +243,6 @@ func (s *Server) evaluate(f forge.Forge, ref forge.PRRef, j job, log *slog.Logge
 		return nil
 	}
 	log.Info("decided", "trigger", string(j.trigger), "action", "start chain")
-	s.clearCheckpoints(ref, log)
 	return s.round(f, ref, roundJob{n: 1, scope: state.ScopeFull, gen: gen}, j, log)
 }
 
@@ -402,11 +401,16 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 		return nil
 	}
 	token := s.record(ref, rj, log)
-	err = s.runRound(f, ref, rj, j, log)
+	var partial bool
+	partial, err = s.runRound(f, ref, rj, j, log)
 	if !errors.Is(err, errShutdown) && !errors.Is(err, errHeadMoved) {
 		if rerr := s.journal.remove(ref, token); rerr != nil {
 			log.Error("update the round journal", "error", rerr.Error())
 		}
+	}
+	// A partial review keeps its finished batches, so a review command
+	// runs only the batches that failed.
+	if err == nil && !partial {
 		s.clearCheckpoints(ref, log)
 	}
 	return err
@@ -422,7 +426,8 @@ func (s *Server) record(ref forge.PRRef, rj roundJob, log *slog.Logger) string {
 	return token
 }
 
-func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *slog.Logger) error {
+// runRound runs the round and reports whether its review was partial.
+func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *slog.Logger) (bool, error) {
 	select {
 	case s.workers <- struct{}{}:
 	default:
@@ -430,7 +435,7 @@ func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, lo
 		select {
 		case s.workers <- struct{}{}:
 		case <-s.runCtx.Done():
-			return s.failQueued(f, ref, rj, j, log)
+			return false, s.failQueued(f, ref, rj, j, log)
 		}
 	}
 	defer func() { <-s.workers }()
@@ -441,11 +446,12 @@ func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, lo
 	defer cancel()
 	if !s.begin(ref, rj.gen, cancel) {
 		log.Info("round skipped: a newer review replaced its chain")
-		return nil
+		return false, nil
 	}
 	defer s.end(ref, rj.gen)
 	r := &roundRun{s: s, f: f, ref: ref, rj: rj, j: j, log: log}
-	return r.run(ctx)
+	err := r.run(ctx)
+	return r.partial, err
 }
 
 // markQueued sets a pending status on the PR head while the round waits
@@ -507,6 +513,9 @@ type roundRun struct {
 	pr     forge.PR
 	marker state.Marker
 	limit  int
+	// partial is set when the review ended partial: its batch checkpoints
+	// are kept for a retry.
+	partial bool
 }
 
 // loc is the text of the PR's platform.
@@ -594,6 +603,7 @@ func (r *roundRun) run(round context.Context) error {
 		r.log.Warn("review warnings", "terminal", res.Terminal, "warnings", warnings)
 	}
 	logCoverage(r.log, res)
+	r.partial = res.Terminal == review.TerminalPartial
 	if err == nil && res.Terminal == review.TerminalFailed {
 		err = errors.New("review ended in the failed state")
 	}
@@ -620,10 +630,12 @@ func (r *roundRun) run(round context.Context) error {
 }
 
 // review runs the review stage, or returns its result saved before a
-// restart cut the round. A finished review is saved for the same reason.
+// restart or failure stopped the round. A complete review is saved for the
+// same reason; a partial review is not, so a retry reuses its finished
+// batches and runs only the failed ones.
 func (r *roundRun) review(ctx context.Context, req review.Request) (review.Result, error) {
-	head, scope := r.pr.HeadSHA, r.rj.scope
-	if res, ok := loadReview(req.Checkpoint, head, scope, req.Commit); ok {
+	base, head, scope := r.pr.BaseSHA, r.pr.HeadSHA, r.rj.scope
+	if res, ok := loadReview(req.Checkpoint, base, head, scope, req.Commit, req.Effort); ok {
 		r.log.Info("review reused from a checkpoint", "findings", len(res.Findings))
 		return res, nil
 	}
@@ -635,8 +647,8 @@ func (r *roundRun) review(ctx context.Context, req review.Request) (review.Resul
 		// that hit its time limit keeps its partial result.
 		return res, fmt.Errorf("review stopped: %w", ctx.Err())
 	}
-	if err == nil && res.Terminal != review.TerminalFailed {
-		sv := savedReview{Head: head, Scope: scope, Commit: req.Commit, Result: res}
+	if err == nil && res.Terminal != review.TerminalFailed && res.Terminal != review.TerminalPartial {
+		sv := savedReview{Base: base, Head: head, Scope: scope, Commit: req.Commit, Effort: req.Effort, Result: res}
 		if serr := saveReview(req.Checkpoint, sv); serr != nil {
 			r.log.Warn("save review checkpoint", "error", serr.Error())
 		}

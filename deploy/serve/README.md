@@ -1010,14 +1010,15 @@ push, otherwise the round only reports and its comment quotes the refusal.
   round fails and sets `failure` until someone comments `review`.
 - `/data/checkpoints/` keeps, per PR, the parts of the running round that
   finished: the answer of each review batch and, once the review stage
-  ends, its whole result. A round that runs again after a restart reuses
-  them and runs only the batches that had not finished, or skips the review
-  stage when it had ended. So a deploy during a review loses only the work
-  in flight. A fix run cut by a restart runs again from its start, on a
-  fresh checkout. A saved part is used only for the same commit, review mode
-  and file list; batches saved before a deploy that changed the model or the
-  batch size are still reused. The checkpoints of a PR are removed when its
-  round ends and when a new chain starts (`review` command, opened PR).
+  completes, its whole result. A round that runs again after a restart or
+  after a failure (`review` command) reuses them and runs only the batches
+  that had not finished, or skips the review stage when it had completed. So
+  a deploy or transient error during a review loses only the unfinished work.
+  A fix run cut by a restart or failure runs again from its start, on a fresh
+  checkout. A saved part is used only for the same base, head, review mode,
+  effort and file list; batches saved before a deploy that changed the model
+  or the batch size are still reused. The checkpoints of a PR are removed
+  when its round finishes cleanly.
 
 ## Upgrade from the thread flow
 
