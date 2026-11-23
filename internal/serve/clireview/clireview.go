@@ -242,7 +242,7 @@ func batchCheckpoint(req review.Request, sel Selection, b batch) string {
 		return ""
 	}
 	h := sha256.New()
-	for _, part := range []string{mode(req), sel.Base, sel.Head, req.Commit, strconv.FormatBool(req.FixCommit)} {
+	for _, part := range []string{mode(req), sel.Base, sel.Head, req.Commit, strconv.FormatBool(req.FixCommit), req.Effort} {
 		h.Write([]byte(part + "\x00"))
 	}
 	for _, p := range b.paths {

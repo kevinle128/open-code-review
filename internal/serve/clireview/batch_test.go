@@ -303,6 +303,17 @@ func TestReviewWithAFailedBatchIsPartial(t *testing.T) {
 		!strings.Contains(logs.String(), "review batch reused from a checkpoint") {
 		t.Fatalf("result after the restart %+v", res)
 	}
+
+	// Changing effort does not reuse batch checkpoints from a different effort.
+	cli.runs = nil
+	req.Effort = "high"
+	res, err = rev.Review(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cli.runs) != 2 || res.Terminal != review.TerminalComplete {
+		t.Fatalf("different effort reused checkpoints: runs=%v res=%+v", cli.runs, res)
+	}
 }
 
 func TestReviewFailsWhenEveryBatchFails(t *testing.T) {

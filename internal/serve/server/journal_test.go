@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/alibaba/open-code-review/internal/config/serveconfig"
+	"github.com/alibaba/open-code-review/internal/model"
 	"github.com/alibaba/open-code-review/internal/serve/review"
 	"github.com/alibaba/open-code-review/internal/serve/state"
 )
@@ -58,7 +59,7 @@ func TestShutdownKeepsRoundForRestart(t *testing.T) {
 	h2 := newHarness(t, useDir)
 	h2.gl.setPR(openPR(ref, sha1))
 	// A review that finished before the cut is reused, not run again.
-	if err := saveReview(h2.srv.roundCheckpoints(ref, 1), savedReview{Head: sha1, Scope: state.ScopeFull,
+	if err := saveReview(h2.srv.roundCheckpoints(ref, 1), savedReview{Base: shaBase, Head: sha1, Scope: state.ScopeFull,
 		Result: review.Result{Terminal: review.TerminalComplete}}); err != nil {
 		t.Fatal(err)
 	}
@@ -130,4 +131,127 @@ func TestJournal(t *testing.T) {
 	if _, err := openJournal(filepath.Join(dir, journalFile)); err == nil {
 		t.Fatal("a data path that is a file must be reported")
 	}
+}
+
+func TestFailedRoundReusesCheckpointsOnRetry(t *testing.T) {
+	finding := model.LlmComment{Path: "a.go", StartLine: 1, EndLine: 1, Severity: "high", Category: "bug", Content: "nil deref"}
+
+	t.Run("fix failure reuses finished review on retry and clears after success", func(t *testing.T) {
+		h := newHarness(t)
+		ref := glRef(10)
+		h.gl.setPR(openPR(ref, sha1))
+		h.rev.set(func(_ context.Context, _ review.Request) (review.Result, error) {
+			return review.Result{Terminal: review.TerminalComplete, Findings: []model.LlmComment{finding}}, nil
+		})
+		h.fix.set(func(_ context.Context, _ review.FixRequest) (review.FixResult, error) {
+			return review.FixResult{}, errors.New("provider 503")
+		})
+
+		h.opened(ref)
+		h.drain()
+		if got := lastStatus(h.gl); got != "1:failure" {
+			t.Fatalf("status after fix failure %q", got)
+		}
+		if _, err := os.Stat(filepath.Join(h.srv.roundCheckpoints(ref, 1), reviewFile)); err != nil {
+			t.Fatalf("review checkpoint removed after fix failure: %v", err)
+		}
+
+		// Retrying with /review skips the finished review stage and runs only fix.
+		h.fix.set(func(_ context.Context, _ review.FixRequest) (review.FixResult, error) {
+			return review.FixResult{Dropped: []review.Dropped{{ID: "F1", Title: "False positive", Reason: "guarded"}}}, nil
+		})
+		h.command(ref, "/review", "c1")
+		h.drain()
+		if got := lastStatus(h.gl); got != "1:success" {
+			t.Fatalf("status after retry %q", got)
+		}
+		if n := len(h.rev.requests()); n != 1 {
+			t.Fatalf("retry ran the review again (%d total review calls)", n)
+		}
+		if !h.logs.has("review reused from a checkpoint") {
+			t.Fatal("retry did not log checkpoint reuse")
+		}
+		if _, err := os.Stat(h.srv.prCheckpoints(ref)); !os.IsNotExist(err) {
+			t.Fatalf("checkpoints left after retry succeeded: %v", err)
+		}
+
+		// A fresh /review after success runs the review again.
+		h.command(ref, "/review", "c2")
+		h.drain()
+		if n := len(h.rev.requests()); n != 2 {
+			t.Fatalf("fresh review after success did not run (%d total review calls)", n)
+		}
+	})
+
+	t.Run("partial review and failed review keep batch checkpoints without saving review.json", func(t *testing.T) {
+		h := newHarness(t)
+		ref := glRef(11)
+		h.gl.setPR(openPR(ref, sha1))
+		var sawBatchFile bool
+		calls := 0
+		h.rev.set(func(_ context.Context, req review.Request) (review.Result, error) {
+			calls++
+			batchFile := filepath.Join(req.Checkpoint, "batch-test.json")
+			if calls == 1 {
+				if err := os.MkdirAll(req.Checkpoint, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(batchFile, []byte(`{"findings":[]}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return review.Result{Terminal: review.TerminalPartial, Findings: []model.LlmComment{finding}}, nil
+			}
+			_, err := os.Stat(batchFile)
+			sawBatchFile = err == nil
+			return review.Result{Terminal: review.TerminalComplete}, nil
+		})
+		h.fix.set(func(_ context.Context, _ review.FixRequest) (review.FixResult, error) {
+			return review.FixResult{}, errors.New("fix timeout")
+		})
+
+		h.opened(ref)
+		h.drain()
+		if _, err := os.Stat(filepath.Join(h.srv.roundCheckpoints(ref, 1), reviewFile)); !os.IsNotExist(err) {
+			t.Fatalf("partial review must not save review.json: %v", err)
+		}
+
+		h.command(ref, "/review", "c1")
+		h.drain()
+		if calls != 2 || !sawBatchFile {
+			t.Fatalf("retry calls=%d sawBatchFile=%v", calls, sawBatchFile)
+		}
+	})
+
+	t.Run("changed head or effort does not reuse saved review", func(t *testing.T) {
+		h := newHarness(t)
+		ref := glRef(12)
+		h.gl.setPR(openPR(ref, sha1))
+		h.rev.set(func(_ context.Context, _ review.Request) (review.Result, error) {
+			return review.Result{Terminal: review.TerminalComplete, Findings: []model.LlmComment{finding}}, nil
+		})
+		h.fix.set(func(_ context.Context, _ review.FixRequest) (review.FixResult, error) {
+			return review.FixResult{}, errors.New("provider error")
+		})
+
+		h.opened(ref)
+		h.drain()
+
+		// Different effort does not reuse the saved review.
+		h.command(ref, "/review --effort=high", "c1")
+		h.drain()
+		if n := len(h.rev.requests()); n != 2 {
+			t.Fatalf("different effort reused checkpoint (%d review calls)", n)
+		}
+
+		// New head SHA does not reuse the saved review.
+		h.gl.setPR(openPR(ref, sha2))
+		h.fix.set(func(_ context.Context, _ review.FixRequest) (review.FixResult, error) {
+			return review.FixResult{Dropped: []review.Dropped{{ID: "F1", Title: "False positive", Reason: "guarded"}}}, nil
+		})
+		h.command(ref, "/review --effort=high", "c2")
+		h.drain()
+		if n := len(h.rev.requests()); n != 3 {
+			t.Fatalf("new head reused checkpoint (%d review calls)", n)
+		}
+	})
 }

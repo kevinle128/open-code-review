@@ -18,19 +18,21 @@ import (
 
 // checkpointsDir holds, per PR, the parts of a round that finished: each
 // review batch answer and the whole review result. A round that a restart
-// cut runs again from its start, but reuses these parts instead of running
-// them again, so a deploy during a review loses only the work in flight.
+// or a failure stopped runs again from its start, but reuses these parts
+// instead of running them again, so a retry loses only the unfinished work.
 const checkpointsDir = "checkpoints"
 
 // reviewFile keeps the result of a finished review stage.
 const reviewFile = "review.json"
 
 // savedReview is the review result of one round with what it reviewed. A
-// saved result is used only for the same head, scope and commit.
+// saved result is used only for the same base, head, scope, commit and effort.
 type savedReview struct {
+	Base   string        `json:"base,omitempty"`
 	Head   string        `json:"head"`
 	Scope  string        `json:"scope"`
 	Commit string        `json:"commit,omitempty"`
+	Effort string        `json:"effort,omitempty"`
 	Result review.Result `json:"result"`
 }
 
@@ -53,8 +55,7 @@ func (s *Server) roundCheckpoints(ref forge.PRRef, n int) string {
 	return filepath.Join(dir, "round-"+strconv.Itoa(n))
 }
 
-// clearCheckpoints drops the saved parts of a PR: its round ended, or a new
-// review was asked for and must start clean.
+// clearCheckpoints drops the saved parts of a PR after its round finishes.
 func (s *Server) clearCheckpoints(ref forge.PRRef, log *slog.Logger) {
 	dir := s.prCheckpoints(ref)
 	if dir == "" {
@@ -66,8 +67,8 @@ func (s *Server) clearCheckpoints(ref forge.PRRef, log *slog.Logger) {
 }
 
 // loadReview returns the saved review of the round when it reviewed the
-// same head, scope and commit.
-func loadReview(dir, head, scope, commit string) (review.Result, bool) {
+// same base, head, scope, commit and effort.
+func loadReview(dir, base, head, scope, commit, effort string) (review.Result, bool) {
 	if dir == "" {
 		return review.Result{}, false
 	}
@@ -76,7 +77,7 @@ func loadReview(dir, head, scope, commit string) (review.Result, bool) {
 		return review.Result{}, false
 	}
 	var sv savedReview
-	if json.Unmarshal(b, &sv) != nil || sv.Head != head || sv.Scope != scope || sv.Commit != commit {
+	if json.Unmarshal(b, &sv) != nil || sv.Base != base || sv.Head != head || sv.Scope != scope || sv.Commit != commit || sv.Effort != effort {
 		return review.Result{}, false
 	}
 	return sv.Result, true
