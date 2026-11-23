@@ -205,8 +205,9 @@ func TestFailedRoundReusesCheckpointsOnRetry(t *testing.T) {
 			sawBatchFile = err == nil
 			return review.Result{Terminal: review.TerminalComplete}, nil
 		})
+		// The fix run succeeds, so the round finishes without a stage error.
 		h.fix.set(func(_ context.Context, _ review.FixRequest) (review.FixResult, error) {
-			return review.FixResult{}, errors.New("fix timeout")
+			return review.FixResult{Dropped: []review.Dropped{{ID: "F1", Title: "False positive", Reason: "guarded"}}}, nil
 		})
 
 		h.opened(ref)
@@ -214,11 +215,17 @@ func TestFailedRoundReusesCheckpointsOnRetry(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(h.srv.roundCheckpoints(ref, 1), reviewFile)); !os.IsNotExist(err) {
 			t.Fatalf("partial review must not save review.json: %v", err)
 		}
+		if _, err := os.Stat(filepath.Join(h.srv.roundCheckpoints(ref, 1), "batch-test.json")); err != nil {
+			t.Fatalf("partial round that finished removed its batch checkpoints: %v", err)
+		}
 
 		h.command(ref, "/review", "c1")
 		h.drain()
 		if calls != 2 || !sawBatchFile {
 			t.Fatalf("retry calls=%d sawBatchFile=%v", calls, sawBatchFile)
+		}
+		if _, err := os.Stat(h.srv.prCheckpoints(ref)); !os.IsNotExist(err) {
+			t.Fatalf("checkpoints left after the complete retry: %v", err)
 		}
 	})
 
