@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -208,6 +209,20 @@ func TestDeadlineClassFollowsTheBudget(t *testing.T) {
 	r.budget = ""
 	if n := r.failureNotice("read", context.DeadlineExceeded); n.Class != state.FailureEngine {
 		t.Fatalf("side timeout %+v", n)
+	}
+	// A single call that timed out while the stage budget is still live
+	// is an engine error, not the stage time limit.
+	live, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.budget, r.budgetCtx = "review", live
+	if n := r.failureNotice("review", fmt.Errorf("get pr: %w", context.DeadlineExceeded)); n.Class != state.FailureEngine {
+		t.Fatalf("call timeout under a live budget %+v", n)
+	}
+	spent, spentCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer spentCancel()
+	r.budgetCtx = spent
+	if n := r.failureNotice("review", context.DeadlineExceeded); n.Class != state.FailureTime {
+		t.Fatalf("spent budget %+v", n)
 	}
 	body := state.RenderFailureNotice(r.failureNotice("wait for worker", context.Canceled), h.loc)
 	if !strings.Contains(body, h.loc.Text("notice.cancelled")) {
@@ -516,5 +531,23 @@ func waitLog(t *testing.T, h *harness, text string) {
 			t.Fatalf("log never contained %q:\n%s", text, h.logs.String())
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestHeadMovedWithoutRerunClearsTheJournal(t *testing.T) {
+	h := newHarness(t, func(c *serveconfig.Config) { c.DataDir = t.TempDir() })
+	ref := ghRef(54)
+	h.gh.setPR(openPR(ref, sha1))
+	h.ws.set(func(w *fakeWorkspaces) { w.branchErrs = []error{errTest} })
+	h.gh.headAfter[ref.Key()] = sha2
+	rj := roundJob{n: 1, scope: state.ScopeFull, gen: h.srv.startChain(ref, 1, state.ScopeFull)}
+	// The last rerun: the queue drops the job, so its round has ended and
+	// must not leave a start time for a later command of the same round.
+	err := h.srv.round(h.gh, ref, rj, job{round: &rj, reruns: maxReruns}, h.srv.log)
+	if !errors.Is(err, errHeadMoved) {
+		t.Fatalf("err %v", err)
+	}
+	if got := h.srv.journal.pending(); len(got) != 0 {
+		t.Fatalf("journal kept %+v", got)
 	}
 }

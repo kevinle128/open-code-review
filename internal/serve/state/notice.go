@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/alibaba/open-code-review/internal/serve/review"
 )
@@ -45,12 +44,13 @@ func RenderFailureNotice(n FailureNotice, loc Locale) string {
 	case FailureCuts:
 		reason = loc.Text("notice.cuts", "count", Inert(strconv.Itoa(n.Cuts)))
 	default:
-		text := strings.TrimSpace(n.Error)
-		if text == "" {
-			text = loc.Text("notice.engine_fallback")
+		if text := strings.TrimSpace(n.Error); text == "" {
+			// The fallback is a whole sentence, not an error to quote.
+			reason = loc.Text("notice.engine_fallback")
+		} else {
+			// Error is already sanitized, including mentions and markup.
+			reason = loc.Text("notice.engine", "error", text)
 		}
-		// Error is already sanitized, including mentions and markup.
-		reason = loc.Text("notice.engine", "error", text)
 	}
 	return reason + "\n\n" + loc.Text("notice.status") + "\n\n" + loc.Text("notice.retry")
 }
@@ -59,17 +59,22 @@ const maxPublicError = 160
 
 var (
 	urlRE = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://\S+`)
-	// authSchemeRE eats the credential after Bearer or Basic. A pattern that
-	// stops at the first word would keep the token in "Authorization: Bearer <jwt>".
-	authSchemeRE = regexp.MustCompile(`(?i)\b(?:authorization\s*[:=]\s*)?(?:bearer|basic)\s+\S+`)
+	// ansiRE drops terminal colour and cursor sequences, which would split
+	// a token or a path so the patterns below miss it.
+	ansiRE = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
+	// authSchemeRE eats the credential after an Authorization scheme or a
+	// bare Bearer or Basic. A pattern that stops at the first word would keep
+	// the token in "Authorization: Bearer <jwt>" or "Authorization: token <pat>".
+	authSchemeRE = regexp.MustCompile(`(?i)\b(?:(?:proxy-)?authorization\s*[:=]\s*(?:bearer|basic|token|apikey|api-key|key|digest)\s+\S+|(?:bearer|basic)\s+\S+)`)
 	// A sentence that only mentions keyboard or monkey has no assignment,
 	// so those words stay. A key that contains one of these stems and is
-	// followed by : or = is removed.
+	// followed by : or = is removed, with a quoted value as a whole.
 	secretName  = `token|key|secret|password|passwd|auth|credential|cookie`
-	assignRE    = regexp.MustCompile(`(?i)\b[\w.-]*(?:` + secretName + `)[\w.-]*\s*[:=]\s*\S+`)
-	quotedRE    = regexp.MustCompile(`(?i)["'][^"']*(?:` + secretName + `)[^"']*["']\s*:\s*["'][^"']*["']`)
-	pathRE      = regexp.MustCompile(`(?:^|[\s"'(=])(?:/[A-Za-z0-9._~/-]+|[A-Za-z]:\\[^\s]+)`)
-	longTokenRE = regexp.MustCompile(`\b(?:ghp_|github_pat_|glpat-|xox[baprs]-|sk-|AKIA)[A-Za-z0-9_\-]{8,}\b`)
+	secretVal   = `(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)`
+	assignRE    = regexp.MustCompile(`(?i)\b[\w.-]*(?:` + secretName + `)[\w.-]*\s*[:=]\s*` + secretVal)
+	quotedRE    = regexp.MustCompile(`(?i)["'][^"']*(?:` + secretName + `)[^"']*["']\s*[:=]\s*` + secretVal)
+	pathRE      = regexp.MustCompile(`(^|[\s"'` + "`" + `(\[{,:;=])(?:/[A-Za-z0-9._~+@/-]+|[A-Za-z]:\\[^\s"'` + "`" + `)\]},;]+)`)
+	longTokenRE = regexp.MustCompile(`\b(?:gh[pousr]_|github_pat_|gl(?:pat|oas|dt|rt)-|xox[baprs]-|sk-|AKIA|ya29\.|AIza)[A-Za-z0-9_.\-]{8,}\b`)
 )
 
 // SanitizePublicError reduces an engine error to one short sentence that
@@ -79,23 +84,32 @@ func SanitizePublicError(err error) string {
 	if err == nil {
 		return ""
 	}
-	s := err.Error()
-	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+	// Clean the bytes first: an invalid byte, a control character or a
+	// colour code inside a secret would stop the patterns from matching it.
+	s := strings.ToValidUTF8(err.Error(), "")
+	s = ansiRE.ReplaceAllString(s, "")
+	if i := strings.IndexAny(s, "\r\n\u0085\u2028\u2029"); i >= 0 {
 		s = s[:i]
 	}
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t' || r == '\v' || r == '\f':
+			return ' '
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+			return -1
+		}
+		return r
+	}, s)
 	s = urlRE.ReplaceAllString(s, "")
 	s = quotedRE.ReplaceAllString(s, "")
 	s = authSchemeRE.ReplaceAllString(s, "")
 	s = assignRE.ReplaceAllString(s, "")
 	s = longTokenRE.ReplaceAllString(s, "")
-	s = pathRE.ReplaceAllString(s, " ")
+	s = pathRE.ReplaceAllString(s, "${1} ")
 	s = strings.Join(strings.Fields(s), " ")
 	s = strings.Trim(s, " :,-")
 	if s == "" {
 		return ""
-	}
-	if !utf8.ValidString(s) {
-		s = strings.ToValidUTF8(s, "")
 	}
 	if r := []rune(s); len(r) > maxPublicError {
 		s = strings.TrimSpace(string(r[:maxPublicError])) + "..."

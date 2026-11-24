@@ -5,6 +5,7 @@ package diff
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alibaba/open-code-review/internal/gitcmd"
 )
@@ -115,6 +117,29 @@ func TestStatsDiffAllocatesLess(t *testing.T) {
 	}
 	if fullBodies < 8*(80<<10) {
 		t.Fatalf("full kept %d body bytes, want the file contents", fullBodies)
+	}
+}
+
+func TestStatsDiffKeepsDeadline(t *testing.T) {
+	repo := t.TempDir()
+	runGitTest(t, repo, "init", "-q", "-b", "main")
+	runGitTest(t, repo, "config", "user.email", "test@example.com")
+	runGitTest(t, repo, "config", "user.name", "Test User")
+	runGitTest(t, repo, "config", "commit.gpgsign", "false")
+	writeRepoFile(t, repo, "a.txt", "one\n")
+	runGitTest(t, repo, "add", ".")
+	runGitTest(t, repo, "commit", "-q", "-m", "base")
+	base := gitRev(t, repo)
+	writeRepoFile(t, repo, "a.txt", "two\n")
+	runGitTest(t, repo, "commit", "-q", "-am", "change")
+	head := gitRev(t, repo)
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	p := NewProvider(repo, base, head, gitcmd.New(0))
+	p.EnableStats()
+	if _, err := p.statsDiffSet(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err %v, want the deadline", err)
 	}
 }
 

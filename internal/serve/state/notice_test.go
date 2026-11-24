@@ -45,6 +45,10 @@ func TestRenderFailureNotice(t *testing.T) {
 	if !strings.Contains(engine, "NOT_FOUND") || strings.Contains(engine, "{") {
 		t.Fatalf("engine notice %q", engine)
 	}
+	empty := RenderFailureNotice(FailureNotice{Class: FailureEngine}, loc)
+	if fallback := loc.Text("notice.engine_fallback"); !strings.HasPrefix(empty, fallback+"\n") || strings.Count(empty, fallback) != 1 {
+		t.Fatalf("empty engine notice %q", empty)
+	}
 }
 
 func TestSanitizePublicErrorTable(t *testing.T) {
@@ -87,6 +91,19 @@ func TestSanitizePublicErrorTable(t *testing.T) {
 			want:  "",
 			lacks: []string{"glpat-"},
 		},
+		{name: "authorization token scheme", in: "upstream Authorization: token s3cr3tvalue failed", want: "upstream failed"},
+		{name: "authorization apikey scheme", in: "Authorization: ApiKey s3cr3tvalue", want: ""},
+		{name: "quoted value with spaces", in: `upstream password="two words" failed`, want: "upstream failed"},
+		{name: "quoted key value with spaces", in: `upstream "secret"="two words" failed`, want: "upstream failed"},
+		{name: "app installation token", in: "push ghs_abcdefghij1234567890 failed", want: "push failed"},
+		{name: "google token", in: "agy ya29.abcdefghij123456 failed", want: "agy failed"},
+		{name: "invalid byte in token", in: "push ghp_abc\xffdefghijklmnop failed", want: "push failed"},
+		{name: "colour around path", in: "read \x1b[31m/Users/dale/rounds.json\x1b[0m failed", want: "read failed"},
+		{name: "unicode line break", in: "first\u2028/Users/dale/second", want: "first"},
+		{name: "path in backticks", in: "open `/home/dale/pr.json` failed", has: []string{"open", "failed"}, lacks: []string{"/home", "pr.json"}},
+		{name: "path in brackets", in: "dirs [/home/dale/skills] missing", has: []string{"dirs", "missing"}, lacks: []string{"/home", "skills"}},
+		{name: "path list", in: "PATH /usr/bin:/home/dale/bin", has: []string{"PATH"}, lacks: []string{"/usr", "/home", "dale"}},
+		{name: "scoped package path", in: "run /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js failed", want: "run failed"},
 		{
 			name: "mentions",
 			in:   "ping @alice and @org/team",

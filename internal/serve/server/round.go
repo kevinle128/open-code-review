@@ -394,9 +394,14 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 	// chain, so a command cannot slip in between the two runs. An automatic
 	// job starts its chain inside itself, so it never runs this round twice.
 	var err error
+	// rerun is whether the queue runs this same round again. An automatic
+	// job that hit a moved head starts over through evaluate instead, so
+	// its round has ended like any other.
+	rerun := func() bool {
+		return errors.Is(err, errHeadMoved) && j.reruns < maxReruns && (j.cmd != nil || j.round != nil)
+	}
 	defer func() {
-		rerun := errors.Is(err, errHeadMoved) && j.reruns < maxReruns && (j.cmd != nil || j.round != nil)
-		if !rerun {
+		if !rerun() {
 			s.roundEnded(ref, rj.gen)
 		}
 	}()
@@ -410,7 +415,9 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 	rj.cuts = kept.Cuts
 	var partial bool
 	partial, err = s.runRound(f, ref, rj, j, token, log)
-	if !errors.Is(err, errShutdown) && !errors.Is(err, errHeadMoved) {
+	// Only a round that runs again keeps its entry. A stale entry would
+	// hand its start time to a later command for the same round.
+	if !errors.Is(err, errShutdown) && !rerun() {
 		if rerr := s.journal.remove(ref, token); rerr != nil {
 			log.Error("update the round journal", "error", rerr.Error())
 		}
@@ -436,6 +443,9 @@ func (s *Server) record(ref forge.PRRef, rj roundJob, log *slog.Logger) (string,
 
 // runRound runs the round and reports whether its review was partial.
 func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, token string, log *slog.Logger) (bool, error) {
+	if s.runCtx.Err() != nil {
+		return false, s.failQueued(f, ref, rj, j, token, log)
+	}
 	select {
 	case s.workers <- struct{}{}:
 	default:
@@ -445,6 +455,12 @@ func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, to
 		case <-s.runCtx.Done():
 			return false, s.failQueued(f, ref, rj, j, token, log)
 		}
+	}
+	// select picks at random when a slot frees during shutdown. A round
+	// that never started must not stamp its start time now.
+	if s.runCtx.Err() != nil {
+		<-s.workers
+		return false, s.failQueued(f, ref, rj, j, token, log)
 	}
 	defer func() { <-s.workers }()
 	// The round context has no deadline of its own: run gives the review
@@ -490,6 +506,10 @@ func (s *Server) markQueued(f forge.Forge, ref forge.PRRef, log *slog.Logger) {
 // keeps its pending status. Without one the chain is marked failed, or the
 // PR would stay blocked with no message to its author.
 func (s *Server) failQueued(f forge.Forge, ref forge.PRRef, rj roundJob, j job, token string, log *slog.Logger) error {
+	if !s.current(ref, rj.gen) {
+		log.Info("round cancelled: a newer review replaced its chain", "stage", "wait for worker")
+		return nil
+	}
 	r := &roundRun{s: s, f: f, ref: ref, rj: rj, j: j, log: log, token: token,
 		marker: state.Marker{Max: s.cfg.MaxRounds}}
 	ctx, cancel := s.sideContext()
@@ -545,6 +565,9 @@ type roundRun struct {
 	// expire. A deadline is classified from this, not from the name of the
 	// step that noticed it (read, workspace, checkout).
 	budget string
+	// budgetCtx is the context of that stage budget. A deadline from a
+	// single forge or HTTP call while it is still live is not the budget.
+	budgetCtx context.Context
 }
 
 // loc is the text of the PR's platform.
@@ -586,6 +609,7 @@ func (r *roundRun) run(round context.Context) error {
 	r.budget = kind
 	ctx, cancel := context.WithTimeout(round, reviewLeft)
 	defer cancel()
+	r.budgetCtx = ctx
 	pr, m, _, err := s.readChain(ctx, f, r.ref, r.log)
 	if err != nil {
 		return r.fail("read", err)
@@ -686,6 +710,7 @@ func (r *roundRun) run(round context.Context) error {
 		r.budget = "fix"
 		fctx, fcancel := context.WithTimeout(round, fixLeft)
 		defer fcancel()
+		r.budgetCtx = fctx
 		if err := r.fix(fctx, ws, findings, report, &out); err != nil {
 			return r.fail("fix", err)
 		}
@@ -942,6 +967,26 @@ func (r *roundRun) fail(stage string, err error) error {
 	r.log.Error("review round failed", "stage", stage, "error", err.Error())
 	side, cancel := r.s.sideContext()
 	defer cancel()
+	if r.pr.HeadSHA == "" {
+		// The read that failed may be the one that loads the PR. Read it
+		// again on a fresh deadline, so the status leaves pending and a
+		// closed PR stays quiet.
+		if pr, m, _, rerr := r.s.readChain(side, r.f, r.ref, r.log); rerr == nil {
+			if pr.State != forge.StateOpen {
+				r.log.Info("round skipped: pr not open")
+				r.s.commandFailed(r.f, r.ref, r.j.cmd, "pr not open", r.log)
+				return nil
+			}
+			r.pr = pr
+			r.marker = state.Marker{Status: state.ChainRunning, Max: r.s.cfg.MaxRounds}
+			if m != nil {
+				r.marker.Max = m.Max
+				if r.rj.n > 1 {
+					r.marker.Rounds = m.Rounds
+				}
+			}
+		}
+	}
 	if r.pr.HeadSHA != "" {
 		r.marker.Status = state.ChainFailure
 		r.publish(side, r.pr.HeadSHA, r.rj.n, r.loc().Text("pending.failed"), false)
@@ -1158,7 +1203,8 @@ func (r *roundRun) postFailureNotice(ctx context.Context, stage string, err erro
 
 func (r *roundRun) failureNotice(stage string, err error) state.FailureNotice {
 	n := state.FailureNotice{Cuts: r.rj.cuts}
-	deadline := errors.Is(err, context.DeadlineExceeded)
+	deadline := errors.Is(err, context.DeadlineExceeded) &&
+		(r.budgetCtx == nil || errors.Is(r.budgetCtx.Err(), context.DeadlineExceeded))
 	// A deadline belongs to whichever budget context expired. The stage
 	// name is only a fallback for a deadline that was not marked.
 	reviewDeadline := deadline && (r.budget == "review" || (r.budget == "" && stage == "review"))

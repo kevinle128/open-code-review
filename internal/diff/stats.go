@@ -31,6 +31,10 @@ const (
 func (p *Provider) statsDiffSet(ctx context.Context) (DiffSet, error) {
 	args, err := p.statsArgs(ctx)
 	if err != nil {
+		// A cancelled merge-base reads as "not found"; keep the reason.
+		if ctx.Err() != nil {
+			return DiffSet{}, ctx.Err()
+		}
 		return DiffSet{}, err
 	}
 	runner := p.runner
@@ -44,6 +48,10 @@ func (p *Provider) statsDiffSet(ctx context.Context) (DiffSet, error) {
 		return perr
 	}, args...)
 	if err != nil {
+		// A killed git reports the signal, not the deadline that killed it.
+		if ctx.Err() != nil {
+			return DiffSet{}, fmt.Errorf("git diff stats: %w", ctx.Err())
+		}
 		return DiffSet{}, fmt.Errorf("git diff stats: %w", err)
 	}
 	return p.partitionDiffs(diffs), nil
