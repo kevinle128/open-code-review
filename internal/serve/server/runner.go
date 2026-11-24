@@ -24,6 +24,15 @@ var errHeadMoved = errors.New("head moved during checkout")
 // runs again after the restart.
 var errShutdown = errors.New("round cut by shutdown")
 
+// errReviewBudget and errFixBudget end a stage whose wall-clock limit,
+// measured from the first time that stage started, is already spent.
+var (
+	errReviewBudget = errors.New("review time limit exceeded")
+	errFixBudget    = errors.New("fix time limit exceeded")
+	errTooManyCuts  = errors.New("too many shutdown cuts")
+	errPRNotOpen    = errors.New("pr not open")
+)
+
 // process runs one job and reports whether the queue should run it again.
 func (s *Server) process(ref forge.PRRef, j job) bool {
 	log := withPR(withRequest(s.log, j.requestID), ref)
@@ -149,22 +158,22 @@ func (s *Server) fetch(ctx context.Context, f forge.Forge, ref forge.PRRef, pr f
 	return ferr
 }
 
-// failureReason keeps internal error text out of PR comments; the request id
-// leads an operator to the full error in the log.
-func (s *Server) failureReason(stage, requestID string) string {
-	return fmt.Sprintf("review round failed at %s (request %s)", stage, requestID)
-}
-
 // commandDone acknowledges a command whose first round ended; the round
 // comment is the answer.
 func (s *Server) commandDone(f forge.Forge, ref forge.PRRef, cmd *cmdJob, log *slog.Logger) {
+	s.commandReact(f, ref, cmd, forge.ReactionSuccess, log)
+}
+
+// commandReact sets the reaction on the command comment. A failed round
+// posts its own notice, so this does not add a second comment.
+func (s *Server) commandReact(f forge.Forge, ref forge.PRRef, cmd *cmdJob, reaction forge.Reaction, log *slog.Logger) {
 	if cmd == nil || cmd.commentID == "" {
 		return
 	}
 	ctx, cancel := s.sideContext()
 	defer cancel()
-	if err := f.React(ctx, ref, cmd.commentID, forge.ReactionSuccess); err != nil {
-		log.Warn("reaction failed", "reaction", string(forge.ReactionSuccess), "error", err.Error())
+	if err := f.React(ctx, ref, cmd.commentID, reaction); err != nil {
+		log.Warn("reaction failed", "reaction", string(reaction), "error", err.Error())
 	}
 }
 
@@ -172,11 +181,9 @@ func (s *Server) commandFailed(f forge.Forge, ref forge.PRRef, cmd *cmdJob, reas
 	if cmd == nil || cmd.commentID == "" {
 		return
 	}
+	s.commandReact(f, ref, cmd, forge.ReactionFailure, log)
 	ctx, cancel := s.sideContext()
 	defer cancel()
-	if err := f.React(ctx, ref, cmd.commentID, forge.ReactionFailure); err != nil {
-		log.Warn("reaction failed", "reaction", string(forge.ReactionFailure), "error", err.Error())
-	}
 	if err := f.PostNote(ctx, ref, state.RenderCommandError(reason, s.mention(ref.Platform), s.locales[ref.Platform])); err != nil {
 		log.Error("post command reply", "error", err.Error())
 	}

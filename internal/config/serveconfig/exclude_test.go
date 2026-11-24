@@ -22,6 +22,7 @@ func TestDefaultExcludes(t *testing.T) {
 		"yarn.lock", "web/yarn.lock", "go.sum", "Cargo.lock", "composer.lock", "poetry.lock",
 		"dist/app.js.map", "web/locales/vi/app.json", "src/i18n/en/messages.json",
 		"web/index.html", "web/page.HTM", "web/site.css",
+		"build/web-mobile/assets/main/index.js", "ui/icons.atlas",
 	}
 	for _, p := range skipped {
 		if !f.IsUserExcluded(p) {

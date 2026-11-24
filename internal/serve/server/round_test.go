@@ -539,7 +539,10 @@ func TestRoundFailureBlocksTheMerge(t *testing.T) {
 	if m.Status != state.ChainFailure {
 		t.Fatalf("marker %+v", m)
 	}
-	mustContain(t, strings.Join(h.gl.noteList(), "\n"), h.srv.failureReason("review", "req-cmd"))
+	notes := h.gl.noteList()
+	if len(notes) != 1 || !strings.Contains(notes[0], "review engine failed") || !strings.Contains(notes[0], "review ended in the failed state") || strings.Contains(notes[0], "req-cmd") {
+		t.Fatalf("notes %q", notes)
+	}
 	for _, want := range []string{"review coverage incomplete", "old.go -> new.go (provider)", "a.go: quota", "review round failed"} {
 		mustContain(t, h.logs.String(), want)
 	}
@@ -616,8 +619,9 @@ func TestRoundStageFailures(t *testing.T) {
 	h.gh.setPR(openPR(ref, sha1))
 	h.gh.setErr("GetPR", errTest)
 	h.command(ref, "/review", "c1")
-	if len(h.gh.statusList()) != 0 || !strings.Contains(strings.Join(h.gh.noteList(), ""), "review round failed at read") {
-		t.Fatal("a PR that cannot be read gets a reply and no status")
+	notes := h.gh.noteList()
+	if len(h.gh.statusList()) != 0 || len(notes) != 1 || !strings.Contains(notes[0], "review engine failed") || !strings.Contains(notes[0], "test failure") {
+		t.Fatalf("a PR that cannot be read gets one notice and no status: %q", notes)
 	}
 }
 
@@ -784,8 +788,9 @@ func TestWorkerWaitCancelled(t *testing.T) {
 	h.srv.cancelRun()
 	h.command(ref, "/review", "c1")
 	<-h.srv.workers
-	if !h.logs.has("review round failed") || len(h.gh.noteList()) != 1 {
-		t.Fatal("cancelled wait must fail the round and answer")
+	notes := h.gh.noteList()
+	if !h.logs.has("review round failed") || len(notes) != 1 || !strings.Contains(notes[0], "review was cancelled") || !strings.Contains(notes[0], "review engine failed") {
+		t.Fatalf("cancelled wait must post one notice: %q", notes)
 	}
 }
 

@@ -37,6 +37,8 @@ range_full = Reviewed the whole PR: {range}
 range_fix = Reviewed fix commit {sha}
 range_commit = Reviewed commit {sha}
 skipped = No reviewable change (for example, every changed file is excluded).
+skipped_oversize = This pull request was not reviewed because the change is too large ({files} files, about {bytes}). Merge is allowed. Comment `/review` after the change is smaller.
+trimmed = Left out {count} files that are generated, binary or excluded.
 end_text = The review chain ends with this round; merge is allowed.
 found = Found
 found_value = {count} issues → {real} real, {skipped} skipped
@@ -129,3 +131,14 @@ help_mention = Supported commands: `@{bot} review [--effort=low|medium|high]` (r
 busy = A review is already in progress ({round}, scope: {scope}), so this command was ignored. Send it again after the current chain ends.
 scope_full = the whole PR
 scope_commit = the latest commit
+
+[notice]
+time = The {stage} stopped because it ran past its time limit of {limit} ({elapsed} elapsed).
+cuts = The review stopped because the service restarted {count} times while this review was running.
+engine = The review stopped because the review engine failed: {error}
+engine_fallback = The review engine failed.
+cancelled = The review was cancelled.
+status = Merge stays blocked until a new review succeeds.
+retry = Comment `/review` to run the review again.
+stage_review = review
+stage_fix = fix

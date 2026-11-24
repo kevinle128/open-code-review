@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/alibaba/open-code-review/internal/config/serveconfig"
 	"github.com/alibaba/open-code-review/internal/model"
 	"github.com/alibaba/open-code-review/internal/serve/agentcli"
 	"github.com/alibaba/open-code-review/internal/serve/checkout"
@@ -56,6 +57,9 @@ type Selection struct {
 	Skipped    map[string]int
 	Background string
 	Language   string
+	// Bytes is the unified-diff size of Paths. Selection that did not
+	// measure it leaves Bytes at zero, and the size cap then does not fire.
+	Bytes int64
 }
 
 // Selector picks the files of a review with the service file filters.
@@ -76,6 +80,10 @@ type Reviewer struct {
 	Getenv   func(string) string
 	Batching Batching
 	Log      *slog.Logger
+	// MaxFiles and MaxBytes stop a review that is still too large after the
+	// file filter. Zero uses the serve defaults.
+	MaxFiles int
+	MaxBytes int64
 }
 
 var _ review.Reviewer = (*Reviewer)(nil)
@@ -95,6 +103,23 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (res review.R
 	res.Coverage = review.Coverage{Total: len(sel.Paths), Skipped: sel.Skipped}
 	if len(sel.Paths) == 0 {
 		res.Terminal = review.TerminalSkipped
+		return res, nil
+	}
+	// A change that is still too large after the file filter is not run.
+	// Reviewing the first N files would tell the author the rest was
+	// reviewed. The round posts the size and leaves merge allowed.
+	maxFiles, maxBytes := r.MaxFiles, r.MaxBytes
+	if maxFiles <= 0 {
+		maxFiles = serveconfig.DefaultMaxReviewFiles
+	}
+	if maxBytes <= 0 {
+		maxBytes = serveconfig.DefaultMaxReviewBytes
+	}
+	if len(sel.Paths) > maxFiles || (sel.Bytes > 0 && sel.Bytes > maxBytes) {
+		res.Terminal = review.TerminalSkipped
+		res.Notice = review.NoticeOversize
+		res.NoticeFiles = len(sel.Paths)
+		res.NoticeBytes = sel.Bytes
 		return res, nil
 	}
 	skill, err := loadSkill(r.SkillDir, reviewReferences)

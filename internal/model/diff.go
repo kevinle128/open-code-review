@@ -15,4 +15,12 @@ type Diff struct {
 	IsRenamed      bool   `json:"is_renamed"`
 	Insertions     int64  `json:"insertions"`
 	Deletions      int64  `json:"deletions"`
+	// StatBytes is the size of this file's unified diff when the patch text
+	// itself is not kept. TokensCounted means TokenCount was already computed
+	// from that patch. None of the three is serialized: a saved diff keeps
+	// its patch text, and these fields only exist during selection.
+	StatBytes      int64 `json:"-"`
+	TokensCounted  bool  `json:"-"`
+	TokenCount     int   `json:"-"`
+	DiscardedPatch bool  `json:"-"`
 }

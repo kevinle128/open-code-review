@@ -31,6 +31,11 @@ var DefaultExcludes = []string{
 	"**/*.html",
 	"**/*.htm",
 	"**/*.css",
+	// Cocos Creator web build output and texture atlases. Lockfiles, minified
+	// *.min.js and dependency directories are already in the built-in path
+	// excludes; these two are not.
+	"**/*.atlas",
+	"**/web-mobile/**",
 }
 
 // MaxDataChangedLines is the serve limit for one JSON or YAML file: a diff

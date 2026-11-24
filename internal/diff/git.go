@@ -61,7 +61,16 @@ type Provider struct {
 	commit string // single commit hash/ref
 
 	mergeBase string // cached common ancestor for range mode
+
+	// statsOnly parses the diff for paths and sizes and drops patch text
+	// and file bodies. Selection uses it so a large change does not have
+	// to sit in memory twice.
+	statsOnly bool
 }
+
+// EnableStats makes later GetDiffSet calls keep paths, line counts and the
+// diff size, and drop the patch text and the new file body.
+func (p *Provider) EnableStats() { p.statsOnly = true }
 
 // DiffSet separates the diffs a review may process from files excluded by the
 // provider's built-in directory rules. The latter remain unavailable to a
@@ -216,6 +225,9 @@ func (p *Provider) GetDiff(ctx context.Context) ([]model.Diff, error) {
 // built-in directory rules. It preserves GetDiff's filtering behavior while
 // allowing callers that report the whole Git changeset to show those exclusions.
 func (p *Provider) GetDiffSet(ctx context.Context) (DiffSet, error) {
+	if p.statsOnly && p.mode != ModeWorkspace {
+		return p.statsDiffSet(ctx)
+	}
 	var combined strings.Builder
 
 	switch p.mode {

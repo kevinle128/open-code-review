@@ -36,6 +36,8 @@ range_full = Review toàn bộ PR: {range}
 range_fix = Review commit sửa {sha}
 range_commit = Review commit {sha}
 skipped = Không có thay đổi nào cần review (ví dụ mọi file thay đổi đều bị loại trừ).
+skipped_oversize = Pull request này không được review vì thay đổi quá lớn ({files} file, khoảng {bytes}). Merge vẫn được phép. Comment `/review` sau khi thu nhỏ thay đổi.
+trimmed = Bỏ qua {count} file sinh ra, file nhị phân hoặc file bị loại.
 end_text = Chuỗi review kết thúc ở vòng này; được phép merge.
 found = Tìm được
 found_value = {count} vấn đề → {real} lỗi thật, {skipped} bị loại
@@ -128,3 +130,14 @@ help_mention = Lệnh hỗ trợ: `@{bot} review [--effort=low|medium|high]` (ch
 busy = Một review đang chạy ({round}, phạm vi: {scope}) nên lệnh này bị bỏ qua. Hãy gửi lại sau khi chuỗi review hiện tại kết thúc.
 scope_full = toàn bộ PR
 scope_commit = commit mới nhất
+
+[notice]
+time = {stage} đã dừng vì chạy quá giới hạn thời gian {limit} (đã chạy {elapsed}).
+cuts = Review đã dừng vì dịch vụ khởi động lại {count} lần trong lúc review này đang chạy.
+engine = Review đã dừng vì công cụ review lỗi: {error}
+engine_fallback = Công cụ review bị lỗi.
+cancelled = Review đã bị hủy.
+status = Merge vẫn bị chặn cho đến khi một review mới thành công.
+retry = Comment `/review` để chạy review lại.
+stage_review = Bước review
+stage_fix = Bước sửa

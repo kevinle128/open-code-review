@@ -56,8 +56,13 @@ func (a *Agent) selectFiles(diffs []model.Diff) []fileDecision {
 			dec.Reason = ExcludeLargeData
 		case limit > 0:
 			// Counted only when a limit is configured, so the tokenizer pass is
-			// skipped entirely for max_tokens=0.
-			dec.DiffTokens = llm.CountTokens(d.Diff)
+			// skipped entirely for max_tokens=0. A stats-only load already
+			// counted the patch and dropped the text; use that count.
+			if d.TokensCounted {
+				dec.DiffTokens = d.TokenCount
+			} else {
+				dec.DiffTokens = llm.CountTokens(d.Diff)
+			}
 			if dec.DiffTokens > limit {
 				dec.Reason = ExcludeTooLarge
 			}

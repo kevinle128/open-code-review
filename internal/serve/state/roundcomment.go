@@ -36,11 +36,16 @@ const (
 // index, and OtherDiff the part no finding claims; CommitURL is the web page
 // of FixCommit. LineURL, when set, gives the web page of a line at a commit.
 type RoundReport struct {
-	N, Max     int
-	From, To   string
-	FixReview  bool
-	Coverage   review.Coverage
-	Skipped    bool
+	N, Max    int
+	From, To  string
+	FixReview bool
+	Coverage  review.Coverage
+	Skipped   bool
+	// Notice is review.NoticeOversize when the change was too large to
+	// review. OverFiles and OverBytes are that size.
+	Notice     string
+	OverFiles  int
+	OverBytes  int64
 	Findings   []review.Finding
 	Fixed      []review.Fixed
 	Reported   []review.Reported
@@ -443,10 +448,20 @@ func renderRound(r RoundReport, loc Locale, v *roundView) string {
 	}
 	if r.Skipped {
 		b.WriteString("\n")
-		b.WriteString(loc.Text("round.skipped"))
+		if r.Notice == review.NoticeOversize {
+			b.WriteString(loc.Text("round.skipped_oversize", "files", Inert(strconv.Itoa(r.OverFiles)),
+				"bytes", Inert(formatBytes(r.OverBytes))))
+		} else {
+			b.WriteString(loc.Text("round.skipped"))
+		}
 		b.WriteString("\n\n")
 		b.WriteString(loc.Text("round.end_text"))
 		return b.String()
+	}
+	if n := skippedCount(r.Coverage); n > 0 {
+		b.WriteString("\n")
+		b.WriteString(loc.Text("round.trimmed", "count", Inert(strconv.Itoa(n))))
+		b.WriteString("\n")
 	}
 	writeStatus(&b, r, loc, v)
 	if len(v.rows) > 0 {

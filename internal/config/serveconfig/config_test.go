@@ -72,6 +72,7 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 	want := &Config{
 		Addr: DefaultAddr, MaxRounds: 3, ReviewTimeout: 2 * time.Hour, FixTimeout: time.Hour,
+		MaxShutdownCuts: DefaultMaxShutdownCuts, MaxReviewFiles: DefaultMaxReviewFiles, MaxReviewBytes: DefaultMaxReviewBytes,
 		Workers: 2, MaxBodyBytes: 10485760, DataDir: "/data", WorkDir: "/work", BotIndicators: []string{"bot"},
 		Exclude: DefaultExcludes, ReviewConcurrency: 5, BundleLines: 300,
 		Engine: EngineCLI,

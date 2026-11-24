@@ -60,6 +60,13 @@ const (
 	TerminalFailed   = "failed"
 )
 
+// NoticeOversize means the change was past the file or byte cap, so the
+// review did not run. The round still ends as a report: merge is allowed
+// and the author sees why.
+const (
+	NoticeOversize = "oversize"
+)
+
 // Result is the outcome of a review run. Base is the commit the diff was
 // taken against: for a range review the merge base of From and To, not
 // From itself. It is empty when the run did not resolve one.
@@ -69,6 +76,12 @@ type Result struct {
 	Warnings []string
 	Coverage Coverage
 	Base     string
+	// Notice is set when the review did not run for a reason the round
+	// comment has to say. NoticeFiles and NoticeBytes are the size that
+	// tripped NoticeOversize.
+	Notice      string
+	NoticeFiles int
+	NoticeBytes int64
 }
 
 // Coverage counts the files a run selected for review, after filtering, and

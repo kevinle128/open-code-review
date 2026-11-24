@@ -6,7 +6,9 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -89,7 +91,7 @@ func TestJournal(t *testing.T) {
 		t.Fatal("no data directory must give no journal")
 	}
 	var none *journal
-	if tok, err := none.put(ghRef(1), roundJob{n: 1}); tok != "" || err != nil || none.remove(ghRef(1), "") != nil || none.pending() != nil {
+	if tok, _, err := none.put(ghRef(1), roundJob{n: 1}, ""); tok != "" || err != nil || none.remove(ghRef(1), "") != nil || none.pending() != nil {
 		t.Fatal("a nil journal records nothing")
 	}
 
@@ -98,9 +100,9 @@ func TestJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old, _ := j.put(ghRef(1), roundJob{n: 1, scope: state.ScopeFull})
-	cur, _ := j.put(ghRef(1), roundJob{n: 2, scope: state.ScopeCommit, commit: sha1, fixCommit: true, effort: "high"})
-	if _, err := j.put(glRef(2), roundJob{n: 1, scope: state.ScopeFull}); err != nil {
+	old, _, _ := j.put(ghRef(1), roundJob{n: 1, scope: state.ScopeFull}, "")
+	cur, _, _ := j.put(ghRef(1), roundJob{n: 2, scope: state.ScopeCommit, commit: sha1, fixCommit: true, effort: "high"}, "")
+	if _, _, err := j.put(glRef(2), roundJob{n: 1, scope: state.ScopeFull}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := j.remove(ghRef(1), old); err != nil || len(j.pending()) != 2 {
@@ -131,6 +133,213 @@ func TestJournal(t *testing.T) {
 	if _, err := openJournal(filepath.Join(dir, journalFile)); err == nil {
 		t.Fatal("a data path that is a file must be reported")
 	}
+}
+
+func TestJournalKeepsStartAndCuts(t *testing.T) {
+	dir := t.TempDir()
+	old := `{"github:acme/app#3":{"platform":"github","repo":"acme/app","installation_id":7,"number":3,"round":1,"scope":"full","token":"9"}}`
+	if err := os.WriteFile(filepath.Join(dir, journalFile), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	j, err := openJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := j.pending()
+	if len(got) != 1 || got[0].StartedUnixNano != 0 || got[0].Cuts != 0 || got[0].Token != "9" {
+		t.Fatalf("old journal %+v", got)
+	}
+
+	start := time.Unix(1_700_000_000, 0)
+	ref := got[0].ref()
+	if err := j.noteStart(ref, "9", start); err != nil {
+		t.Fatal(err)
+	}
+	cuts, err := j.noteShutdown(ref, "9")
+	if err != nil || cuts != 1 {
+		t.Fatalf("cuts %d err %v", cuts, err)
+	}
+	j2, err := openJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := j2.pending()
+	if len(again) != 1 || again[0].StartedUnixNano != start.UnixNano() || again[0].Cuts != 1 || again[0].Running {
+		t.Fatalf("reopened %+v", again[0])
+	}
+	keptToken, kept, err := j2.put(ref, again[0].roundJob(), "test")
+	if err != nil || kept.StartedUnixNano != start.UnixNano() || kept.Cuts != 1 || kept.Token == "9" {
+		t.Fatalf("resume token %s entry %+v err %v", keptToken, kept, err)
+	}
+	_, deployed, err := j2.put(ref, kept.roundJob(), "v2")
+	if err != nil || deployed.Cuts != 0 || deployed.StartedUnixNano != start.UnixNano() {
+		t.Fatalf("deploy %+v err %v", deployed, err)
+	}
+}
+
+func TestCutCountDoesNotDependOnStart(t *testing.T) {
+	ref := ghRef(7)
+	job := roundJob{n: 1, scope: state.ScopeFull}
+
+	t.Run("queued cut survives a restart", func(t *testing.T) {
+		j := openTestJournal(t)
+		token, _, err := j.put(ref, job, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cuts, err := j.noteShutdown(ref, token); err != nil || cuts != 1 {
+			t.Fatalf("cuts %d err %v", cuts, err)
+		}
+		j2 := reopenJournal(t, j)
+		_, kept, err := j2.put(ref, j2.pending()[0].roundJob(), "test")
+		if err != nil || kept.Cuts != 1 || kept.StartedUnixNano != 0 {
+			t.Fatalf("resume %+v err %v", kept, err)
+		}
+	})
+
+	t.Run("crash while queued counts once", func(t *testing.T) {
+		j := openTestJournal(t)
+		if _, _, err := j.put(ref, job, "test"); err != nil {
+			t.Fatal(err)
+		}
+		j2 := reopenJournal(t, j)
+		_, kept, err := j2.put(ref, j2.pending()[0].roundJob(), "test")
+		if err != nil || kept.Cuts != 1 || kept.StartedUnixNano != 0 {
+			t.Fatalf("resume %+v err %v", kept, err)
+		}
+		// The same process records the resumed round again. That is not another crash.
+		_, again, err := j2.put(ref, kept.roundJob(), "test")
+		if err != nil || again.Cuts != 1 {
+			t.Fatalf("second put %+v err %v", again, err)
+		}
+	})
+
+	t.Run("crash while running counts once", func(t *testing.T) {
+		j := openTestJournal(t)
+		token, _, err := j.put(ref, job, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Unix(1_700_000_000, 0)
+		if err := j.noteStart(ref, token, start); err != nil {
+			t.Fatal(err)
+		}
+		j2 := reopenJournal(t, j)
+		_, kept, err := j2.put(ref, j2.pending()[0].roundJob(), "test")
+		if err != nil || kept.Cuts != 1 || kept.StartedUnixNano != start.UnixNano() {
+			t.Fatalf("resume %+v err %v", kept, err)
+		}
+	})
+
+	t.Run("same process queues the next round without a cut", func(t *testing.T) {
+		j := openTestJournal(t)
+		if _, _, err := j.put(ref, job, "test"); err != nil {
+			t.Fatal(err)
+		}
+		next := roundJob{n: 2, scope: state.ScopeCommit, commit: sha1, fixCommit: true}
+		if _, _, err := j.put(ref, next, "test"); err != nil {
+			t.Fatal(err)
+		}
+		_, kept, err := j.put(ref, next, "test")
+		if err != nil || kept.Cuts != 0 || kept.Round != 2 || kept.StartedUnixNano != 0 {
+			t.Fatalf("round 2 %+v err %v", kept, err)
+		}
+	})
+}
+
+func TestJournalProcMarkersDiffer(t *testing.T) {
+	dir := t.TempDir()
+	a, err := openJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := openJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.proc == "" || b.proc == "" || a.proc == b.proc {
+		t.Fatalf("procs %q %q", a.proc, b.proc)
+	}
+}
+
+func TestJournalCutAcrossOSProcesses(t *testing.T) {
+	if os.Getenv("OCR_SERVE_JOURNAL_HELPER") == "1" {
+		runJournalHelper()
+		return
+	}
+	ref := ghRef(8)
+	for _, mode := range []string{"crash", "shutdown"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			runJournalHelperProcess(t, dir, mode)
+			j, err := openJournal(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := j.pending()
+			if len(got) != 1 || got[0].Running != (mode == "crash") {
+				t.Fatalf("saved %+v", got)
+			}
+			_, kept, err := j.put(ref, got[0].roundJob(), "test")
+			if err != nil || kept.Cuts != 1 || kept.StartedUnixNano != 0 {
+				t.Fatalf("resume %+v err %v", kept, err)
+			}
+		})
+	}
+}
+
+func runJournalHelperProcess(t *testing.T, dir, mode string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestJournalCutAcrossOSProcesses$")
+	cmd.Env = append(os.Environ(),
+		"OCR_SERVE_JOURNAL_HELPER=1",
+		"OCR_SERVE_JOURNAL_DIR="+dir,
+		"OCR_SERVE_JOURNAL_MODE="+mode,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helper %s: %v\n%s", mode, err, out)
+	}
+}
+
+func runJournalHelper() {
+	dir := os.Getenv("OCR_SERVE_JOURNAL_DIR")
+	j, err := openJournal(dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	ref := ghRef(8)
+	token, _, err := j.put(ref, roundJob{n: 1, scope: state.ScopeFull}, "test")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if os.Getenv("OCR_SERVE_JOURNAL_MODE") == "shutdown" {
+		if _, err := j.noteShutdown(ref, token); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
+	os.Exit(0)
+}
+
+func openTestJournal(t *testing.T) *journal {
+	t.Helper()
+	j, err := openJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return j
+}
+
+func reopenJournal(t *testing.T, j *journal) *journal {
+	t.Helper()
+	j2, err := openJournal(filepath.Dir(j.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return j2
 }
 
 func TestFailedRoundReusesCheckpointsOnRetry(t *testing.T) {
