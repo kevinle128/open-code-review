@@ -50,7 +50,10 @@ type fakeForge struct {
 	errs      map[string]error // method name -> error to return
 	errOnce   map[string]error // method name -> error for the next call only
 	headAfter map[string]string
-	pushSpecs int
+	// blockGetPR waits until the call's context ends, so a test can fire
+	// the review budget during the read.
+	blockGetPR bool
+	pushSpecs  int
 
 	calls     atomic.Int64
 	gate      chan struct{} // when set, API calls wait for it to close
@@ -94,9 +97,16 @@ func (f *fakeForge) ParseEvent(_ http.Header, body []byte) (forge.Event, error) 
 	return ev, nil
 }
 
-func (f *fakeForge) GetPR(_ context.Context, ref forge.PRRef) (forge.PR, error) {
+func (f *fakeForge) GetPR(ctx context.Context, ref forge.PRRef) (forge.PR, error) {
 	if err := f.api("GetPR"); err != nil {
 		return forge.PR{}, err
+	}
+	f.mu.Lock()
+	block := f.blockGetPR
+	f.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return forge.PR{}, ctx.Err()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -348,9 +358,11 @@ type fakeWorkspaces struct {
 
 	branchFetched []string
 	branchErr     error
-	dirty         bool // Commit finds changes
-	commitErr     error
-	pushErr       error
+	// branchErrs are returned by the next branch fetches, one each, before branchErr.
+	branchErrs []error
+	dirty      bool // Commit finds changes
+	commitErr  error
+	pushErr    error
 	// pushErrs are returned by the next pushes, one each, before pushErr.
 	pushErrs []error
 	// rebaseErr answers Rebase; a rebase that succeeds moves the branch to
@@ -384,6 +396,11 @@ func (w fakeWorkspace) FetchBranch(_ context.Context, spec forge.CloneSpec, head
 	w.w.mu.Lock()
 	defer w.w.mu.Unlock()
 	w.w.branchFetched = append(w.w.branchFetched, spec.HeadRef+"@"+head+".."+base)
+	if len(w.w.branchErrs) > 0 {
+		err := w.w.branchErrs[0]
+		w.w.branchErrs = w.w.branchErrs[1:]
+		return err
+	}
 	return w.w.branchErr
 }
 

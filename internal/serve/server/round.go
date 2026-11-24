@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/alibaba/open-code-review/internal/model"
 	"github.com/alibaba/open-code-review/internal/serve/forge"
@@ -23,12 +24,15 @@ import (
 // previous round pushed. gen is the chain the round belongs to; effort is
 // the override the command that started the chain gave.
 type roundJob struct {
-	n         int
-	scope     string
-	commit    string
-	fixCommit bool
-	gen       uint64
-	effort    string
+	n          int
+	scope      string
+	commit     string
+	fixCommit  bool
+	gen        uint64
+	effort     string
+	started    time.Time
+	fixStarted time.Time
+	cuts       int
 }
 
 // chainCtl tracks the chain of one PR: gen counts the chains started, and
@@ -400,9 +404,12 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 		log.Info("round skipped: a newer review replaced its chain")
 		return nil
 	}
-	token := s.record(ref, rj, log)
+	token, kept := s.record(ref, rj, log)
+	rj.started = unixNanoTime(kept.StartedUnixNano)
+	rj.fixStarted = unixNanoTime(kept.FixStartedUnixNano)
+	rj.cuts = kept.Cuts
 	var partial bool
-	partial, err = s.runRound(f, ref, rj, j, log)
+	partial, err = s.runRound(f, ref, rj, j, token, log)
 	if !errors.Is(err, errShutdown) && !errors.Is(err, errHeadMoved) {
 		if rerr := s.journal.remove(ref, token); rerr != nil {
 			log.Error("update the round journal", "error", rerr.Error())
@@ -417,17 +424,18 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 }
 
 // record writes rj to the journal, so a restart or a crash before the round
-// ends runs it again.
-func (s *Server) record(ref forge.PRRef, rj roundJob, log *slog.Logger) string {
-	token, err := s.journal.put(ref, rj)
+// ends runs it again. The returned entry is what was stored, including a
+// start time and cut count carried over from the previous process.
+func (s *Server) record(ref forge.PRRef, rj roundJob, log *slog.Logger) (string, journalEntry) {
+	token, kept, err := s.journal.put(ref, rj, s.version)
 	if err != nil {
 		log.Error("update the round journal", "error", err.Error())
 	}
-	return token
+	return token, kept
 }
 
 // runRound runs the round and reports whether its review was partial.
-func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *slog.Logger) (bool, error) {
+func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, token string, log *slog.Logger) (bool, error) {
 	select {
 	case s.workers <- struct{}{}:
 	default:
@@ -435,7 +443,7 @@ func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, lo
 		select {
 		case s.workers <- struct{}{}:
 		case <-s.runCtx.Done():
-			return false, s.failQueued(f, ref, rj, j, log)
+			return false, s.failQueued(f, ref, rj, j, token, log)
 		}
 	}
 	defer func() { <-s.workers }()
@@ -449,7 +457,7 @@ func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, lo
 		return false, nil
 	}
 	defer s.end(ref, rj.gen)
-	r := &roundRun{s: s, f: f, ref: ref, rj: rj, j: j, log: log}
+	r := &roundRun{s: s, f: f, ref: ref, rj: rj, j: j, log: log, token: token}
 	err := r.run(ctx)
 	return r.partial, err
 }
@@ -481,24 +489,38 @@ func (s *Server) markQueued(f forge.Forge, ref forge.PRRef, log *slog.Logger) {
 // worker. With a journal the round runs again after the restart, so the PR
 // keeps its pending status. Without one the chain is marked failed, or the
 // PR would stay blocked with no message to its author.
-func (s *Server) failQueued(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *slog.Logger) error {
-	if s.journal != nil {
-		log.Info("round cut by shutdown; it runs again after the restart", "stage", "wait for worker")
-		return errShutdown
-	}
-	r := &roundRun{s: s, f: f, ref: ref, rj: rj, j: j, log: log,
+func (s *Server) failQueued(f forge.Forge, ref forge.PRRef, rj roundJob, j job, token string, log *slog.Logger) error {
+	r := &roundRun{s: s, f: f, ref: ref, rj: rj, j: j, log: log, token: token,
 		marker: state.Marker{Max: s.cfg.MaxRounds}}
 	ctx, cancel := s.sideContext()
 	defer cancel()
-	if pr, m, _, err := s.readChain(ctx, f, ref, log); err != nil {
+	pr, m, _, err := s.readChain(ctx, f, ref, log)
+	if err != nil {
 		log.Warn("read pull request for the failed status", "error", err.Error())
-	} else if pr.State == forge.StateOpen {
+	} else if pr.State != forge.StateOpen {
+		// A closed or merged PR stays quiet, the same as a resumed round
+		// that can no longer run. The caller drops the journal.
+		log.Info("round skipped: pr not open")
+		return nil
+	} else {
 		r.pr = pr
 		if m != nil {
 			r.marker.Max, r.marker.Rounds = m.Max, m.Rounds
 		}
 	}
-	return r.fail("wait for worker", s.runCtx.Err())
+	var over error
+	if s.journal != nil {
+		if stop, ferr := r.noteShutdown("wait for worker"); stop {
+			return ferr
+		} else if ferr != nil {
+			over = ferr
+		}
+	}
+	err = s.runCtx.Err()
+	if over != nil {
+		err = over
+	}
+	return r.fail("wait for worker", err)
 }
 
 // roundRun holds the state of one round while it runs.
@@ -513,9 +535,16 @@ type roundRun struct {
 	pr     forge.PR
 	marker state.Marker
 	limit  int
+	token  string
+	// shutdownNoted stops a second shutdown from counting the same cut.
+	shutdownNoted bool
 	// partial is set when the review ended partial: its batch checkpoints
 	// are kept for a retry.
 	partial bool
+	// budget is "review" or "fix" while that stage's wall-clock context can
+	// expire. A deadline is classified from this, not from the name of the
+	// step that noticed it (read, workspace, checkout).
+	budget string
 }
 
 // loc is the text of the PR's platform.
@@ -525,7 +554,37 @@ func (r *roundRun) loc() state.Locale {
 
 func (r *roundRun) run(round context.Context) error {
 	s, f, rj := r.s, r.f, r.rj
-	ctx, cancel := context.WithTimeout(round, s.cfg.ReviewTimeout)
+	if rj.cuts > s.cfg.MaxShutdownCuts {
+		if err := r.readForFailure(round); err != nil {
+			if errors.Is(err, errPRNotOpen) {
+				return nil
+			}
+			return err
+		}
+		return r.fail("review", errTooManyCuts)
+	}
+	r.ensureStarted()
+	reviewLeft := remaining(s.now(), r.rj.started, s.cfg.ReviewTimeout)
+	kind := "review"
+	if reviewLeft <= 0 {
+		if err := r.readForFailure(round); err != nil {
+			if errors.Is(err, errPRNotOpen) {
+				return nil
+			}
+			return err
+		}
+		if !r.hasSavedReview() {
+			return r.fail("review", errReviewBudget)
+		}
+		fixLeft, err := r.beginFixBudget()
+		if err != nil {
+			return r.fail("fix", err)
+		}
+		reviewLeft = fixLeft
+		kind = "fix"
+	}
+	r.budget = kind
+	ctx, cancel := context.WithTimeout(round, reviewLeft)
 	defer cancel()
 	pr, m, _, err := s.readChain(ctx, f, r.ref, r.log)
 	if err != nil {
@@ -613,13 +672,19 @@ func (r *roundRun) run(round context.Context) error {
 
 	out := state.RoundReport{N: rj.n, Max: r.limit, From: cmpOr(res.Base, pr.BaseSHA), To: pr.HeadSHA,
 		Coverage: res.Coverage, Skipped: res.Terminal == review.TerminalSkipped, Branch: pr.SourceBranch,
+		Notice: res.Notice, OverFiles: res.NoticeFiles, OverBytes: res.NoticeBytes,
 		LineURL: func(sha, path string, line int) string { return f.LineURL(r.ref, sha, path, line) }}
 	if rj.scope == state.ScopeCommit {
 		out.From, out.To, out.FixReview = "", req.Commit, rj.fixCommit
 	}
 	if findings := roundFindings(res.Findings); len(findings) > 0 {
 		out.Findings = findings
-		fctx, fcancel := context.WithTimeout(round, s.cfg.FixTimeout)
+		fixLeft, err := r.beginFixBudget()
+		if err != nil {
+			return r.fail("fix", err)
+		}
+		r.budget = "fix"
+		fctx, fcancel := context.WithTimeout(round, fixLeft)
 		defer fcancel()
 		if err := r.fix(fctx, ws, findings, report, &out); err != nil {
 			return r.fail("fix", err)
@@ -869,9 +934,10 @@ func (r *roundRun) fail(stage string, err error) error {
 		r.log.Info("round cancelled: a newer review replaced its chain", "stage", stage)
 		return nil
 	}
-	if r.s.runCtx.Err() != nil && r.s.journal != nil {
-		r.log.Info("round cut by shutdown; it runs again after the restart", "stage", stage)
-		return errShutdown
+	if stop, ferr := r.noteShutdown(stage); stop {
+		return ferr
+	} else if ferr != nil {
+		err = ferr
 	}
 	r.log.Error("review round failed", "stage", stage, "error", err.Error())
 	side, cancel := r.s.sideContext()
@@ -880,7 +946,9 @@ func (r *roundRun) fail(stage string, err error) error {
 		r.marker.Status = state.ChainFailure
 		r.publish(side, r.pr.HeadSHA, r.rj.n, r.loc().Text("pending.failed"), false)
 	}
-	r.s.commandFailed(r.f, r.ref, r.j.cmd, r.s.failureReason(stage, r.j.requestID), r.log)
+	r.postFailureNotice(side, stage, err)
+	// The notice is the one comment. The command keeps its reaction only.
+	r.s.commandReact(r.f, r.ref, r.j.cmd, forge.ReactionFailure, r.log)
 	return err
 }
 
@@ -960,4 +1028,188 @@ func cmpOr(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// remaining is the part of limit still left since started. A zero start
+// means the stage has not begun, so the whole limit remains.
+func remaining(now, started time.Time, limit time.Duration) time.Duration {
+	if started.IsZero() {
+		return limit
+	}
+	left := limit - now.Sub(started)
+	if left < 0 {
+		return 0
+	}
+	return left
+}
+
+// ensureStarted stamps the first time a worker took this round and keeps
+// that time across a restart.
+func (r *roundRun) ensureStarted() {
+	if !r.rj.started.IsZero() {
+		return
+	}
+	r.rj.started = r.s.now()
+	if err := r.s.journal.noteStart(r.ref, r.token, r.rj.started); err != nil {
+		r.log.Error("record round start", "error", err.Error())
+	}
+}
+
+// beginFixBudget stamps the fix stage on its first entry and returns the
+// time it has left. A later entry keeps the original stamp.
+func (r *roundRun) beginFixBudget() (time.Duration, error) {
+	if r.rj.fixStarted.IsZero() {
+		r.rj.fixStarted = r.s.now()
+		if err := r.s.journal.noteFixStart(r.ref, r.token, r.rj.fixStarted); err != nil {
+			r.log.Error("record fix start", "error", err.Error())
+		}
+	}
+	left := remaining(r.s.now(), r.rj.fixStarted, r.s.cfg.FixTimeout)
+	if left <= 0 {
+		return 0, errFixBudget
+	}
+	return left, nil
+}
+
+// readForFailure reads the PR with a short deadline so a round that will
+// not run can still set a status and post a notice.
+func (r *roundRun) readForFailure(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, sideCallTimeout)
+	defer cancel()
+	pr, m, _, err := r.s.readChain(ctx, r.f, r.ref, r.log)
+	if err != nil {
+		return r.fail("read", err)
+	}
+	if pr.State != forge.StateOpen {
+		r.log.Info("round skipped: pr not open")
+		return errPRNotOpen
+	}
+	r.pr = pr
+	r.marker = state.Marker{Status: state.ChainRunning, Max: r.s.cfg.MaxRounds}
+	if m != nil {
+		r.marker.Max = m.Max
+		if r.rj.n > 1 {
+			r.marker.Rounds = m.Rounds
+		}
+	}
+	return nil
+}
+
+// hasSavedReview reports whether this round already finished its review
+// stage, so a spent review budget does not block the fix.
+func (r *roundRun) hasSavedReview() bool {
+	commit := ""
+	if r.rj.scope == state.ScopeCommit {
+		commit = cmpOr(r.rj.commit, r.pr.HeadSHA)
+	}
+	_, ok := loadReview(r.s.roundCheckpoints(r.ref, r.rj.n), r.pr.BaseSHA, r.pr.HeadSHA, r.rj.scope, commit, r.reviewEffort())
+	return ok
+}
+
+// reviewEffort is the effort the checkpoint was saved with: a command
+// override, or the repository serve.json effort when the command set none.
+func (r *roundRun) reviewEffort() string {
+	if r.rj.effort != "" {
+		return r.rj.effort
+	}
+	ctx, cancel := r.s.sideContext()
+	defer cancel()
+	repo, err := r.s.repoConfig(ctx, r.f, r.ref, r.pr, r.log)
+	if err != nil {
+		r.log.Warn("read repository effort", "error", err.Error())
+		return ""
+	}
+	return repo.Effort
+}
+
+// noteShutdown counts a shutdown cut. stop means the round stays in the
+// journal and runs again. A non-nil err with stop false replaces the
+// caller's error: the cut count is past the cap, so the round fails.
+func (r *roundRun) noteShutdown(stage string) (bool, error) {
+	if r.s.runCtx.Err() == nil || r.s.journal == nil || r.shutdownNoted {
+		return false, nil
+	}
+	r.shutdownNoted = true
+	cuts, err := r.s.journal.noteShutdown(r.ref, r.token)
+	if err != nil {
+		r.log.Error("record shutdown cut", "error", err.Error())
+	}
+	if cuts > 0 {
+		r.rj.cuts = cuts
+	}
+	if cuts > r.s.cfg.MaxShutdownCuts {
+		return false, errTooManyCuts
+	}
+	r.log.Info("round cut by shutdown; it runs again after the restart", "stage", stage)
+	return true, errShutdown
+}
+
+// postFailureNotice posts one new comment for a failed round. A forge
+// error is logged and does not change the failed state.
+func (r *roundRun) postFailureNotice(ctx context.Context, stage string, err error) {
+	if err == nil {
+		return
+	}
+	body := state.RenderFailureNotice(r.failureNotice(stage, err), r.loc())
+	if postErr := r.f.PostNote(ctx, r.ref, body); postErr != nil {
+		r.log.Error("post failure notice", "error", postErr.Error())
+	}
+}
+
+func (r *roundRun) failureNotice(stage string, err error) state.FailureNotice {
+	n := state.FailureNotice{Cuts: r.rj.cuts}
+	deadline := errors.Is(err, context.DeadlineExceeded)
+	// A deadline belongs to whichever budget context expired. The stage
+	// name is only a fallback for a deadline that was not marked.
+	reviewDeadline := deadline && (r.budget == "review" || (r.budget == "" && stage == "review"))
+	fixDeadline := deadline && (r.budget == "fix" || (r.budget == "" && stage == "fix"))
+	switch {
+	case errors.Is(err, errFixBudget) || fixDeadline:
+		n.Class = state.FailureTime
+		n.Stage = "fix"
+		since := r.rj.fixStarted
+		if since.IsZero() {
+			since = r.rj.started
+		}
+		n.Elapsed = formatLimit(r.elapsed(since))
+		n.Limit = formatLimit(r.s.cfg.FixTimeout)
+	case errors.Is(err, errReviewBudget) || reviewDeadline:
+		n.Class = state.FailureTime
+		n.Stage = "review"
+		n.Elapsed = formatLimit(r.elapsed(r.rj.started))
+		n.Limit = formatLimit(r.s.cfg.ReviewTimeout)
+	case errors.Is(err, errTooManyCuts):
+		n.Class = state.FailureCuts
+	case errors.Is(err, context.Canceled):
+		n.Class = state.FailureEngine
+		n.Error = state.SanitizePublicError(errors.New(r.loc().Text("notice.cancelled")))
+	default:
+		n.Class = state.FailureEngine
+		n.Error = state.SanitizePublicError(err)
+	}
+	return n
+}
+
+func (r *roundRun) elapsed(since time.Time) time.Duration {
+	if since.IsZero() {
+		return 0
+	}
+	d := r.s.now().Sub(since)
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+func formatLimit(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	if d >= time.Hour && d%time.Hour == 0 {
+		return strconv.Itoa(int(d/time.Hour)) + "h"
+	}
+	if d >= time.Minute && d%time.Minute == 0 {
+		return strconv.Itoa(int(d/time.Minute)) + "m"
+	}
+	return d.Truncate(time.Millisecond).String()
 }

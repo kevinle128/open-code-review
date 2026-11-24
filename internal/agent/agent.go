@@ -143,6 +143,11 @@ type Args struct {
 	// must use the same immutable endpoints as the diff.
 	SealedInput *diff.InputResolution
 
+	// DiffStatsOnly loads paths and sizes for selection and drops patch
+	// text and file bodies. The serve CLI selector sets it; a review that
+	// sends the patch to a model does not.
+	DiffStatsOnly bool
+
 	// MaxTokensBudget caps the aggregate token usage (input+output) across the
 	// whole run; dispatch stops once the running total + a per-group look-ahead
 	// would exceed it. 0 = unlimited. Mirrors scan.Args.MaxTokensBudget.

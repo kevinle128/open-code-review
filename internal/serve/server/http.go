@@ -115,6 +115,9 @@ func New(d Deps) (*Server, error) {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
+	if d.Config.MaxShutdownCuts < 1 {
+		d.Config.MaxShutdownCuts = serveconfig.DefaultMaxShutdownCuts
+	}
 	s := &Server{
 		cfg: d.Config, forges: forges, reviewer: d.Reviewer, fixer: d.Fixer, workspaces: d.Workspaces,
 		locales: d.Locales, languages: d.Languages, log: d.Logger, now: d.Now, version: d.Version,

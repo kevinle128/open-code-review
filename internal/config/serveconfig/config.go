@@ -30,6 +30,9 @@ const (
 	EnvWorkers             = "OCR_SERVE_WORKERS"
 	EnvReviewTimeout       = "OCR_SERVE_REVIEW_TIMEOUT"
 	EnvFixTimeout          = "OCR_SERVE_FIX_TIMEOUT"
+	EnvMaxShutdownCuts     = "OCR_SERVE_MAX_SHUTDOWN_CUTS"
+	EnvMaxReviewFiles      = "OCR_SERVE_MAX_REVIEW_FILES"
+	EnvMaxReviewBytes      = "OCR_SERVE_MAX_REVIEW_BYTES"
 	EnvReviewConcurrency   = "OCR_SERVE_REVIEW_CONCURRENCY"
 	EnvBundleLines         = "OCR_SERVE_BUNDLE_LINES"
 	EnvMaxBodyBytes        = "OCR_SERVE_MAX_BODY_BYTES"
@@ -60,12 +63,19 @@ const (
 
 // Defaults and bounds.
 const (
-	DefaultAddr          = "127.0.0.1:3012"
-	DefaultMaxRounds     = 3
-	DefaultWorkers       = 2
-	DefaultReviewTimeout = 2 * time.Hour
-	DefaultFixTimeout    = time.Hour
-	DefaultMaxBodyBytes  = 10 << 20
+	DefaultAddr            = "127.0.0.1:3012"
+	DefaultMaxRounds       = 3
+	DefaultWorkers         = 2
+	DefaultReviewTimeout   = 2 * time.Hour
+	DefaultFixTimeout      = time.Hour
+	DefaultMaxShutdownCuts = 5
+	// DefaultMaxReviewFiles is well above a source change (a serve batch holds
+	// about 25 files) and well below a generated tree of thousands of files.
+	DefaultMaxReviewFiles = 300
+	// DefaultMaxReviewBytes is the unified-diff size of a large source change.
+	// A generated or minified tree is larger than this and is not reviewed.
+	DefaultMaxReviewBytes = 8 << 20
+	DefaultMaxBodyBytes   = 10 << 20
 	// DefaultDataDir and DefaultWorkDir apply only when HOME is not set;
 	// otherwise the directories default to ~/ocr-review/data and
 	// ~/ocr-review/work.
@@ -89,6 +99,12 @@ const (
 	MaxReviewConcurrency = 32
 	MinBundleLines       = 50
 	MaxBundleLines       = 5000
+	MinShutdownCuts      = 1
+	MaxShutdownCuts      = 100
+	MinReviewFiles       = 1
+	MaxReviewFiles       = 100000
+	MinReviewBytes       = 1
+	MaxReviewBytes       = 1 << 30
 )
 
 // Config is the global service configuration.
@@ -98,11 +114,22 @@ type Config struct {
 	// ReviewTimeout bounds the part of a round up to the end of the review;
 	// FixTimeout bounds the fix run, its commit and push, which start only
 	// after the review. A long review therefore cannot use up the time of
-	// the fix.
+	// the fix. Each limit is wall-clock time from the moment that stage
+	// first started, including time the process was down, so a restart does
+	// not give the stage a fresh limit. Time spent waiting for a worker
+	// before the stage first starts does not count.
 	ReviewTimeout time.Duration
 	FixTimeout    time.Duration
-	Workers       int
-	MaxBodyBytes  int64
+	// MaxShutdownCuts is how many times a shutdown may cut one round before
+	// the next start fails it. A newer build resets the count, so a deploy
+	// does not inherit a crash loop of the previous build.
+	MaxShutdownCuts int
+	// MaxReviewFiles and MaxReviewBytes bound a review after the file filter.
+	// A change past either one is not reviewed.
+	MaxReviewFiles int
+	MaxReviewBytes int64
+	Workers        int
+	MaxBodyBytes   int64
 	// ReviewConcurrency is the number of LLM subtasks one review runs at the
 	// same time.
 	ReviewConcurrency int
@@ -248,12 +275,15 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 	}
 	l := loader{getenv: getenv, readFile: readFile}
 	c := &Config{
-		Addr:          l.str(EnvAddr, DefaultAddr),
-		MaxRounds:     l.intIn(EnvMaxRounds, DefaultMaxRounds, MinRounds, MaxRounds),
-		ReviewTimeout: l.duration(EnvReviewTimeout, DefaultReviewTimeout),
-		FixTimeout:    l.duration(EnvFixTimeout, DefaultFixTimeout),
-		Workers:       l.intIn(EnvWorkers, DefaultWorkers, MinWorkers, MaxWorkers),
-		MaxBodyBytes:  int64(l.intIn(EnvMaxBodyBytes, DefaultMaxBodyBytes, 1, MaxBodyBytesHigh)),
+		Addr:            l.str(EnvAddr, DefaultAddr),
+		MaxRounds:       l.intIn(EnvMaxRounds, DefaultMaxRounds, MinRounds, MaxRounds),
+		ReviewTimeout:   l.duration(EnvReviewTimeout, DefaultReviewTimeout),
+		FixTimeout:      l.duration(EnvFixTimeout, DefaultFixTimeout),
+		MaxShutdownCuts: l.intIn(EnvMaxShutdownCuts, DefaultMaxShutdownCuts, MinShutdownCuts, MaxShutdownCuts),
+		MaxReviewFiles:  l.intIn(EnvMaxReviewFiles, DefaultMaxReviewFiles, MinReviewFiles, MaxReviewFiles),
+		MaxReviewBytes:  int64(l.intIn(EnvMaxReviewBytes, DefaultMaxReviewBytes, MinReviewBytes, MaxReviewBytes)),
+		Workers:         l.intIn(EnvWorkers, DefaultWorkers, MinWorkers, MaxWorkers),
+		MaxBodyBytes:    int64(l.intIn(EnvMaxBodyBytes, DefaultMaxBodyBytes, 1, MaxBodyBytesHigh)),
 		ReviewConcurrency: l.intIn(EnvReviewConcurrency, DefaultReviewConcurrency,
 			MinReviewConcurrency, MaxReviewConcurrency),
 		BundleLines: l.intIn(EnvBundleLines, DefaultBundleLines, MinBundleLines, MaxBundleLines),

@@ -174,7 +174,10 @@ func TestCLIFixTimeoutCleansUp(t *testing.T) {
 	if h.ws.acquired != 1 || h.ws.released != 1 {
 		t.Fatalf("slot %d/%d", h.ws.acquired, h.ws.released)
 	}
-	mustContain(t, strings.Join(h.gh.noteList(), "\n"), h.srv.failureReason("fix", "req-cmd"))
+	notes := h.gh.noteList()
+	if len(notes) != 1 || !strings.Contains(notes[0], "time limit") || strings.Contains(notes[0], "req-cmd") {
+		t.Fatalf("notes %q", notes)
+	}
 	if m := h.gh.marker(t, ref); m.Status != state.ChainFailure {
 		t.Fatalf("marker %+v", m)
 	}

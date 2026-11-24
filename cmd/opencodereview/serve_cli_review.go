@@ -75,6 +75,7 @@ func (s serveSelector) Select(ctx context.Context, req review.Request) (clirevie
 	preview, err := agent.Preview(ctx, agent.Args{
 		RepoDir: cc.RepoDir, From: opts.from, To: opts.to, Commit: opts.commit,
 		Template: tpl, FileFilter: cc.FileFilter, GitRunner: cc.GitRunner, SealedInput: &in,
+		DiffStatsOnly: true,
 	})
 	if err != nil {
 		return sel, fmt.Errorf("select review files: %w", err)
@@ -93,6 +94,7 @@ func (s serveSelector) Select(ctx context.Context, req review.Request) (clirevie
 				sel.Lines = map[string]int{}
 			}
 			sel.Lines[e.Path] = int(e.Insertions + e.Deletions)
+			sel.Bytes += e.StatBytes
 		// The OCR engine drops provider directories before it selects, so
 		// its skipped counts leave them out; keep the counts comparable.
 		case e.ExcludeReason != agent.ExcludeProviderDirectory:
@@ -149,6 +151,7 @@ func buildServeEngines(ctx context.Context, cfg *serveconfig.Config, getenv func
 		Selector: serveSelector{ocr: ocr}, CLI: reviewCLI, Homes: homes,
 		SkillDir: c.SkillDir, Getenv: getenv, Log: log,
 		Batching: clireview.Batching{Lines: c.BatchLines, Files: c.BatchFiles, Concurrency: c.BatchConcurrency},
+		MaxFiles: cfg.MaxReviewFiles, MaxBytes: cfg.MaxReviewBytes,
 	}
 	fix := &clireview.Fixer{CLI: fixCLI, Homes: homes, SkillDir: c.SkillDir, Language: lang, Getenv: getenv}
 	return rev, fix, nil

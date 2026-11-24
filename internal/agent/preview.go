@@ -97,6 +97,7 @@ func (a *Agent) preview(ctx context.Context) (*DiffPreview, error) {
 			Status:        diffStatus(dec.Diff),
 			WillReview:    dec.selected(),
 			ExcludeReason: dec.Reason,
+			StatBytes:     dec.Diff.StatBytes,
 		}
 		if entry.WillReview {
 			result.ReviewableCount++
@@ -114,6 +115,9 @@ func (a *Agent) preview(ctx context.Context) (*DiffPreview, error) {
 // not retain potentially large unified diffs or file contents for them.
 func (a *Agent) loadPreviewDiffs(ctx context.Context) (diff.DiffSet, error) {
 	provider := a.newDiffProvider()
+	if a.args.DiffStatsOnly {
+		provider.EnableStats()
+	}
 	set, err := provider.GetDiffSet(ctx)
 	if err != nil {
 		return diff.DiffSet{}, err

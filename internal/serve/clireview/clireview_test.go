@@ -209,6 +209,38 @@ func TestReviewWithoutFilesIsSkipped(t *testing.T) {
 	}
 }
 
+func TestReviewOversizeDoesNotRunCLI(t *testing.T) {
+	cli := &fakeCLI{}
+	rev, _ := newReviewer(t, fakeSelector{sel: Selection{
+		Base: "b", Head: "h", Paths: []string{"a.go", "b.go"}, Bytes: 100,
+	}}, cli)
+	rev.MaxFiles = 1
+	res, err := rev.Review(context.Background(), review.Request{})
+	if err != nil || res.Terminal != review.TerminalSkipped || res.Notice != review.NoticeOversize || res.NoticeFiles != 2 {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if cli.inv.Run != nil {
+		t.Fatal("the CLI ran for an oversized change")
+	}
+}
+
+func TestReviewOversizeBytesDoNotRunCLI(t *testing.T) {
+	cli := &fakeCLI{}
+	const bytes = 9 << 20
+	rev, _ := newReviewer(t, fakeSelector{sel: Selection{
+		Base: "b", Head: "h", Paths: []string{"a.go"}, Bytes: bytes,
+	}}, cli)
+	rev.MaxFiles = 10
+	rev.MaxBytes = 8 << 20
+	res, err := rev.Review(context.Background(), review.Request{})
+	if err != nil || res.Terminal != review.TerminalSkipped || res.Notice != review.NoticeOversize || res.NoticeFiles != 1 || res.NoticeBytes != bytes {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if cli.inv.Run != nil {
+		t.Fatal("the CLI ran for a change over the byte cap")
+	}
+}
+
 func TestReviewFailures(t *testing.T) {
 	r := newRepo(t)
 	sel := Selection{Base: r.base, Head: r.head, Paths: []string{"a.go"}, Language: "English"}

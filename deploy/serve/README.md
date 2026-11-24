@@ -84,6 +84,9 @@ OCR_SERVE_GITLAB_AFTER_REVIEW_JOBS=
 OCR_SERVE_MAX_ROUNDS=
 OCR_SERVE_REVIEW_TIMEOUT=
 OCR_SERVE_FIX_TIMEOUT=
+OCR_SERVE_MAX_SHUTDOWN_CUTS=
+OCR_SERVE_MAX_REVIEW_FILES=
+OCR_SERVE_MAX_REVIEW_BYTES=
 OCR_SERVE_WORKERS=
 OCR_SERVE_REVIEW_CONCURRENCY=
 OCR_SERVE_BUNDLE_LINES=
@@ -260,8 +263,9 @@ setting both forms is an error.
 | `OCR_SERVE_ADDR` | `127.0.0.1:3012` | The image sets `0.0.0.0:3012`. The health check uses port 3012. |
 | `OCR_SERVE_MAX_ROUNDS` | `3` | Fix rounds per chain, 1..10. One report-only round follows them; see [Review rounds](#review-rounds). |
 | `OCR_SERVE_WORKERS` | `2` | Concurrent rounds, 1..16; also the number of checkout slots. |
-| `OCR_SERVE_REVIEW_TIMEOUT` | `2h` | Limit for the review part of one round (read, checkout, review), timed from when a worker takes it. Each file group in the review has a limit of 120 minutes per round. |
-| `OCR_SERVE_FIX_TIMEOUT` | `1h` | Limit for the fix run of one round with its commit and push. It starts when the review ends, so a long review does not take time from the fix. |
+| `OCR_SERVE_REVIEW_TIMEOUT` | `2h` | Limit for the review part of one round (read, checkout, review). The clock starts when a worker first takes the round and keeps running across a restart, including downtime. Waiting in the queue before that first start does not count. A resume does not start the clock again. Each file group in the review has a limit of 120 minutes per round. |
+| `OCR_SERVE_FIX_TIMEOUT` | `1h` | Limit for the fix run of one round with its commit and push. The clock starts the first time the fix stage is entered and keeps running across a restart. A long review does not take time from the fix. |
+| `OCR_SERVE_MAX_SHUTDOWN_CUTS` | `5` | How many times a shutdown may cut one round before the round fails instead of resuming. 1..100. A restart onto a different build (a deploy) resets this count and does not reset the time limit. |
 | `OCR_SERVE_REVIEW_CONCURRENCY` | `5` | LLM subtasks that one review runs at the same time, 1..32. `ocr review --concurrency` keeps its default of 8. |
 | `OCR_SERVE_BUNDLE_LINES` | `300` | A PR with fewer files than the grouping minimum (4) and fewer changed lines than this value is reviewed as one group; otherwise each file is a separate group. 50..5000. Replaces the template value of 200 for serve reviews only. |
 | `OCR_SERVE_MAX_BODY_BYTES` | `10485760` | Webhook body limit. |
@@ -732,6 +736,12 @@ test data, fixtures and snapshots):
 | `**/*.map` | source maps |
 | `**/locales/**/*.json`, `**/i18n/**/*.json` | translation tables |
 | `**/docs/**/*.html`, `**/*.html`, `**/*.htm`, `**/*.css` | plain markup and styles |
+| `**/*.atlas` | texture atlases |
+| `**/web-mobile/**` | Cocos Creator web build output |
+
+Lockfiles such as `package-lock.json` and minified `*.min.js` are already skipped by OCR's built-in path excludes. `build/` is still reviewed: it can hold hand-written sources.
+
+A change that is still larger than `OCR_SERVE_MAX_REVIEW_FILES` (default 300) or `OCR_SERVE_MAX_REVIEW_BYTES` (default 8 MiB of unified diff, measured on the files that would be reviewed) is not reviewed. These two limits apply to the CLI review engine only. A repository that uses the OCR engine is not covered by them. The round ends with a success status and a comment that states the size. Files left out by the filter are counted in the round comment when the rest of the change is reviewed. The comment states the count and does not name the files. The service does not review the first N files of an oversized change.
 
 It also skips a `.json`, `.yaml` or `.yml` file whose diff changes more than
 1000 lines.

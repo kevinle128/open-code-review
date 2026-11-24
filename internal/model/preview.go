@@ -36,6 +36,9 @@ type PreviewEntry struct {
 	Deletions     int64         `json:"deletions"`
 	WillReview    bool          `json:"will_review"`
 	ExcludeReason ExcludeReason `json:"exclude_reason,omitempty"`
+	// StatBytes is the unified-diff size of a file selected without keeping
+	// the patch text. It is not part of the preview JSON.
+	StatBytes int64 `json:"-"`
 }
 
 // Preview is the full preview result, mode-agnostic so cmd/opencodereview
