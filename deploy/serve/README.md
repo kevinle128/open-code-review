@@ -429,9 +429,9 @@ redeploy.
 
 ### Antigravity CLI (agy)
 
-`OCR_SERVE_REVIEW_CLI=agy` reviews with the Google Antigravity CLI. It is a
-review CLI only; the fix run keeps `OCR_SERVE_VERIFY_CLI` (`claude` or
-`codex`).
+`OCR_SERVE_REVIEW_CLI=agy` reviews with the Google Antigravity CLI, and
+`OCR_SERVE_VERIFY_CLI=agy` (with `OCR_SERVE_VERIFY_MODEL`, e.g.
+`gemini-4-neon-medium`) also runs the fix pass with `agy`.
 
 Install it and sign in once, as the service user on the host:
 

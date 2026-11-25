@@ -70,10 +70,10 @@ func TestLoad_AgySettings(t *testing.T) {
 	}
 }
 
-func TestLoad_AgyIsReviewOnly(t *testing.T) {
-	_, err := Load(env(map[string]string{EnvVerifyCLI: "agy"}), files(nil))
-	if err == nil || !strings.Contains(err.Error(), EnvVerifyCLI+"=agy is not supported: agy runs reviews only") {
-		t.Fatalf("err %v", err)
+func TestLoad_AgyAsVerifyCLI(t *testing.T) {
+	c, err := Load(env(map[string]string{EnvVerifyCLI: "agy", EnvVerifyModel: "gemini-4-neon-medium"}), files(nil))
+	if err != nil || c.Verify.CLI != CLIAgy || c.Verify.Model != "gemini-4-neon-medium" {
+		t.Fatalf("verify %+v err %v", c.Verify, err)
 	}
 }
 
