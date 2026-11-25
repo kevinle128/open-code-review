@@ -20,12 +20,15 @@ func TestLoad_VerifyDefaults(t *testing.T) {
 	if err != nil || c.Verify != (VerifyConfig{CLI: CLICodex, Model: "opus"}) {
 		t.Fatalf("verify %+v err %v", c.Verify, err)
 	}
+	c, err = Load(env(map[string]string{EnvVerifyCLI: "agy", EnvVerifyModel: "gemini-4-neon-medium"}), files(nil))
+	if err != nil || c.Verify != (VerifyConfig{CLI: CLIAgy, Model: "gemini-4-neon-medium"}) {
+		t.Fatalf("verify %+v err %v", c.Verify, err)
+	}
 }
 
 func TestLoad_VerifyInvalid(t *testing.T) {
 	cases := map[string]struct{ key, value, want string }{
 		"none":  {EnvVerifyCLI, "none", EnvVerifyCLI + "=none is not supported"},
-		"agy":   {EnvVerifyCLI, "agy", EnvVerifyCLI + "=agy is not supported"},
 		"other": {EnvVerifyCLI, "aider", EnvVerifyCLI + " must be one of"},
 		"model": {EnvVerifyModel, "--yolo", EnvVerifyModel + " has an invalid value"},
 	}

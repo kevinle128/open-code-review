@@ -23,20 +23,16 @@ type VerifyConfig struct {
 	Model string
 }
 
-// verify reads the fix run settings. agy and "none" get their own errors:
-// agy is a valid review CLI, and "none" turned off the earlier verify pass,
-// while every round now needs this run.
+// verify reads the fix run settings. "none" gets its own error because
+// every round now needs a fix CLI.
 func (l *loader) verify() VerifyConfig {
 	v := VerifyConfig{Model: l.matching(EnvVerifyModel, modelPattern)}
 	switch raw := strings.ToLower(l.str(EnvVerifyCLI, "")); raw {
-	case CLIAgy:
-		l.fail("%s=%s is not supported: agy runs reviews only, set %s to %s or %s", EnvVerifyCLI, CLIAgy, EnvVerifyCLI, CLIClaude, CLICodex)
-		v.CLI = DefaultVerifyCLI
 	case "none":
-		l.fail("%s=none is not supported: every round runs this CLI to judge and fix the findings, set it to %s or %s", EnvVerifyCLI, CLIClaude, CLICodex)
+		l.fail("%s=none is not supported: every round runs this CLI to judge and fix the findings, set it to %s, %s or %s", EnvVerifyCLI, CLIClaude, CLICodex, CLIAgy)
 		v.CLI = DefaultVerifyCLI
 	default:
-		v.CLI = l.oneOf(EnvVerifyCLI, DefaultVerifyCLI, CLIClaude, CLICodex)
+		v.CLI = l.oneOf(EnvVerifyCLI, DefaultVerifyCLI, CLIClaude, CLICodex, CLIAgy)
 	}
 	return v
 }

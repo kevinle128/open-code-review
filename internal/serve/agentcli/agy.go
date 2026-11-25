@@ -24,12 +24,13 @@ const (
 	agyMaxPromptArg = 100 << 10
 	agyPromptFile   = "agy-prompt.md"
 	// agySettings are session settings that agy never saves. Non-workspace
-	// access lets agy read the checkout without making it a workspace, and
-	// the deny rule blocks its file write tool in every mode.
-	agySettings = `{"allowNonWorkspaceAccess":true,"permissions":{"deny":["write_file(*)"]}}`
+	// access lets agy reach the checkout without making it a workspace;
+	// review runs also deny its file write tool, while edit runs allow it.
+	agyReviewSettings = `{"allowNonWorkspaceAccess":true,"permissions":{"deny":["write_file(*)"]}}`
+	agyEditSettings   = `{"allowNonWorkspaceAccess":true}`
 )
 
-// Agy runs the Google Antigravity CLI (`agy -p`) for reviews only.
+// Agy runs the Google Antigravity CLI (`agy -p`) for review or fix runs.
 //
 // agy loads the hooks (.agents/hooks.json), rules, skills, MCP servers and
 // AGENTS.md or GEMINI.md of every workspace folder and its parents up to
@@ -64,9 +65,6 @@ func (Agy) Name() string { return "agy" }
 
 // Exec implements CLI.
 func (a Agy) Exec(ctx context.Context, inv Invocation) (string, error) {
-	if inv.Edit {
-		return "", errors.New("agy runs reviews only")
-	}
 	if a.TokenFile != "" {
 		link := filepath.Join(inv.Run.Home, agyTokenPath)
 		if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
@@ -100,7 +98,11 @@ func (a Agy) Exec(ctx context.Context, inv Invocation) (string, error) {
 		}
 		args = append(args, "--json-schema", schema)
 	}
-	args = append(args, "--dangerously-skip-permissions", "--disable-slash-commands", "--settings", agySettings)
+	settings := agyReviewSettings
+	if inv.Edit {
+		settings = agyEditSettings
+	}
+	args = append(args, "--dangerously-skip-permissions", "--disable-slash-commands", "--settings", settings)
 	if a.Model != "" {
 		args = append(args, "--model", a.Model)
 	}
@@ -134,7 +136,7 @@ func (a Agy) Exec(ctx context.Context, inv Invocation) (string, error) {
 // agyPreface tells agy where the checkout is: the service prompt calls it
 // the current directory, which for agy is the run input directory.
 func agyPreface(repo string) string {
-	return fmt.Sprintf("# Checkout location\n\nThe PR checkout of this run is `%[1]s`. Your current directory is the run directory, not the checkout. Wherever the instructions below say \"the current directory\", \"the checkout\" or \"repository files\", they mean `%[1]s`: read files there by absolute path, and run commands there with `cd %[1]s && ...`.\n\n---\n\n", repo)
+	return fmt.Sprintf("# Checkout location\n\nThe PR checkout of this run is `%[1]s`. Your current directory is the run directory, not the checkout. Wherever the instructions below say \"the current directory\", \"the checkout\" or \"repository files\", they mean `%[1]s`: read and edit files there by absolute path, and run commands there with `cd %[1]s && ...`.\n\n---\n\n", repo)
 }
 
 // agyError is a failure that agy reported in its JSON result.

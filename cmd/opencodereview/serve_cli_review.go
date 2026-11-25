@@ -162,7 +162,7 @@ func buildServeEngines(ctx context.Context, cfg *serveconfig.Config, getenv func
 // that CLI's own model setting.
 func buildFixCLI(c serveconfig.CLIConfig, v serveconfig.VerifyConfig, sc serveconfig.SandboxConfig, sb *agentcli.Sandbox) (agentcli.CLI, error) {
 	if v.Model != "" {
-		c.ClaudeModel, c.CodexModel = v.Model, v.Model
+		c.ClaudeModel, c.CodexModel, c.AgyModel = v.Model, v.Model, v.Model
 	}
 	cli, err := buildAgentCLI(c, sc, sb, v.CLI)
 	if err != nil {

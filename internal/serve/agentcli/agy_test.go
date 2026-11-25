@@ -55,7 +55,7 @@ func TestAgyExecRunsOutsideTheCheckout(t *testing.T) {
 	prompt := agyPreface(f.repo) + "review this"
 	want := []string{"-p", prompt, "--output-format", "json",
 		"--json-schema", filepath.Join(f.run.Out, "schema.json"),
-		"--dangerously-skip-permissions", "--disable-slash-commands", "--settings", agySettings,
+		"--dangerously-skip-permissions", "--disable-slash-commands", "--settings", agyReviewSettings,
 		"--model", "gemini-4-hydrogen-high", "--effort", "xhigh",
 		"--add-dir", "/skills/review", "--add-dir", f.run.Input}
 	if got := readFile(t, filepath.Join(f.rec, "args")); got != strings.Join(want, "\n")+"\n" {
@@ -188,14 +188,8 @@ func TestAgyExecFailures(t *testing.T) {
 	}
 }
 
-func TestAgyExecRefusesEditsAndBadHomes(t *testing.T) {
+func TestAgyExecRefusesBadHomes(t *testing.T) {
 	f := newFixture(t)
-	inv := f.inv("fix")
-	inv.Edit = true
-	if _, err := (Agy{Bin: "/bin/true", TokenFile: agyToken(t)}).Exec(context.Background(), inv); err == nil ||
-		!strings.Contains(err.Error(), "reviews only") {
-		t.Fatalf("edit run: %v", err)
-	}
 	link := filepath.Join(f.run.Home, agyTokenPath)
 	if err := os.MkdirAll(link, 0o700); err != nil {
 		t.Fatal(err)
@@ -324,5 +318,22 @@ func TestBaseEnvDoesNotPassAServiceGatewayURL(t *testing.T) {
 		if strings.HasPrefix(kv, "AGY_LLM_GATEWAY_URL=") {
 			t.Fatal("BaseEnv passes the gateway URL on")
 		}
+	}
+}
+
+func TestAgyExecEditAllowsWrites(t *testing.T) {
+	f := newFixture(t)
+	bin := fakeAgy(t, t.TempDir(), f.rec, agyOK)
+	inv := f.inv("fix findings")
+	inv.Edit = true
+	if _, err := (Agy{Bin: bin, Model: "gemini-4-neon-medium", GatewayURL: "https://gw.example/k"}).Exec(context.Background(), inv); err != nil {
+		t.Fatal(err)
+	}
+	args := readFile(t, filepath.Join(f.rec, "args"))
+	if !strings.Contains(args, agyEditSettings) {
+		t.Fatalf("edit args missing agyEditSettings: %q", args)
+	}
+	if strings.Contains(args, "write_file(*)") {
+		t.Fatalf("edit args still deny write_file: %q", args)
 	}
 }
