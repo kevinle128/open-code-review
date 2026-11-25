@@ -51,6 +51,8 @@ func (s *Server) process(ref forge.PRRef, j job) bool {
 		err = s.round(f, ref, rj, j, log)
 	case j.round != nil:
 		err = s.round(f, ref, *j.round, j, log)
+	case j.ci != nil:
+		err = s.runCITrigger(f, ref, j, log)
 	default:
 		err = s.evaluate(f, ref, j, log)
 	}

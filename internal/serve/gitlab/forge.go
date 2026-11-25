@@ -406,3 +406,22 @@ func (f *Forge) ReadFile(ctx context.Context, ref forge.PRRef, sha, path string,
 	}
 	return body, true, nil
 }
+
+// ResolveProjectPath reads path_with_namespace for a numeric project id.
+// The CI trigger calls it when the job did not send a project path.
+func (f *Forge) ResolveProjectPath(ctx context.Context, projectID int64) (string, error) {
+	if projectID <= 0 {
+		return "", fmt.Errorf("gitlab: invalid project id %d", projectID)
+	}
+	var out struct {
+		PathWithNamespace string `json:"path_with_namespace"`
+	}
+	path := "/projects/" + strconv.FormatInt(projectID, 10)
+	if _, err := f.c.call(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return "", err
+	}
+	if !forge.ValidRepoPath(out.PathWithNamespace) {
+		return "", fmt.Errorf("gitlab: project %d has invalid path %q", projectID, out.PathWithNamespace)
+	}
+	return out.PathWithNamespace, nil
+}

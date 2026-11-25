@@ -254,6 +254,39 @@ func TestRequireServe(t *testing.T) {
 	}
 }
 
+func TestRequireServe_GitLabCIToken(t *testing.T) {
+	if err := (&Config{GitLab: &GitLabConfig{Token: "t", CIToken: "ci"}}).RequireServe(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Config{GitLab: &GitLabConfig{Token: "t", WebhookSecret: "s"}}).RequireServe(); err != nil {
+		t.Fatal(err)
+	}
+	err := (&Config{GitLab: &GitLabConfig{Token: "t"}}).RequireServe()
+	if err == nil || !strings.Contains(err.Error(), EnvGitLabWebhookSecret) || !strings.Contains(err.Error(), EnvGitLabCIToken) {
+		t.Fatalf("err=%v", err)
+	}
+	err = (&Config{GitLab: &GitLabConfig{CIToken: "ci"}}).RequireServe()
+	if err == nil || !strings.Contains(err.Error(), EnvGitLabToken) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestLoad_GitLabCITokenFile(t *testing.T) {
+	c, err := Load(env(map[string]string{
+		EnvGitLabURL: "https://git.example.com", EnvGitLabToken: "t",
+		EnvGitLabCIToken + "_FILE": "/run/ci", EnvEngine: "ocr",
+	}), files(map[string]string{"/run/ci": "ci-token\n"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GitLab == nil || c.GitLab.CIToken != "ci-token" || c.GitLab.WebhookSecret != "" {
+		t.Fatalf("gitlab %+v", c.GitLab)
+	}
+	if err := c.RequireServe(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestIgnoreRules_Match(t *testing.T) {
 	c, err := Load(env(map[string]string{
 		EnvIgnoreRepos: "^infra/", EnvIgnoreAuthors: "^renovate", EnvIgnoreTitles: `(?i)\[wip\]`,

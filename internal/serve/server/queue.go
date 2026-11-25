@@ -18,11 +18,13 @@ const (
 )
 
 // job is one unit of per-PR work: an automatic evaluation (trigger set), a
-// command (cmd set) or a round of a running chain (round set).
+// command (cmd set), a CI trigger (ci set) or a round of a running chain
+// (round set).
 type job struct {
 	trigger   trigger
 	cmd       *cmdJob
 	round     *roundJob
+	ci        *ciJob
 	requestID string
 	reruns    int
 }
@@ -80,7 +82,7 @@ func (q *queue) submit(ref forge.PRRef, j job) {
 }
 
 func (q *queue) addLocked(w *prWork, j job, front bool) {
-	if j.cmd != nil || j.round != nil {
+	if j.cmd != nil || j.round != nil || j.ci != nil {
 		if front {
 			w.ordered = append([]job{j}, w.ordered...)
 		} else {

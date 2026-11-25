@@ -56,23 +56,50 @@ const mrPipelineSource = "merge_request_event"
 // an error. A failed pipeline lookup still sends the status, as an external
 // pipeline, and is returned for the log.
 func (f *Forge) SetStatus(ctx context.Context, pr forge.PR, sha string, st forge.CommitState, description string) error {
+	postErr, sideErr := f.writeStatus(ctx, pr, sha, st, description)
+	if postErr != nil {
+		return postErr
+	}
+	return sideErr
+}
+
+// PostCommitStatus posts the commit status and reports only a failure to
+// post it. A pipeline lookup or after-review job problem is not an error:
+// the status is already on the commit. The CI trigger uses this so a
+// posted pending status is not answered as a gateway failure.
+func (f *Forge) PostCommitStatus(ctx context.Context, pr forge.PR, sha string, st forge.CommitState, description string) error {
+	postErr, _ := f.writeStatus(ctx, pr, sha, st, description)
+	return postErr
+}
+
+func (f *Forge) writeStatus(ctx context.Context, pr forge.PR, sha string, st forge.CommitState, description string) (postErr, sideErr error) {
 	path, err := projectPath(pr.Ref)
 	if err != nil {
-		return err
+		return err, nil
 	}
 	state, ok := gitlabStates[st]
 	if !ok {
-		return fmt.Errorf("gitlab: set status: unknown state %q", st)
+		return fmt.Errorf("gitlab: set status: unknown state %q", st), nil
 	}
 	if !shaRE.MatchString(sha) {
-		return fmt.Errorf("gitlab: set status: %q is not a commit id", sha)
+		return fmt.Errorf("gitlab: set status: %q is not a commit id", sha), nil
 	}
 	payload := map[string]string{
 		"state":       state,
 		"name":        forge.StatusContext,
 		"description": cut(description, maxStatusDescription),
 	}
-	pl, lookupErr := f.mrPipeline(ctx, path, pr.Ref.Number, sha)
+	var pl mrPipelineRef
+	var lookupErr error
+	if pr.PipelineID > 0 && sha == pr.PipelineSHA {
+		// The CI job that asked for the review already named its pipeline.
+		// Treat it as the newest one so a success still starts the jobs
+		// that wait for the review. A different SHA, such as a fix commit
+		// the bot pushed, falls through and looks its own pipeline up.
+		pl = mrPipelineRef{id: pr.PipelineID, newest: true}
+	} else {
+		pl, lookupErr = f.mrPipeline(ctx, path, pr.Ref.Number, sha)
+	}
 	if pl.id != 0 {
 		payload["pipeline_id"] = strconv.FormatInt(pl.id, 10)
 	} else if pr.SourceBranch != "" {
@@ -84,7 +111,7 @@ func (f *Forge) SetStatus(ctx context.Context, pr forge.PR, sha string, st forge
 		err = nil
 	}
 	if err != nil {
-		return fmt.Errorf("gitlab: set status: %w", err)
+		return fmt.Errorf("gitlab: set status: %w", err), nil
 	}
 	var errs []error
 	if lookupErr != nil {
@@ -95,7 +122,7 @@ func (f *Forge) SetStatus(ctx context.Context, pr forge.PR, sha string, st forge
 			errs = append(errs, fmt.Errorf("gitlab: start the jobs that wait for the review: %w", err))
 		}
 	}
-	return errors.Join(errs...)
+	return nil, errors.Join(errs...)
 }
 
 type pipelineInfo struct {

@@ -398,7 +398,7 @@ func (s *Server) round(f forge.Forge, ref forge.PRRef, rj roundJob, j job, log *
 	// job that hit a moved head starts over through evaluate instead, so
 	// its round has ended like any other.
 	rerun := func() bool {
-		return errors.Is(err, errHeadMoved) && j.reruns < maxReruns && (j.cmd != nil || j.round != nil)
+		return errors.Is(err, errHeadMoved) && j.reruns < maxReruns && (j.cmd != nil || j.round != nil || j.ci != nil)
 	}
 	defer func() {
 		if !rerun() {
@@ -449,7 +449,7 @@ func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, to
 	select {
 	case s.workers <- struct{}{}:
 	default:
-		s.markQueued(f, ref, log)
+		s.markQueued(f, ref, j, log)
 		select {
 		case s.workers <- struct{}{}:
 		case <-s.runCtx.Done():
@@ -482,7 +482,7 @@ func (s *Server) runRound(f forge.Forge, ref forge.PRRef, rj roundJob, j job, to
 // for a free worker. Without it a GitLab project whose CI pipeline passes
 // first could merge before the review starts, because "Pipelines must
 // succeed" sees no ocr-review status yet.
-func (s *Server) markQueued(f forge.Forge, ref forge.PRRef, log *slog.Logger) {
+func (s *Server) markQueued(f forge.Forge, ref forge.PRRef, j job, log *slog.Logger) {
 	ctx, cancel := s.sideContext()
 	defer cancel()
 	c := s.chain(ref)
@@ -497,6 +497,7 @@ func (s *Server) markQueued(f forge.Forge, ref forge.PRRef, log *slog.Logger) {
 		return
 	}
 	pr.Ref = ref
+	pr = withCIPipeline(pr, j.ci)
 	s.setStatus(ctx, f, pr, pr.HeadSHA, forge.StatusPending, s.locales[ref.Platform].Text("status.queued"), log)
 	log.Info("round queued", "head", pr.HeadSHA)
 }
@@ -523,7 +524,7 @@ func (s *Server) failQueued(f forge.Forge, ref forge.PRRef, rj roundJob, j job, 
 		log.Info("round skipped: pr not open")
 		return nil
 	} else {
-		r.pr = pr
+		r.pr = withCIPipeline(pr, j.ci)
 		if m != nil {
 			r.marker.Max, r.marker.Rounds = m.Max, m.Rounds
 		}
@@ -614,7 +615,7 @@ func (r *roundRun) run(round context.Context) error {
 	if err != nil {
 		return r.fail("read", err)
 	}
-	r.pr = pr
+	r.pr = withCIPipeline(pr, r.j.ci)
 	r.marker = state.Marker{Status: state.ChainRunning, Max: s.cfg.MaxRounds}
 	if m != nil {
 		r.marker.Max = m.Max
@@ -977,7 +978,7 @@ func (r *roundRun) fail(stage string, err error) error {
 				r.s.commandFailed(r.f, r.ref, r.j.cmd, "pr not open", r.log)
 				return nil
 			}
-			r.pr = pr
+			r.pr = withCIPipeline(pr, r.j.ci)
 			r.marker = state.Marker{Status: state.ChainRunning, Max: r.s.cfg.MaxRounds}
 			if m != nil {
 				r.marker.Max = m.Max
@@ -1129,7 +1130,7 @@ func (r *roundRun) readForFailure(parent context.Context) error {
 		r.log.Info("round skipped: pr not open")
 		return errPRNotOpen
 	}
-	r.pr = pr
+	r.pr = withCIPipeline(pr, r.j.ci)
 	r.marker = state.Marker{Status: state.ChainRunning, Max: r.s.cfg.MaxRounds}
 	if m != nil {
 		r.marker.Max = m.Max

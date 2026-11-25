@@ -60,6 +60,11 @@ type PR struct {
 	BaseSHA      string
 	Draft        bool
 	State        string // open, closed or merged
+	// PipelineID and PipelineSHA name the merge request pipeline a CI
+	// trigger already knows. SetStatus uses PipelineID only for that SHA;
+	// a later fix commit keeps looking its own pipeline up.
+	PipelineID  int64
+	PipelineSHA string
 	// Fork is true when the head branch lives in another repository, or in
 	// one that no longer exists; the service cannot push to such a branch.
 	Fork bool
@@ -209,15 +214,24 @@ var (
 // segment and sha into a commit URL. The URL goes into markdown, so a path
 // or sha with any character outside the plain set gives an empty link.
 func CommitLink(base, repo, segment, sha string) string {
-	if base == "" || !repoPathPattern.MatchString(repo) || !commitIDPattern.MatchString(sha) {
+	if base == "" || !ValidRepoPath(repo) || !commitIDPattern.MatchString(sha) {
 		return ""
+	}
+	return strings.TrimRight(base, "/") + "/" + repo + segment + sha
+}
+
+// ValidRepoPath reports whether repo is a repository path: at least two
+// segments of plain characters, and no "." or ".." segment.
+func ValidRepoPath(repo string) bool {
+	if !repoPathPattern.MatchString(repo) {
+		return false
 	}
 	for _, part := range strings.Split(repo, "/") {
 		if part == "." || part == ".." {
-			return ""
+			return false
 		}
 	}
-	return strings.TrimRight(base, "/") + "/" + repo + segment + sha
+	return true
 }
 
 // markdownSafe escapes what url.PathEscape keeps but a markdown link

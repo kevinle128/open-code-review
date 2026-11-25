@@ -354,6 +354,10 @@ func TestServeRoutes(t *testing.T) {
 	inner.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, r.URL.Path)
 	})
+	inner.HandleFunc("POST /gitlab/ci-trigger", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, r.URL.Path)
+	})
 	h := serveRoutes(inner)
 	for path, want := range map[string]int{"/healthz": 200, "/ocr/healthz": 200, "/ocr/ocr/healthz": 404, "/ocrx/healthz": 404} {
 		rec := httptest.NewRecorder()
@@ -363,6 +367,13 @@ func TestServeRoutes(t *testing.T) {
 		}
 		if want == 200 && rec.Body.String() != "/healthz" {
 			t.Errorf("GET %s reached the handler as %q", path, rec.Body.String())
+		}
+	}
+	for _, path := range []string{"/gitlab/ci-trigger", "/ocr/gitlab/ci-trigger"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
+		if rec.Code != http.StatusAccepted || rec.Body.String() != "/gitlab/ci-trigger" {
+			t.Errorf("POST %s = %d %q", path, rec.Code, rec.Body.String())
 		}
 	}
 }

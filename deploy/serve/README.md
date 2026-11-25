@@ -77,6 +77,7 @@ OCR_SERVE_GITHUB_WEBHOOK_SECRET=[[OCR_SERVE_GITHUB_WEBHOOK_SECRET]]
 OCR_SERVE_GITLAB_URL=https://git.example.com
 OCR_SERVE_GITLAB_TOKEN=[[OCR_SERVE_GITLAB_TOKEN]]
 OCR_SERVE_GITLAB_WEBHOOK_SECRET=[[OCR_SERVE_GITLAB_WEBHOOK_SECRET]]
+OCR_SERVE_GITLAB_CI_TOKEN=[[OCR_SERVE_GITLAB_CI_TOKEN]]
 # Optional; empty uses the default.
 OCR_SERVE_IGNORE_AUTHORS=
 OCR_SERVE_GITLAB_TARGET_BRANCHES=
@@ -175,6 +176,9 @@ OCR_SERVE_GITHUB_WEBHOOK_SECRET=<secret>
 OCR_SERVE_GITLAB_URL=https://git.example.com
 OCR_SERVE_GITLAB_TOKEN=<bot token>
 OCR_SERVE_GITLAB_WEBHOOK_SECRET=<secret>
+# Optional. CI jobs call POST /gitlab/ci-trigger with this token.
+# Leave the webhook secret empty to accept only that route.
+OCR_SERVE_GITLAB_CI_TOKEN=<ci token>
 # For OCR_SERVE_REVIEW_CLI=agy (review only):
 # OCR_SERVE_AGY_BIN=/home/<user>/.local/bin/agy
 # OCR_SERVE_AGY_TOKEN=/home/<user>/.gemini/antigravity-cli/antigravity-oauth-token
@@ -242,14 +246,23 @@ crash with a 5 second delay and when it uses more than 1 GB.
 | Method and path | Purpose |
 |---|---|
 | `POST /github/webhook` | GitHub App deliveries. Bad signature: 403. |
-| `POST /gitlab/webhook` | GitLab system and project hooks. Bad token: 401. |
+| `POST /gitlab/webhook` | GitLab system and project hooks. Bad token: 401. 404 when `OCR_SERVE_GITLAB_WEBHOOK_SECRET` is empty. |
+| `POST /gitlab/ci-trigger` | GitLab CI job trigger. `Authorization: Bearer` or `X-OCR-Token` must match `OCR_SERVE_GITLAB_CI_TOKEN`. Bad token: 401. 404 when that token is empty. |
 | `GET /healthz` | 200 `{"status":"ok","version":"..."}`. |
 
 Every route is also served under the `/ocr` prefix (`/ocr/github/webhook`,
-`/ocr/gitlab/webhook`, `/ocr/healthz`), so the URLs work whether or not a
-reverse proxy strips that prefix. A disabled platform answers 404, a body over
-`OCR_SERVE_MAX_BODY_BYTES` answers 413, and an accepted delivery answers 202
-before the review runs.
+`/ocr/gitlab/webhook`, `/ocr/gitlab/ci-trigger`, `/ocr/healthz`), so the URLs
+work whether or not a reverse proxy strips that prefix. A disabled platform
+answers 404, a body over `OCR_SERVE_MAX_BODY_BYTES` answers 413, and an
+accepted delivery answers 202 before the review runs.
+
+`POST /gitlab/ci-trigger` reads a JSON body with `project_id`, `mr_iid`,
+`sha` (40 hex characters), `pipeline_id`, and optional `project_path` and
+`force`. It sets the `ocr-review` commit status to pending on that pipeline
+when `pipeline_id` is greater than zero, then answers 202. The review runs
+in the background. A repository matched by `OCR_SERVE_IGNORE_REPOS` answers
+202 and sets no status. When a chain is already running, the status is still
+set and the answer is 202 with outcome `chain running`.
 
 ## Configuration
 
@@ -289,7 +302,8 @@ setting both forms is an error.
 | `OCR_SERVE_GITHUB_LANGUAGE` | `English` | Language of the comments, summary and status texts on GitHub PRs, and the output language the review and fix runs get for them. `English` or `Vietnamese`, any case; another value stops the service at startup. |
 | `OCR_SERVE_GITLAB_URL` | empty | Enables GitLab, for example `https://git.example.com`. Its scheme and host must match the instance's `external_url`: a project clone URL on another scheme or host is refused, so the token is not sent there. |
 | `OCR_SERVE_GITLAB_TOKEN` / `_FILE` | | Required with GitLab. Token of the bot user that posts reviews. The service reads `GET /user` at startup and fails when the token is rejected. |
-| `OCR_SERVE_GITLAB_WEBHOOK_SECRET` / `_FILE` | | Required with GitLab. |
+| `OCR_SERVE_GITLAB_WEBHOOK_SECRET` / `_FILE` | | Secret for `POST /gitlab/webhook`. With GitLab, set this or `OCR_SERVE_GITLAB_CI_TOKEN`, or both. Empty disables the webhook route. |
+| `OCR_SERVE_GITLAB_CI_TOKEN` / `_FILE` | | Token for `POST /gitlab/ci-trigger`. With GitLab, set this or `OCR_SERVE_GITLAB_WEBHOOK_SECRET`, or both. Empty disables the CI trigger route. |
 | `OCR_SERVE_GITLAB_LANGUAGE` | `Vietnamese` | As `OCR_SERVE_GITHUB_LANGUAGE`, for GitLab merge requests. |
 
 At least one platform must be enabled; otherwise the service stops with

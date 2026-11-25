@@ -45,11 +45,17 @@ type fakeForge struct {
 	files     map[string][]byte // sha + ":" + path
 	notes     []string
 	reactions []string         // commentID + ":" + reaction
-	statuses  []string         // sha + ":" + state
+	statuses  []string         // sha + ":" + state, plus "#pipeline" when one was given
 	texts     []string         // description of each status, in the same order
+	paths     map[int64]string // project id -> path_with_namespace
+	pathErr   error
 	errs      map[string]error // method name -> error to return
 	errOnce   map[string]error // method name -> error for the next call only
 	headAfter map[string]string
+	// beforeRead runs once, on the next successful ReadFile, after the call
+	// is counted and before the file is returned. A test uses it to move
+	// HEAD between the CI trigger's pre-read and the round's own read.
+	beforeRead func()
 	// blockGetPR waits until the call's context ends, so a test can fire
 	// the review budget during the read.
 	blockGetPR bool
@@ -153,9 +159,29 @@ func (f *fakeForge) SetStatus(_ context.Context, pr forge.PR, sha string, st for
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.statuses = append(f.statuses, sha[:1]+":"+string(st))
+	item := sha[:1] + ":" + string(st)
+	if pr.PipelineID > 0 && sha == pr.PipelineSHA {
+		item += "#" + fmt.Sprintf("%d", pr.PipelineID)
+	}
+	f.statuses = append(f.statuses, item)
 	f.texts = append(f.texts, text)
 	return nil
+}
+
+func (f *fakeForge) ResolveProjectPath(_ context.Context, id int64) (string, error) {
+	if err := f.api("ResolveProjectPath"); err != nil {
+		return "", err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pathErr != nil {
+		return "", f.pathErr
+	}
+	p, ok := f.paths[id]
+	if !ok {
+		return "", forge.ErrNotFound
+	}
+	return p, nil
 }
 
 func (f *fakeForge) PostNote(_ context.Context, _ forge.PRRef, body string) error {
@@ -188,6 +214,13 @@ func (f *fakeForge) Clone(_ context.Context, pr forge.PR) (forge.CloneSpec, erro
 func (f *fakeForge) ReadFile(_ context.Context, _ forge.PRRef, sha, path string, maxBytes int) ([]byte, bool, error) {
 	if err := f.api("ReadFile"); err != nil {
 		return nil, false, err
+	}
+	f.mu.Lock()
+	hook := f.beforeRead
+	f.beforeRead = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

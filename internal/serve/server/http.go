@@ -140,6 +140,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /github/webhook", s.webhook(forge.GitHub))
 	mux.HandleFunc("POST /gitlab/webhook", s.webhook(forge.GitLab))
+	mux.HandleFunc("POST /gitlab/ci-trigger", s.ciTrigger)
 	mux.HandleFunc("GET /healthz", s.health)
 	return mux
 }
@@ -253,6 +254,9 @@ func (s *Server) handleWebhook(p forge.Platform, w http.ResponseWriter, r *http.
 	f := s.forges[p]
 	if f == nil {
 		return webhookResult{status: http.StatusNotFound, outcome: "platform disabled"}
+	}
+	if p == forge.GitLab && s.cfg.GitLab != nil && s.cfg.GitLab.WebhookSecret == "" {
+		return webhookResult{status: http.StatusNotFound, outcome: "gitlab webhook disabled"}
 	}
 	if s.isClosing() {
 		return webhookResult{status: http.StatusServiceUnavailable, outcome: "shutting down"}

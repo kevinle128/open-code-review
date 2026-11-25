@@ -6,6 +6,7 @@ package gitlab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -294,5 +295,63 @@ func TestSetStatusLookupError(t *testing.T) {
 	}
 	if w := f.writes(); len(w) != 1 || statusBody(t, w[0])["ref"] != "feat/x" {
 		t.Fatalf("writes %+v", w)
+	}
+	if err := fg.PostCommitStatus(context.Background(), forge.PR{Ref: testRef, SourceBranch: "feat/x"}, sha, forge.StatusPending, "x"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetStatusUsesGivenPipeline(t *testing.T) {
+	f := newFake(t)
+	sha := strings.Repeat("c", 40)
+	other := strings.Repeat("d", 40)
+	f.json("POST /projects/42/statuses/"+sha, 201, map[string]any{"id": 1})
+	f.json("GET /projects/42/pipelines/77/jobs", 200, []map[string]any{{"id": 9, "name": "unit-test"}})
+	f.json("POST /projects/42/jobs/9/play", 200, map[string]any{"id": 9})
+	fg := newTestForge(t, f, nil)
+	fg.cfg.AfterReviewJobs = []string{"unit-test"}
+	pr := forge.PR{Ref: testRef, SourceBranch: "feat/x", PipelineID: 77, PipelineSHA: sha}
+	if err := fg.SetStatus(context.Background(), pr, sha, forge.StatusSuccess, "x"); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range f.requests(http.MethodGet) {
+		if strings.Contains(g.Path, "/merge_requests/") {
+			t.Fatalf("looked up merge request pipelines: %+v", g)
+		}
+	}
+	w := f.writes()
+	if len(w) != 2 || statusBody(t, w[0])["pipeline_id"] != "77" || w[1].Path != "/projects/42/jobs/9/play" {
+		t.Fatalf("writes %+v", w)
+	}
+
+	f.json("GET /projects/42/merge_requests/5/pipelines", 200, []map[string]any{mrPipe(80, other, mrPipelineSource)})
+	f.json("POST /projects/42/statuses/"+other, 201, map[string]any{"id": 2})
+	if err := fg.SetStatus(context.Background(), pr, other, forge.StatusPending, "x"); err != nil {
+		t.Fatal(err)
+	}
+	writes := f.writes()
+	if statusBody(t, writes[len(writes)-1])["pipeline_id"] != "80" {
+		t.Fatalf("writes %+v", writes)
+	}
+}
+
+func TestResolveProjectPath(t *testing.T) {
+	f := newFake(t)
+	f.json("GET /projects/42", 200, map[string]any{"path_with_namespace": "team/svc"})
+	fg := newTestForge(t, f, nil)
+	got, err := fg.ResolveProjectPath(context.Background(), 42)
+	if err != nil || got != "team/svc" {
+		t.Fatalf("path %q err %v", got, err)
+	}
+	if _, err := fg.ResolveProjectPath(context.Background(), 0); err == nil {
+		t.Fatal("project id 0 accepted")
+	}
+	f.json("GET /projects/7", 404, map[string]string{"message": "404 Project Not Found"})
+	if _, err := fg.ResolveProjectPath(context.Background(), 7); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("err %v", err)
+	}
+	f.json("GET /projects/8", 200, map[string]any{"path_with_namespace": "team/../svc"})
+	if _, err := fg.ResolveProjectPath(context.Background(), 8); err == nil || errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("err %v", err)
 	}
 }

@@ -56,6 +56,7 @@ const (
 	EnvGitLabURL           = "OCR_SERVE_GITLAB_URL"
 	EnvGitLabToken         = "OCR_SERVE_GITLAB_TOKEN"
 	EnvGitLabWebhookSecret = "OCR_SERVE_GITLAB_WEBHOOK_SECRET"
+	EnvGitLabCIToken       = "OCR_SERVE_GITLAB_CI_TOKEN"
 	EnvGitLabAdminToken    = "OCR_SERVE_GITLAB_ADMIN_TOKEN"
 	EnvGitLabHookURL       = "OCR_SERVE_GITLAB_HOOK_URL"
 	EnvGitLabBotUsername   = "OCR_SERVE_GITLAB_BOT_USERNAME"
@@ -178,9 +179,12 @@ type GitLabConfig struct {
 	URL           string
 	Token         string
 	WebhookSecret string
-	AdminToken    string
-	HookURL       string
-	BotUsername   string
+	// CIToken authenticates POST /gitlab/ci-trigger. It is independent of
+	// the webhook secret: a deployment can enable either route, or both.
+	CIToken     string
+	AdminToken  string
+	HookURL     string
+	BotUsername string
 	// AfterReviewJobs names the manual merge request jobs that the service
 	// starts when the review passes, such as the unit tests.
 	AfterReviewJobs []string
@@ -264,8 +268,8 @@ func matchesAny(res []*regexp.Regexp, v string) bool {
 //
 // GitHub is enabled by OCR_SERVE_GITHUB_APP_ID and then needs a private key
 // and a webhook secret. GitLab is enabled by OCR_SERVE_GITLAB_URL; its token
-// and webhook secret are checked by RequireServe because the hook command
-// can run a dry run without them.
+// and either the webhook secret or the CI trigger token are checked by
+// RequireServe because the hook command can run a dry run without them.
 func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*Config, error) {
 	if getenv == nil {
 		getenv = os.Getenv
@@ -319,8 +323,9 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 }
 
 // RequireServe checks what the webhook service needs on top of Load: at
-// least one platform, the GitLab token and webhook secret when GitLab is
-// enabled, and the CLI engine settings when that engine is selected.
+// least one platform, the GitLab token and either a webhook secret or a CI
+// trigger token when GitLab is enabled, and the CLI engine settings when
+// that engine is selected.
 func (c *Config) RequireServe() error {
 	if c.GitHub == nil && c.GitLab == nil {
 		return fmt.Errorf("no platform enabled: set %s or %s", EnvGitHubAppID, EnvGitLabURL)
@@ -336,8 +341,8 @@ func (c *Config) RequireServe() error {
 		if c.GitLab.Token == "" {
 			errs = append(errs, fmt.Errorf("%s is required when %s is set", EnvGitLabToken, EnvGitLabURL))
 		}
-		if c.GitLab.WebhookSecret == "" {
-			errs = append(errs, fmt.Errorf("%s is required when %s is set", EnvGitLabWebhookSecret, EnvGitLabURL))
+		if c.GitLab.WebhookSecret == "" && c.GitLab.CIToken == "" {
+			errs = append(errs, fmt.Errorf("%s or %s is required when %s is set", EnvGitLabWebhookSecret, EnvGitLabCIToken, EnvGitLabURL))
 		}
 	}
 	return errors.Join(errs...)
@@ -517,6 +522,7 @@ func (l *loader) gitlab() *GitLabConfig {
 		URL:           l.baseURL(EnvGitLabURL, ""),
 		Token:         l.secret(EnvGitLabToken),
 		WebhookSecret: l.secret(EnvGitLabWebhookSecret),
+		CIToken:       l.secret(EnvGitLabCIToken),
 		AdminToken:    l.secret(EnvGitLabAdminToken),
 		BotUsername:   strings.TrimSpace(l.getenv(EnvGitLabBotUsername)),
 
